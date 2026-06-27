@@ -610,6 +610,65 @@ def test():
   );
 });
 
+describe("codeSheet definition syntax evals", () => {
+  it("runs additive function and async-function definition forms", async () => {
+    const sheet = `add(x: int, y: int) -> int
+
+async load_total(x: int) -> int
+
+test():
+  print(add(2, 3))`;
+    const calls: string[] = [];
+
+    const result = await runCodeSheet(sheet, "test", {
+      complete(prompt) {
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        calls.push(target.trim());
+        if (target.includes("async def load_total")) {
+          return `async def load_total(x: int) -> int:
+  return x`;
+        }
+
+        return `def add(x: int, y: int) -> int:
+  return x + y`;
+      },
+    });
+
+    expect({
+      runnables: runnables(sheet),
+      calls: calls.map((call) => call.split("\n")[0]),
+      result: simplifyRunResult(result),
+    }).toEqual({
+      runnables: [{ name: "test", line: 5 }],
+      calls: ["def add(x: int, y: int) -> int", "async def load_total(x: int) -> int"],
+      result: { ok: true, stdout: ["5"] },
+    });
+  });
+
+  it("runs additive class and record definition forms", async () => {
+    const sheet = `class Point(x: int, y: int)
+
+NamedPoint(x: int, y: int, name: str):
+  function label(self) -> str:
+    return f"{self.name}:({self.x},{self.y})"
+
+test():
+  item = NamedPoint(3, 4, "p")
+  print(item.label())
+  print(NamedPoint.__name__)`;
+
+    const result = await runCodeSheet(sheet, "test");
+
+    expect({
+      runnables: runnables(sheet),
+      result: simplifyRunResult(result),
+    }).toEqual({
+      runnables: [{ name: "test", line: 7 }],
+      result: { ok: true, stdout: ["p:(3,4)", "NamedPoint"] },
+    });
+  });
+});
+
 function arraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((item, index) => item === right[index]);
 }

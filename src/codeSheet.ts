@@ -114,6 +114,29 @@ type FunctionDecl = {
   className?: string;
 };
 
+type DataclassShorthand = {
+  indent: string;
+  name: string;
+  fields: DataclassField[];
+  hasBlock: boolean;
+};
+
+type DataclassField = {
+  name: string;
+  type: string;
+  defaultValue?: string;
+};
+
+type FunctionHeader = {
+  indent: string;
+  asyncPrefix: string;
+  keyword?: "def" | "fn" | "function";
+  name: string;
+  params: string;
+  returnType?: string;
+  hasColon: boolean;
+};
+
 export type IncompleteSnippet = {
   kind: "function" | "class";
   line: number;
@@ -147,13 +170,20 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
 
 export function lower(parsed: ParsedSheet): LoweredCodeSheet {
   const lines = parsed.source.split("\n");
-  const body = lines.filter((line) => !isTypeLine(line)).join("\n");
+  const body = lowerSurfaceSyntax(lines.filter((line) => !isTypeLine(line)).join("\n"));
+  const loweredDataclassImport =
+    parsed.sumTypes.length > 0 || body.needsDataclass ? "from dataclasses import dataclass" : "";
   const loweredSumTypes = lowerSumTypes(parsed.sumTypes);
   const loweredTypeAliases = lowerTypeAliases(parsed.typeAliases);
 
   return {
     parsed,
-    source: [loweredSumTypes, loweredTypeAliases, body]
+    source: [
+      loweredDataclassImport,
+      loweredSumTypes,
+      loweredTypeAliases,
+      body.source,
+    ]
       .filter((part) => part.trim().length > 0)
       .join("\n\n"),
   };
@@ -461,7 +491,7 @@ function incompleteSymbols(parsed: ParsedSheet, codeCache: CodeCache): Set<strin
     }
 
     if (snippet.kind === "function") {
-      const functionName = snippet.snippet.match(/^def\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+      const functionName = parseFunctionHeader(snippet.snippet.split("\n")[0])?.name;
       if (functionName) {
         result.add(functionName);
       }
@@ -613,19 +643,17 @@ function referencedIdentifiers(source: string): string[] {
 
 function discoverRunnables(lines: string[]): RunnableInfo[] {
   return lines.flatMap((line, index) => {
-    const match = line.match(
-      /^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*[^:]+)?\s*:\s*$/,
-    );
-    if (!match) {
+    const header = parseFunctionHeader(line);
+    if (!header || header.indent.length > 0 || header.asyncPrefix.length > 0 || !header.hasColon) {
       return [];
     }
 
-    const params = match[2].trim();
+    const params = header.params.trim();
     if (params.length > 0) {
       return [];
     }
 
-    return [{ name: match[1], line: index + 1 }];
+    return [{ name: header.name, line: index + 1 }];
   });
 }
 
@@ -637,15 +665,13 @@ function discoverFunctionDecls(codeSheet: CodeSheet): FunctionDecl[] {
   for (const classDecl of discoverClassDecls(lines)) {
     const classLines = classDecl.snippet.split("\n");
     for (let index = 1; index < classLines.length; index += 1) {
-      const match = classLines[index].match(
-        /^\s+def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:?\s*$/,
-      );
-      if (!match) {
+      const header = parseFunctionHeader(classLines[index]);
+      if (!header || header.indent.length === 0) {
         continue;
       }
 
       declarations.push({
-        name: match[1],
+        name: header.name,
         className: classDecl.name,
         line: classDecl.line + index,
         source: classLines[index].trimEnd(),
@@ -661,10 +687,8 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
   const declarations: FunctionDecl[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(
-      /^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:?\s*$/,
-    );
-    if (!match) {
+    const header = parseFunctionHeader(lines[index]);
+    if (!header || header.indent.length > 0) {
       continue;
     }
 
@@ -684,7 +708,7 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
     }
 
     declarations.push({
-      name: match[1],
+      name: header.name,
       line: index + 1,
       source: trimTrailingBlankLines(lines.slice(index, end)).join("\n"),
     });
@@ -694,7 +718,7 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
 }
 
 function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
-  const match = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  const match = parseTypeDeclarationLine(line);
   if (!match || !isSumTypeRhs(match[2])) {
     return [];
   }
@@ -710,8 +734,8 @@ function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
 }
 
 function parseTypeAliasLine(line: string, index: number): TypeAliasDecl[] {
-  const match = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
-  if (!match || isSumTypeRhs(match[2])) {
+  const match = parseTypeDeclarationLine(line);
+  if (!match || isSumTypeRhs(match[2]) || !isTypeAliasRhs(match[2])) {
     return [];
   }
 
@@ -725,12 +749,21 @@ function parseTypeAliasLine(line: string, index: number): TypeAliasDecl[] {
   ];
 }
 
+function parseTypeDeclarationLine(line: string): RegExpMatchArray | null {
+  const heralded = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  if (heralded) {
+    return heralded;
+  }
+
+  return line.match(/^([A-Z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+}
+
 function discoverClassDecls(lines: string[]): ClassDecl[] {
   const classDecls: ClassDecl[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*$/);
-    if (!match) {
+    const className = discoverableClassName(lines[index]);
+    if (!className) {
       continue;
     }
 
@@ -750,7 +783,7 @@ function discoverClassDecls(lines: string[]): ClassDecl[] {
     }
 
     classDecls.push({
-      name: match[1],
+      name: className,
       line: index + 1,
       snippet: trimTrailingBlankLines(lines.slice(index, end)).join("\n"),
     });
@@ -779,13 +812,24 @@ function isSumTypeRhs(source: string): boolean {
   });
 }
 
+function isTypeAliasRhs(source: string): boolean {
+  const trimmed = source.trim();
+  if (/^\(.+\)$/.test(trimmed)) {
+    return true;
+  }
+
+  return splitTopLevel(trimmed, "|").every((part) => {
+    return /^[A-Za-z_][A-Za-z0-9_]*(?:\[.+\])?$/.test(part.trim());
+  });
+}
+
 function lowerSumTypes(sumTypes: SumTypeDecl[]): string {
   if (sumTypes.length === 0) {
     return "";
   }
 
   const seenConstructors = new Set<string>();
-  const output = ["from dataclasses import dataclass"];
+  const output: string[] = [];
 
   for (const sumType of sumTypes) {
     for (const variant of sumType.variants) {
@@ -794,7 +838,10 @@ function lowerSumTypes(sumTypes: SumTypeDecl[]): string {
       }
 
       seenConstructors.add(variant.name);
-      output.push("", "@dataclass(frozen=True)", `class ${variant.name}:`);
+      if (output.length > 0) {
+        output.push("");
+      }
+      output.push("@dataclass(frozen=True)", `class ${variant.name}:`);
 
       if (variant.fields.length === 0) {
         output.push("  pass");
@@ -848,10 +895,16 @@ function toPythonAlias(source: string): string {
 
 function toPythonType(source: string): string {
   const trimmed = source.trim();
-  if (trimmed === "str" || trimmed === "int" || trimmed === "None") {
+  if (
+    trimmed === "str" ||
+    trimmed === "int" ||
+    trimmed === "bool" ||
+    trimmed === "float" ||
+    trimmed === "None"
+  ) {
     return trimmed;
   }
-  if (/^list\[.+\]$/.test(trimmed)) {
+  if (/^(list|dict|set|tuple)\[.+\]$/.test(trimmed)) {
     return trimmed;
   }
   return `"${trimmed}"`;
@@ -864,7 +917,7 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!line.match(/^class\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/)) {
+    if (!isCompletableClassHeader(line)) {
       continue;
     }
 
@@ -885,12 +938,8 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
 
     const classLines = lines.slice(index, end);
     const hasIncompleteMethod = classLines.some((classLine) => {
-      const trimmed = classLine.trimEnd();
-      return (
-        /^\s+def\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*$/.test(
-          trimmed,
-        ) && !trimmed.endsWith(":")
-      );
+      const header = parseFunctionHeader(classLine);
+      return header !== null && header.indent.length > 0 && !header.hasColon;
     });
 
     if (hasIncompleteMethod) {
@@ -933,11 +982,208 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
 }
 
 function isIncompleteTopLevelFunction(line: string): boolean {
-  const trimmed = line.trimEnd();
-  return (
-    /^def\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*$/.test(trimmed) &&
-    !trimmed.endsWith(":")
+  const header = parseFunctionHeader(line);
+  return header !== null && header.indent.length === 0 && !header.hasColon;
+}
+
+function lowerSurfaceSyntax(source: string): {
+  source: string;
+  needsDataclass: boolean;
+} {
+  const output: string[] = [];
+  let needsDataclass = false;
+  let recordBlockIndent: number | null = null;
+
+  for (const line of source.split("\n")) {
+    if (recordBlockIndent !== null && line.trim().length > 0 && indentWidth(line) <= recordBlockIndent) {
+      recordBlockIndent = null;
+    }
+
+    const dataclass = parseDataclassShorthand(line);
+    if (dataclass) {
+      needsDataclass = true;
+      recordBlockIndent = dataclass.hasBlock ? indentWidth(line) : null;
+      output.push(
+        `${dataclass.indent}@dataclass(frozen=True)`,
+        `${dataclass.indent}class ${dataclass.name}:`,
+        ...dataclass.fields.map((field) => {
+          return `${dataclass.indent}  ${formatDataclassField(field)}`;
+        }),
+      );
+      continue;
+    }
+
+    const loweredFunction = lowerFunctionKeyword(line);
+    output.push(
+      recordBlockIndent === null
+        ? loweredFunction
+        : lowerDataclassFieldLine(loweredFunction),
+    );
+  }
+
+  return { source: output.join("\n"), needsDataclass };
+}
+
+function parseDataclassShorthand(line: string): DataclassShorthand | null {
+  const match = line.match(
+    /^(\s*)(?:(class|record)\s+)?([A-Z][A-Za-z0-9_]*)(?:\((.*)\))?\s*(:?)\s*$/,
   );
+  if (!match) {
+    return null;
+  }
+
+  const keyword = match[2];
+  const args = match[4];
+  const hasBlock = match[5] === ":";
+  if (keyword === "class" && args === undefined) {
+    return null;
+  }
+
+  if (keyword === undefined && args === undefined && !hasBlock) {
+    return null;
+  }
+
+  const fields = args === undefined ? [] : parseDataclassFields(args);
+  if (!fields) {
+    return null;
+  }
+
+  return {
+    indent: match[1],
+    name: match[3],
+    fields,
+    hasBlock,
+  };
+}
+
+function parseDataclassFields(source: string): DataclassField[] | null {
+  const fields = splitTopLevel(source, ",").map(parseDataclassField);
+  if (fields.length === 0 || fields.some((field) => field === null)) {
+    return null;
+  }
+
+  return fields.filter((field): field is DataclassField => field !== null);
+}
+
+function parseDataclassField(source: string): DataclassField | null {
+  const match = source.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?$/);
+  if (!match) {
+    return null;
+  }
+
+  const type = match[2].trim();
+  if (type.length === 0) {
+    return null;
+  }
+
+  return {
+    name: match[1],
+    type,
+    ...(match[3] === undefined ? {} : { defaultValue: normalizeDefinitionLiteral(match[3].trim()) }),
+  };
+}
+
+function lowerFunctionKeyword(line: string): string {
+  const header = parseFunctionHeader(line);
+  if (!header) {
+    return line;
+  }
+
+  const normalizedParams = normalizeDefinitionLiterals(header.params);
+  const returnType = header.returnType === undefined ? "" : ` -> ${header.returnType}`;
+  const colon = header.hasColon ? ":" : "";
+  return `${header.indent}${header.asyncPrefix}def ${header.name}(${normalizedParams})${returnType}${colon}`;
+}
+
+function discoverableClassName(line: string): string | null {
+  const normalClass = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\s*:\s*$/);
+  if (normalClass) {
+    return normalClass[1];
+  }
+
+  const dataclass = parseDataclassShorthand(line);
+  if (dataclass?.indent === "") {
+    return dataclass.name;
+  }
+
+  return null;
+}
+
+function isCompletableClassHeader(line: string): boolean {
+  if (/^class\s+[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?\s*:\s*$/.test(line)) {
+    return true;
+  }
+
+  const dataclass = parseDataclassShorthand(line);
+  return dataclass?.indent === "";
+}
+
+function parseFunctionHeader(line: string): FunctionHeader | null {
+  const match = line.match(
+    /^(\s*)(async\s+)?(?:(def|fn|function)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^:=]+))?\s*(:?)\s*$/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  const keyword = match[3] as FunctionHeader["keyword"] | undefined;
+  const name = match[4];
+  const returnType = match[6]?.trim();
+  const hasColon = match[7] === ":";
+  const isBare = keyword === undefined;
+  if (isBare && !hasColon && returnType === undefined) {
+    return null;
+  }
+
+  if (isBare && !/^[a-z_]/.test(name)) {
+    return null;
+  }
+
+  return {
+    indent: match[1],
+    asyncPrefix: match[2] ?? "",
+    ...(keyword === undefined ? {} : { keyword }),
+    name,
+    params: match[5],
+    ...(returnType === undefined ? {} : { returnType }),
+    hasColon,
+  };
+}
+
+function formatDataclassField(field: DataclassField): string {
+  const defaultValue = field.defaultValue === undefined ? "" : ` = ${field.defaultValue}`;
+  return `${field.name}: ${toPythonType(field.type)}${defaultValue}`;
+}
+
+function lowerDataclassFieldLine(line: string): string {
+  const match = line.match(/^(\s+)([A-Za-z_][A-Za-z0-9_]*\s*:\s*.+)$/);
+  if (!match) {
+    return line;
+  }
+
+  const field = parseDataclassField(match[2]);
+  return field ? `${match[1]}${formatDataclassField(field)}` : line;
+}
+
+function normalizeDefinitionLiterals(source: string): string {
+  return source.replace(/\b(true|false|null)\b/g, normalizeDefinitionLiteral);
+}
+
+function normalizeDefinitionLiteral(source: string): string {
+  if (source === "true") {
+    return "True";
+  }
+  if (source === "false") {
+    return "False";
+  }
+  if (source === "null") {
+    return "None";
+  }
+  return source;
+}
+
+function indentWidth(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
 }
 
 function buildCompletionPrompt(sheet: CodeSheet, snippet: string): string {
@@ -977,7 +1223,7 @@ function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): stri
   }
 
   const definitionIndex = lines.findIndex((line) => {
-    return /^(class\s+|def\s+|@|import\s+|from\s+)/.test(line.trimStart());
+    return /^(class\s+|def\s+|async\s+def\s+|@|import\s+|from\s+)/.test(line.trimStart());
   });
   if (definitionIndex < 0) {
     return unfenced.trimEnd();
@@ -1008,7 +1254,10 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
       continue;
     }
 
-    if (/^\s+/.test(line) || /^(@|def\s+|class\s+|import\s+|from\s+)/.test(trimmed)) {
+    if (
+      /^\s+/.test(line) ||
+      /^(@|def\s+|async\s+def\s+|class\s+|import\s+|from\s+)/.test(trimmed)
+    ) {
       snippet.push(line.trimEnd());
       continue;
     }
@@ -1047,7 +1296,8 @@ function splitTopLevel(source: string, separator: string): string[] {
 }
 
 function isTypeLine(line: string): boolean {
-  return /^type\s+[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line);
+  const match = parseTypeDeclarationLine(line);
+  return match !== null && (isSumTypeRhs(match[2]) || isTypeAliasRhs(match[2]));
 }
 
 function normalizeNewlines(source: string): string {

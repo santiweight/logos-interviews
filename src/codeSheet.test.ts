@@ -571,6 +571,211 @@ def test():
     `);
   });
 
+  it("lowers conservative function and dataclass shorthand syntax", async () => {
+    const shorthandSheet = `class Point(x: int, y: int)
+
+fn origin() -> Point:
+  return Point(0, 0)
+
+fn test():
+  print(origin())`;
+
+    const parsed = parse(shorthandSheet);
+    const lowered = lower(parsed).source;
+
+    expect(runnables(shorthandSheet)).toEqual([
+      { name: "origin", line: 3 },
+      { name: "test", line: 6 },
+    ]);
+    expect(parsed.classDecls).toEqual([
+      {
+        name: "Point",
+        line: 1,
+        snippet: "class Point(x: int, y: int)",
+      },
+    ]);
+    expect(lowered).toContain(`from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Point:
+  x: int
+  y: int`);
+    expect(lowered).toContain("def origin() -> Point:");
+    expect(simplifyRunResult(await runCodeSheet(shorthandSheet, "test", { cache: new Map() }))).toEqual({
+      ok: true,
+      stdout: ["Point(x=0, y=0)"],
+    });
+  });
+
+  it("completes fn signatures after lowering them to Python defs", async () => {
+    const fnSheet = `fn add(x: int, y: int) -> int
+
+fn test():
+  print(add(1, 2))`;
+    const prompts: string[] = [];
+
+    const result = await runCodeSheet(fnSheet, "test", {
+      cache: new Map(),
+      complete(prompt) {
+        prompts.push(prompt);
+        return `def add(x: int, y: int) -> int:
+  return x + y`;
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["3"] });
+    expect(prompts[0]).toContain("Your job is to finish the implementation of:\n\ndef add");
+    expect(prompts[0]).not.toContain("Your job is to finish the implementation of:\n\nfn add");
+  });
+
+  it("completes methods inside dataclass shorthand classes", async () => {
+    const classSheet = `class Counter(value: int):
+  fn next(self) -> int
+
+fn test():
+  print(Counter(4).next())`;
+    const cache: CodeCache = new Map();
+
+    const result = await runCodeSheet(classSheet, "test", {
+      cache,
+      complete() {
+        return `class Counter:
+  value: int
+
+  def next(self) -> int:
+    return self.value + 1`;
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["5"] });
+    expect(Array.from(cache.values())[0]).toContain("def next(self) -> int:");
+  });
+
+  it("supports deeper definition-only function aliases", async () => {
+    const functionSheet = `add(x: int, y: int) -> int
+
+async load_total(x: int) -> int
+
+test():
+  print(add(2, 3))`;
+    const prompts: string[] = [];
+
+    const parsed = parse(functionSheet);
+    const lowered = lower(parsed).source;
+
+    expect(parsed.incompleteSnippets.map((snippet) => snippet.snippet)).toEqual([
+      "add(x: int, y: int) -> int",
+      "async load_total(x: int) -> int",
+    ]);
+    expect(lowered).toContain("def add(x: int, y: int) -> int");
+    expect(lowered).toContain("async def load_total(x: int) -> int");
+
+    const result = await runCodeSheet(functionSheet, "test", {
+      cache: new Map(),
+      complete(prompt) {
+        prompts.push(prompt);
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        if (target.includes("async def load_total")) {
+          return `async def load_total(x: int) -> int:
+  return x`;
+        }
+
+        return `def add(x: int, y: int) -> int:
+  return x + y`;
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["5"] });
+    expect(prompts[0]).toContain("Your job is to finish the implementation of:\n\ndef add");
+    expect(prompts[1]).toContain("Your job is to finish the implementation of:\n\nasync def");
+  });
+
+  it("lowers bare record definitions with defaults", async () => {
+    const recordSheet = `User(name: str, active: bool = true):
+  function label(self) -> str:
+    return f"{self.name}:{self.active}"
+
+test():
+  print(User("Ada").label())`;
+
+    const lowered = lower(parse(recordSheet)).source;
+
+    expect(lowered).toContain(`@dataclass(frozen=True)
+class User:
+  name: str
+  active: bool = True`);
+    expect(lowered).toContain("def label(self) -> str:");
+    expect(simplifyRunResult(await runCodeSheet(recordSheet, "test", { cache: new Map() }))).toEqual({
+      ok: true,
+      stdout: ["Ada:True"],
+    });
+  });
+
+  it("lowers block records as class definitions", async () => {
+    const definitionSheet = `record MemoryStore:
+  items: dict[str, str]
+
+  function get(self, key: str) -> str | None:
+    return self.items.get(key)
+
+function test():
+  store = MemoryStore({"a": "1"})
+  print(store.get("a"))
+  print(MemoryStore.__name__)`;
+
+    const lowered = lower(parse(definitionSheet)).source;
+
+    expect(lowered).toContain(`@dataclass(frozen=True)
+class MemoryStore:
+  items: dict[str, str]`);
+    expect(simplifyRunResult(await runCodeSheet(definitionSheet, "test", { cache: new Map() }))).toEqual({
+      ok: true,
+      stdout: ["1", "MemoryStore"],
+    });
+  });
+
+  it("does not treat expression-bodied forms as supported function declarations", () => {
+    const expressionFunctionSheet = `function add(x: int, y: int) -> int = x + y
+
+function test():
+  print(add(1, 2))`;
+
+    const parsed = parse(expressionFunctionSheet);
+
+    expect(parsed.incompleteSnippets).toEqual([]);
+    expect(runnables(expressionFunctionSheet)).toEqual([{ name: "test", line: 3 }]);
+    expect(lower(parsed).source).toContain("function add(x: int, y: int) -> int = x + y");
+  });
+
+  it("lowers bare type declarations and indentation-sensitive record blocks", async () => {
+    const bareSheet = `Operator = Mul | Div
+CellAddress = (str, int)
+
+Cell:
+  address: CellAddress
+  active: bool = false
+
+describe(cell: Cell) -> str:
+  return f"{cell.address}:{cell.active}"
+
+test():
+  print(describe(Cell(("A", 1))))`;
+
+    const lowered = lower(parse(bareSheet)).source;
+
+    expect(lowered).toContain("Operator = Mul | Div");
+    expect(lowered).toContain("CellAddress = tuple[str, int]");
+    expect(lowered).toContain(`@dataclass(frozen=True)
+class Cell:
+  address: "CellAddress"
+  active: bool = False`);
+    expect(lowered).toContain("def describe(cell: Cell) -> str:");
+    expect(simplifyRunResult(await runCodeSheet(bareSheet, "test", { cache: new Map() }))).toEqual({
+      ok: true,
+      stdout: ["('A', 1):False"],
+    });
+  });
+
   it("completes adjacent parser helper signatures as one snippet", async () => {
     const parserSheet = `type CellAddress = (str, int)
 
