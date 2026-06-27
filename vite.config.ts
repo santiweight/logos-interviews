@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { runCodeSheet } from "./src/codeSheetRunner";
 import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic } from "./src/anthropicComplete";
+import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 
 export default defineConfig({
   plugins: [anthropicCompletionPlugin()],
@@ -80,8 +81,40 @@ function anthropicCompletionPlugin() {
           sendJson(res, 500, { error: message });
         }
       });
+
+      server.middlewares.use("/api/agent/chat", async (req, res) => {
+        if (req.method !== "POST") {
+          sendJson(res, 405, { error: "Method not allowed" });
+          return;
+        }
+
+        try {
+          const { sheet, messages } = await readJson(req);
+          if (typeof sheet !== "string" || !isAgentMessages(messages)) {
+            sendJson(res, 400, { error: "Missing sheet or messages" });
+            return;
+          }
+
+          sendJson(res, 200, await runSheetAgent(sheet, messages, complete));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { error: message });
+        }
+      });
     },
   };
+}
+
+function isAgentMessages(value: unknown): value is AgentChatMessage[] {
+  return Array.isArray(value) && value.every((message) => {
+    return (
+      typeof message === "object" &&
+      message !== null &&
+      ((message as AgentChatMessage).role === "user" ||
+        (message as AgentChatMessage).role === "assistant") &&
+      typeof (message as AgentChatMessage).content === "string"
+    );
+  });
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {

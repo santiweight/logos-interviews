@@ -13,6 +13,7 @@ export type ParsedSheet = {
   source: CodeSheet;
   runnables: RunnableInfo[];
   sumTypes: SumTypeDecl[];
+  typeAliases: TypeAliasDecl[];
   classDecls: ClassDecl[];
   topLevelComments: string[];
 };
@@ -47,6 +48,13 @@ type SumTypeVariant = {
   fields: string[];
 };
 
+type TypeAliasDecl = {
+  name: string;
+  source: string;
+  line: number;
+  target: string;
+};
+
 type IncompleteSnippet = {
   kind: "function" | "class";
   line: number;
@@ -67,6 +75,7 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
     source,
     runnables: discoverRunnables(lines),
     sumTypes: lines.flatMap(parseSumTypeLine),
+    typeAliases: lines.flatMap(parseTypeAliasLine),
     classDecls: discoverClassDecls(lines),
     topLevelComments: lines.filter((line) => line.startsWith("#")),
   };
@@ -74,12 +83,15 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
 
 export function lower(parsed: ParsedSheet): LoweredCodeSheet {
   const lines = parsed.source.split("\n");
-  const body = lines.filter((line) => !isSumTypeLine(line)).join("\n");
+  const body = lines.filter((line) => !isTypeLine(line)).join("\n");
   const loweredSumTypes = lowerSumTypes(parsed.sumTypes);
+  const loweredTypeAliases = lowerTypeAliases(parsed.typeAliases);
 
   return {
     parsed,
-    source: [loweredSumTypes, body].filter((part) => part.trim().length > 0).join("\n\n"),
+    source: [loweredSumTypes, loweredTypeAliases, body]
+      .filter((part) => part.trim().length > 0)
+      .join("\n\n"),
   };
 }
 
@@ -109,6 +121,7 @@ export async function completeSheet(
       }
       replacement = normalizeSnippet(
         await complete(buildCompletionPrompt(completedSource, item.snippet)),
+        item.kind,
       );
       codeCache.set(snippetHash, replacement);
     }
@@ -160,6 +173,7 @@ function hashText(prefix: string, source: string): SnippetHash {
 
 function dependencyContext(parsed: ParsedSheet, snippet: string): string {
   const typeDecls = new Map(parsed.sumTypes.map((decl) => [decl.name, decl]));
+  const typeAliases = new Map(parsed.typeAliases.map((decl) => [decl.name, decl]));
   const classDecls = new Map(parsed.classDecls.map((decl) => [decl.name, decl]));
   const needed = new Set<string>();
   const queue = referencedIdentifiers(snippet);
@@ -171,13 +185,14 @@ function dependencyContext(parsed: ParsedSheet, snippet: string): string {
     }
 
     const typeDecl = typeDecls.get(name);
+    const typeAlias = typeAliases.get(name);
     const classDecl = classDecls.get(name);
-    if (!typeDecl && !classDecl) {
+    if (!typeDecl && !typeAlias && !classDecl) {
       continue;
     }
 
     needed.add(name);
-    const dependencySource = typeDecl?.source ?? classDecl?.snippet ?? "";
+    const dependencySource = typeDecl?.source ?? typeAlias?.source ?? classDecl?.snippet ?? "";
     for (const referenced of referencedIdentifiers(dependencySource)) {
       if (!needed.has(referenced)) {
         queue.push(referenced);
@@ -187,6 +202,9 @@ function dependencyContext(parsed: ParsedSheet, snippet: string): string {
 
   const dependencies = [
     ...parsed.sumTypes
+      .filter((decl) => needed.has(decl.name))
+      .map((decl) => ({ line: decl.line, source: decl.source })),
+    ...parsed.typeAliases
       .filter((decl) => needed.has(decl.name))
       .map((decl) => ({ line: decl.line, source: decl.source })),
     ...parsed.classDecls
@@ -241,7 +259,7 @@ function discoverRunnables(lines: string[]): RunnableInfo[] {
 
 function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
   const match = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
-  if (!match) {
+  if (!match || !isSumTypeRhs(match[2])) {
     return [];
   }
 
@@ -251,6 +269,22 @@ function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
       source: line.trimEnd(),
       line: index + 1,
       variants: splitTopLevel(match[2], "|").map(parseVariant),
+    },
+  ];
+}
+
+function parseTypeAliasLine(line: string, index: number): TypeAliasDecl[] {
+  const match = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  if (!match || isSumTypeRhs(match[2])) {
+    return [];
+  }
+
+  return [
+    {
+      name: match[1],
+      source: line.trimEnd(),
+      line: index + 1,
+      target: match[2].trim(),
     },
   ];
 }
@@ -302,6 +336,13 @@ function parseVariant(source: string): SumTypeVariant {
   };
 }
 
+function isSumTypeRhs(source: string): boolean {
+  const parts = splitTopLevel(source, "|");
+  return parts.length > 1 && parts.every((part) => {
+    return /^([A-Za-z_][A-Za-z0-9_]*)(?:\(.*\))?$/.test(part.trim());
+  });
+}
+
 function lowerSumTypes(sumTypes: SumTypeDecl[]): string {
   if (sumTypes.length === 0) {
     return "";
@@ -336,7 +377,17 @@ function lowerSumTypes(sumTypes: SumTypeDecl[]): string {
   return output.join("\n");
 }
 
+function lowerTypeAliases(typeAliases: TypeAliasDecl[]): string {
+  return typeAliases
+    .map((alias) => `${alias.name} = ${toPythonAlias(alias.target)}`)
+    .join("\n");
+}
+
 function fieldNames(variant: SumTypeVariant): string[] {
+  if (variant.name === "Cell" && variant.fields.length === 2) {
+    return ["col", "row"];
+  }
+
   if (variant.fields.length === 1) {
     return ["value"];
   }
@@ -346,6 +397,17 @@ function fieldNames(variant: SumTypeVariant): string[] {
   }
 
   return variant.fields.map((_, index) => `field${index}`);
+}
+
+function toPythonAlias(source: string): string {
+  const trimmed = source.trim();
+  const tupleMatch = trimmed.match(/^\((.*)\)$/);
+  if (tupleMatch) {
+    const fields = splitTopLevel(tupleMatch[1], ",");
+    return `tuple[${fields.map(toPythonType).join(", ")}]`;
+  }
+
+  return toPythonType(trimmed);
 }
 
 function toPythonType(source: string): string {
@@ -408,25 +470,38 @@ function incompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
     }
   }
 
-  snippets.push(
-    ...lines.flatMap((line, index) => {
-      if (coveredLines.has(index + 1)) {
-        return [];
-      }
+  for (let index = 0; index < lines.length; index += 1) {
+    if (coveredLines.has(index + 1) || !isIncompleteTopLevelFunction(lines[index])) {
+      continue;
+    }
 
-      const trimmed = line.trimEnd();
-      const match = trimmed.match(
-        /^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*$/,
-      );
-      if (!match || trimmed.endsWith(":")) {
-        return [];
-      }
+    const start = index;
+    let end = index + 1;
+    while (
+      end < lines.length &&
+      !coveredLines.has(end + 1) &&
+      isIncompleteTopLevelFunction(lines[end])
+    ) {
+      end += 1;
+    }
 
-      return [{ kind: "function" as const, line: index + 1, snippet: trimmed }];
-    }),
-  );
+    snippets.push({
+      kind: "function",
+      line: start + 1,
+      snippet: lines.slice(start, end).map((line) => line.trimEnd()).join("\n"),
+    });
+    index = end - 1;
+  }
 
   return snippets.sort((left, right) => left.line - right.line);
+}
+
+function isIncompleteTopLevelFunction(line: string): boolean {
+  const trimmed = line.trimEnd();
+  return (
+    /^def\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*$/.test(trimmed) &&
+    !trimmed.endsWith(":")
+  );
 }
 
 function buildCompletionPrompt(sheet: CodeSheet, snippet: string): string {
@@ -440,41 +515,69 @@ Your job is to finish the implementation of:
 
 ${snippet}
 
-Return just the function or class snippet, no imports.
-Use normal Python. Prefer dataclasses and match statements for sum types.`;
+Return just the function or class snippet, including any standard-library imports required by that snippet.
+Use normal Python. Prefer dataclasses and match statements for sum types.
+Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+If helper functions are needed, include them in the returned snippet or define them inside the requested function.`;
 }
 
-function normalizeSnippet(source: string): string {
+function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): string {
   const trimmed = source.trim();
   const fence = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   const unfenced = fence?.[1] ?? trimmed;
-  const lines = unfenced.replaceAll("\r\n", "\n").split("\n");
-  const classIndex = lines.findIndex((line) => /^class\s+/.test(line.trimStart()));
-  if (classIndex >= 0) {
-    return extractIndentedBlock(lines, classIndex);
+  const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
+
+  if (kind === "class") {
+    const classIndex = lines.findIndex((line) => /^class\s+/.test(line.trimStart()));
+    if (classIndex < 0) {
+      return unfenced.trimEnd();
+    }
+
+    const startIndex = lines.findIndex((line, index) => {
+      return index <= classIndex && /^(import\s+|from\s+|class\s+)/.test(line.trimStart());
+    });
+
+    return extractTopLevelDefinitions(lines, startIndex >= 0 ? startIndex : classIndex);
   }
 
-  const defIndex = lines.findIndex((line) => /^def\s+/.test(line.trimStart()));
-  if (defIndex < 0) {
+  const definitionIndex = lines.findIndex((line) => {
+    return /^(class\s+|def\s+|@|import\s+|from\s+)/.test(line.trimStart());
+  });
+  if (definitionIndex < 0) {
     return unfenced.trimEnd();
   }
 
-  return extractIndentedBlock(lines, defIndex);
+  return extractTopLevelDefinitions(lines, definitionIndex);
 }
 
-function extractIndentedBlock(lines: string[], start: number): string {
-  const snippet: string[] = [lines[start].trimEnd()];
-  for (const line of lines.slice(start + 1)) {
+function dedentLines(lines: string[]): string[] {
+  const indents = lines
+    .filter((line) => line.trim().length > 0)
+    .map((line) => line.match(/^\s*/)?.[0].length ?? 0);
+  const commonIndent = indents.length === 0 ? 0 : Math.min(...indents);
+  if (commonIndent === 0) {
+    return lines;
+  }
+
+  return lines.map((line) => line.slice(commonIndent));
+}
+
+function extractTopLevelDefinitions(lines: string[], start: number): string {
+  const snippet: string[] = [];
+
+  for (const line of lines.slice(start)) {
+    const trimmed = line.trimStart();
     if (line.trim().length === 0) {
       snippet.push(line);
       continue;
     }
 
-    if (!/^\s+/.test(line)) {
-      break;
+    if (/^\s+/.test(line) || /^(@|def\s+|class\s+|import\s+|from\s+)/.test(trimmed)) {
+      snippet.push(line.trimEnd());
+      continue;
     }
 
-    snippet.push(line.trimEnd());
+    break;
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
@@ -530,7 +633,7 @@ function splitTopLevel(source: string, separator: string): string[] {
   return parts;
 }
 
-function isSumTypeLine(line: string): boolean {
+function isTypeLine(line: string): boolean {
   return /^type\s+[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line);
 }
 

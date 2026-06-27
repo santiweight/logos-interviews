@@ -167,8 +167,10 @@ def test():
 
       def add(x: int, y: int) -> int
 
-      Return just the function or class snippet, no imports.
-      Use normal Python. Prefer dataclasses and match statements for sum types.",
+      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Use normal Python. Prefer dataclasses and match statements for sum types.
+      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
           "You are an expert software engineer building programs.
 
       You are tasked with assisting on the following Python code sheet:
@@ -185,8 +187,10 @@ def test():
 
       def mul(x: int, y: int) -> int
 
-      Return just the function or class snippet, no imports.
-      Use normal Python. Prefer dataclasses and match statements for sum types.",
+      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Use normal Python. Prefer dataclasses and match statements for sum types.
+      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
           "You are an expert software engineer building programs.
 
       You are tasked with assisting on the following Python code sheet:
@@ -211,8 +215,10 @@ def test():
         def get(self, col: str, row: int) -> int | None
         def set(self, col: str, row: int, val: int) -> None
 
-      Return just the function or class snippet, no imports.
-      Use normal Python. Prefer dataclasses and match statements for sum types.",
+      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Use normal Python. Prefer dataclasses and match statements for sum types.
+      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
         ],
         "spreadsheetClassTest": {
           "ok": true,
@@ -376,6 +382,7 @@ def test():
             },
           ],
           "topLevelComments": [],
+          "typeAliases": [],
         },
         "run": {
           "ok": true,
@@ -384,6 +391,196 @@ def test():
           ],
         },
       }
+    `);
+  });
+
+  it("lowers tuple type aliases used by parser helpers", () => {
+    const parsedSheet = `type Operator = Mul | Div | Add | Sub
+type Expr = Val(int) | Cell(str, int)
+type CellAddress = (str, int)
+
+def parse_cell(str) -> CellAddress | None
+
+def test():
+  print(parse_cell("A1"))`;
+
+    expect({
+      parsed: parse(parsedSheet),
+      lowered: lower(parse(parsedSheet)).source,
+    }).toMatchInlineSnapshot(`
+      {
+        "lowered": "from dataclasses import dataclass
+
+      @dataclass(frozen=True)
+      class Mul:
+        pass
+
+      @dataclass(frozen=True)
+      class Div:
+        pass
+
+      @dataclass(frozen=True)
+      class Add:
+        pass
+
+      @dataclass(frozen=True)
+      class Sub:
+        pass
+
+      @dataclass(frozen=True)
+      class Val:
+        value: int
+
+      @dataclass(frozen=True)
+      class Cell:
+        col: str
+        row: int
+
+      Operator = Mul | Div | Add | Sub
+
+      Expr = Val | Cell
+
+      CellAddress = tuple[str, int]
+
+
+      def parse_cell(str) -> CellAddress | None
+
+      def test():
+        print(parse_cell("A1"))",
+        "parsed": {
+          "classDecls": [],
+          "runnables": [
+            {
+              "line": 7,
+              "name": "test",
+            },
+          ],
+          "source": "type Operator = Mul | Div | Add | Sub
+      type Expr = Val(int) | Cell(str, int)
+      type CellAddress = (str, int)
+
+      def parse_cell(str) -> CellAddress | None
+
+      def test():
+        print(parse_cell("A1"))",
+          "sumTypes": [
+            {
+              "line": 1,
+              "name": "Operator",
+              "source": "type Operator = Mul | Div | Add | Sub",
+              "variants": [
+                {
+                  "fields": [],
+                  "name": "Mul",
+                },
+                {
+                  "fields": [],
+                  "name": "Div",
+                },
+                {
+                  "fields": [],
+                  "name": "Add",
+                },
+                {
+                  "fields": [],
+                  "name": "Sub",
+                },
+              ],
+            },
+            {
+              "line": 2,
+              "name": "Expr",
+              "source": "type Expr = Val(int) | Cell(str, int)",
+              "variants": [
+                {
+                  "fields": [
+                    "int",
+                  ],
+                  "name": "Val",
+                },
+                {
+                  "fields": [
+                    "str",
+                    "int",
+                  ],
+                  "name": "Cell",
+                },
+              ],
+            },
+          ],
+          "topLevelComments": [],
+          "typeAliases": [
+            {
+              "line": 3,
+              "name": "CellAddress",
+              "source": "type CellAddress = (str, int)",
+              "target": "(str, int)",
+            },
+          ],
+        },
+      }
+    `);
+  });
+
+  it("completes adjacent parser helper signatures as one snippet", async () => {
+    const parserSheet = `type CellAddress = (str, int)
+
+def parse_expr(str) -> Expr | None
+def parse_cell(str) -> CellAddress | None
+
+def test():
+  print(parse_cell("A1"))`;
+    const prompts: string[] = [];
+
+    await completeSheet(new Map(), parserSheet, (prompt) => {
+      prompts.push(prompt);
+      return `def parse_expr(source) -> None:
+  return None
+def parse_cell(source) -> CellAddress | None:
+  return ("A", 1)`;
+    });
+
+    expect(prompts.map((prompt) => prompt.split("Your job is to finish the implementation of:").at(-1)?.trim())).toMatchInlineSnapshot(`
+      [
+        "def parse_expr(str) -> Expr | None
+      def parse_cell(str) -> CellAddress | None
+
+      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Use normal Python. Prefer dataclasses and match statements for sum types.
+      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      ]
+    `);
+  });
+
+  it("supports the CellAddress shorthand helper as a separate parser migration", async () => {
+    const parserSheet = `type CellAddress = (str, int)
+
+def parse_expr(str) -> Expr | None
+def c(str) -> CellAddress
+
+def test():
+  print(c("A1"))`;
+    const prompts: string[] = [];
+
+    await completeSheet(new Map(), parserSheet, (prompt) => {
+      prompts.push(prompt);
+      return `def parse_expr(source) -> None:
+  return None
+def c(source) -> CellAddress:
+  return ("A", 1)`;
+    });
+
+    expect(prompts.map((prompt) => prompt.split("Your job is to finish the implementation of:").at(-1)?.trim())).toMatchInlineSnapshot(`
+      [
+        "def parse_expr(str) -> Expr | None
+      def c(str) -> CellAddress
+
+      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Use normal Python. Prefer dataclasses and match statements for sum types.
+      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      ]
     `);
   });
 

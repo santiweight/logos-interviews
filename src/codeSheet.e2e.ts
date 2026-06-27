@@ -92,6 +92,95 @@ def test():
     runnable: "test",
     expectedStdout: ["None", "Val(value=7)", "5", "48"],
   },
+  {
+    name: "parsed spreadsheet strings",
+    sheet: `# Spreadsheet cell storage uses A1-style addressing.
+# Treat [[T]] as a nested mapping keyed by column then row:
+# cells["A"][1] is A1, cells["B"][2] is B2.
+# Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
+# If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
+
+type Operator = Mul | Div | Add | Sub
+type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
+type EvalError = RecursiveError(list) | DivByZero
+type CellAddress = (str, int)
+
+def parse_expr(str) -> Expr | None
+def parse_cell(str) -> CellAddress | None
+
+class Spreadsheet:
+  cells: [[Expr]]
+
+  def __init__(self) -> None
+  def get(self, col: str, row: int) -> Expr | None
+  def set(self, col: str, row: int, expr: str) -> None
+  def eval(self) -> SpreadsheetResult
+
+class SpreadsheetResult:
+  sheet: Spreadsheet
+  cache: [[int]]
+
+  def __init__(self, sheet: Spreadsheet) -> None
+  def eval(self, col: str, row: int) -> int | EvalError | None
+  def eval_inner(self, stack: list, col: str, row: int) -> int | EvalError | None
+
+def test():
+  sheet = Spreadsheet()
+  print(sheet.get("A", 1))
+  sheet.set("A", 1, "7")
+  print(sheet.get("A", 1))
+  sheet.set("B1", "2 + 3")
+  print(sheet.eval().eval("B1"))
+  sheet.set("C1", "(B1 + A1) * 4)")
+  print(sheet.eval().eval("C1"))`,
+    runnable: "test",
+    expectedStdout: ["None", "Val(value=7)", "5", "48"],
+  },
+  {
+    name: "cell-address spreadsheet strings",
+    sheet: `# Spreadsheet cell storage uses A1-style addressing.
+# Treat [[T]] as a nested mapping keyed by column then row:
+# cells["A"][1] is A1, cells["B"][2] is B2.
+# Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
+# If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
+# c("A1") returns ("A", 1).
+
+type Operator = Mul | Div | Add | Sub
+type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
+type EvalError = RecursiveError(list) | DivByZero
+type CellAddress = (str, int)
+
+def parse_expr(str) -> Expr | None
+def c(str) -> CellAddress
+
+class Spreadsheet:
+  cells: [[Expr]]
+
+  def __init__(self) -> None
+  def get(self, cell: CellAddress) -> Expr | None
+  def set(self, cell: CellAddress, expr: str) -> None
+  def eval(self) -> SpreadsheetResult
+
+class SpreadsheetResult:
+  sheet: Spreadsheet
+  cache: [[int]]
+
+  def __init__(self, sheet: Spreadsheet) -> None
+  def eval(self, cell: CellAddress) -> int | EvalError | None
+  def eval_inner(self, stack: list, cell: CellAddress) -> int | EvalError | None
+
+def test():
+  sheet = Spreadsheet()
+  print(sheet.get(c("A1")))
+  sheet.set(c("A1"), "7")
+  print(sheet.get(c("A1")))
+  sheet.set(c("B1"), "2 + 3")
+  print(sheet.eval().eval(c("B1")))
+  sheet.set(c("C1"), "(B1 + A1) * 4)")
+  print(sheet.eval().eval(c("C1")))`,
+    runnable: "test",
+    expectedStdout: ["None", "Val(value=7)", "5", "48"],
+  },
 ];
 
 const describeIfAnthropicKey = process.env.ANTHROPIC_API_KEY
@@ -114,6 +203,12 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
               "name": "test",
             },
           ],
+          "cell-address spreadsheet strings": [
+            {
+              "line": 32,
+              "name": "test",
+            },
+          ],
           "incomplete spreadsheet class": [
             {
               "line": 7,
@@ -123,6 +218,12 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
           "multiple incomplete functions": [
             {
               "line": 5,
+              "name": "test",
+            },
+          ],
+          "parsed spreadsheet strings": [
+            {
+              "line": 31,
               "name": "test",
             },
           ],
@@ -291,6 +392,104 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
           {
             "attempts": 3,
             "case": "calculated spreadsheet with cell references",
+            "expectedStdout": [
+              "None",
+              "Val(value=7)",
+              "5",
+              "48",
+            ],
+            "results": [
+              {
+                "attempt": 1,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "None",
+                    "Val(value=7)",
+                    "5",
+                    "48",
+                  ],
+                },
+              },
+              {
+                "attempt": 2,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "None",
+                    "Val(value=7)",
+                    "5",
+                    "48",
+                  ],
+                },
+              },
+              {
+                "attempt": 3,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "None",
+                    "Val(value=7)",
+                    "5",
+                    "48",
+                  ],
+                },
+              },
+            ],
+            "successes": 3,
+          },
+          {
+            "attempts": 3,
+            "case": "parsed spreadsheet strings",
+            "expectedStdout": [
+              "None",
+              "Val(value=7)",
+              "5",
+              "48",
+            ],
+            "results": [
+              {
+                "attempt": 1,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "None",
+                    "Val(value=7)",
+                    "5",
+                    "48",
+                  ],
+                },
+              },
+              {
+                "attempt": 2,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "None",
+                    "Val(value=7)",
+                    "5",
+                    "48",
+                  ],
+                },
+              },
+              {
+                "attempt": 3,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "None",
+                    "Val(value=7)",
+                    "5",
+                    "48",
+                  ],
+                },
+              },
+            ],
+            "successes": 3,
+          },
+          {
+            "attempts": 3,
+            "case": "cell-address spreadsheet strings",
             "expectedStdout": [
               "None",
               "Val(value=7)",

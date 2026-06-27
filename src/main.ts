@@ -3,6 +3,7 @@ import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
 import { runnables, type Runnable } from "./codeSheet";
+import type { AgentChatMessage } from "./sheetAgent";
 
 globalThis.MonacoEnvironment = {
   getWorker() {
@@ -66,6 +67,8 @@ def test():
     code: `# Spreadsheet cell storage uses A1-style addressing.
 # Treat [[T]] as a nested mapping keyed by column then row:
 # cells["A"][1] is A1, cells["B"][2] is B2.
+# Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
+# If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
 
 type Operator = Mul | Div | Add | Sub
 type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
@@ -97,6 +100,50 @@ def test():
   sheet.set("C", 1, BinOp(Mul(), BinOp(Add(), Cell("B", 1), Cell("A", 1)), Val(4)))
   print(sheet.eval().eval("C", 1))`,
   },
+  {
+    id: "parsed-spreadsheet",
+    label: "Parsed spreadsheet",
+    code: `# Spreadsheet cell storage uses A1-style addressing.
+# Treat [[T]] as a nested mapping keyed by column then row:
+# cells["A"][1] is A1, cells["B"][2] is B2.
+# Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
+# If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
+# c("A1") returns ("A", 1).
+
+type Operator = Mul | Div | Add | Sub
+type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
+type EvalError = RecursiveError(list) | DivByZero
+type CellAddress = (str, int)
+
+def parse_expr(str) -> Expr | None
+def c(str) -> CellAddress
+
+class Spreadsheet:
+  cells: [[Expr]]
+
+  def __init__(self) -> None
+  def get(self, cell: CellAddress) -> Expr | None
+  def set(self, cell: CellAddress, expr: str) -> None
+  def eval(self) -> SpreadsheetResult
+
+class SpreadsheetResult:
+  sheet: Spreadsheet
+  cache: [[int]]
+
+  def __init__(self, sheet: Spreadsheet) -> None
+  def eval(self, cell: CellAddress) -> int | EvalError | None
+  def eval_inner(self, stack: list, cell: CellAddress) -> int | EvalError | None
+
+def test():
+  sheet = Spreadsheet()
+  print(sheet.get(c("A1")))
+  sheet.set(c("A1"), "7")
+  print(sheet.get(c("A1")))
+  sheet.set(c("B1"), "2 + 3")
+  print(sheet.eval().eval(c("B1")))
+  sheet.set(c("C1"), "(B1 + A1) * 4)")
+  print(sheet.eval().eval(c("C1")))`,
+  },
 ];
 
 const seedCode = samples[0].code;
@@ -104,7 +151,26 @@ const seedCode = samples[0].code;
 const app = requiredQuery<HTMLDivElement>("#app");
 
 app.innerHTML = `
-  <section class="shell">
+  <section id="shell" class="shell agent-collapsed">
+    <aside id="agent-sidebar" class="agent-sidebar">
+      <button id="agent-toggle" class="agent-toggle-button" type="button" aria-expanded="false" aria-controls="agent-content">
+        Agent
+      </button>
+      <div id="agent-content" class="agent-content">
+        <header class="agent-header">
+          <div>
+            <p class="eyebrow">Sheet Agent</p>
+            <h2>Assistant</h2>
+          </div>
+        </header>
+        <div id="agent-log" class="agent-log" aria-live="polite"></div>
+        <form id="agent-form" class="agent-form">
+          <textarea id="agent-input" class="agent-input" rows="3" placeholder="Ask the agent to change or explain this sheet"></textarea>
+          <button id="agent-send" class="run-button" type="submit">Send</button>
+        </form>
+      </div>
+    </aside>
+
     <aside class="code-pane">
       <header class="topbar">
         <div>
@@ -147,6 +213,7 @@ app.innerHTML = `
   </section>
 `;
 
+const shell = requiredQuery<HTMLElement>("#shell");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
 const outputEl = requiredQuery<HTMLPreElement>("#output");
 const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
@@ -155,7 +222,14 @@ const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleSelect = requiredQuery<HTMLSelectElement>("#sample-select");
 const runViewTab = requiredQuery<HTMLButtonElement>("#run-view-tab");
 const implementationTab = requiredQuery<HTMLButtonElement>("#implementation-tab");
+const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
+const agentLog = requiredQuery<HTMLDivElement>("#agent-log");
+const agentForm = requiredQuery<HTMLFormElement>("#agent-form");
+const agentInput = requiredQuery<HTMLTextAreaElement>("#agent-input");
+const agentSend = requiredQuery<HTMLButtonElement>("#agent-send");
 let lastRunLabel = "never";
+let agentMessages: AgentChatMessage[] = [];
+let agentExpanded = false;
 
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
@@ -211,6 +285,11 @@ monaco.languages.registerCodeLensProvider("python", {
 runButton.addEventListener("click", () => runCurrentProgram());
 runViewTab.addEventListener("click", () => setActiveTab("run"));
 implementationTab.addEventListener("click", () => setActiveTab("implementation"));
+agentToggle.addEventListener("click", () => setAgentExpanded(!agentExpanded));
+agentForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  runAgentTurn();
+});
 sampleSelect.addEventListener("change", () => {
   const sample = samples.find((item) => item.id === sampleSelect.value);
   if (!sample) {
@@ -220,11 +299,15 @@ sampleSelect.addEventListener("change", () => {
   editor.setValue(sample.code);
   outputEl.textContent = "";
   implementationEl.textContent = "";
+  agentMessages = [];
+  renderAgentLog();
   lastRunLabel = "never";
   runStatus.textContent = "Not run";
   runStatus.dataset.state = "";
   setActiveTab("run");
 });
+
+renderAgentLog();
 
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
@@ -316,14 +399,120 @@ async function runViaDevApi(
   };
 }
 
+async function runAgentTurn(): Promise<void> {
+  const content = agentInput.value.trim();
+  if (content.length === 0) {
+    return;
+  }
+
+  setAgentExpanded(true);
+  const nextMessages: AgentChatMessage[] = [
+    ...agentMessages,
+    { role: "user", content },
+  ];
+  agentMessages = nextMessages;
+  agentInput.value = "";
+  agentInput.disabled = true;
+  agentSend.disabled = true;
+  renderAgentLog("Working...");
+
+  const result = await askAgent(editor.getValue(), nextMessages).catch((error: unknown) => ({
+    reply: error instanceof Error ? error.message : String(error),
+    sheet: null,
+    error: true,
+  }));
+
+  agentMessages = [
+    ...nextMessages,
+    { role: "assistant", content: result.reply },
+  ];
+
+  if (!("error" in result) && result.sheet !== null && result.sheet !== editor.getValue()) {
+    editor.setValue(result.sheet);
+    outputEl.textContent = "";
+    implementationEl.textContent = "";
+    agentMessages = [
+      ...agentMessages,
+      { role: "assistant", content: "Applied the updated sheet to the editor." },
+    ];
+  }
+
+  agentInput.disabled = false;
+  agentSend.disabled = false;
+  renderAgentLog();
+  agentInput.focus();
+}
+
+async function askAgent(
+  sheet: string,
+  messages: AgentChatMessage[],
+): Promise<{ reply: string; sheet: string | null }> {
+  const response = await fetch("/api/agent/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet, messages }),
+  });
+
+  const payload = (await response.json()) as {
+    reply?: string;
+    sheet?: string | null;
+    error?: string;
+  };
+
+  if (!response.ok || typeof payload.reply !== "string") {
+    throw new Error(payload.error ?? "Agent request failed");
+  }
+  if (payload.sheet !== null && typeof payload.sheet !== "string") {
+    throw new Error("Agent returned an invalid sheet");
+  }
+
+  return { reply: payload.reply, sheet: payload.sheet };
+}
+
+function renderAgentLog(status?: string): void {
+  if (agentMessages.length === 0 && !status) {
+    agentLog.innerHTML = `<div class="agent-empty">No agent messages yet.</div>`;
+    return;
+  }
+
+  agentLog.innerHTML = [
+    ...agentMessages.map((message) => {
+      const roleClass = message.role === "user" ? "agent-message-user" : "agent-message-assistant";
+      return `<div class="agent-message ${roleClass}">
+        <div class="agent-message-role">${escapeHtml(message.role)}</div>
+        <div class="agent-message-content">${escapeHtml(message.content)}</div>
+      </div>`;
+    }),
+    status ? `<div class="agent-empty">${escapeHtml(status)}</div>` : "",
+  ].join("");
+  agentLog.scrollTop = agentLog.scrollHeight;
+}
+
+function setAgentExpanded(expanded: boolean): void {
+  agentExpanded = expanded;
+  shell.classList.toggle("agent-collapsed", !expanded);
+  agentToggle.setAttribute("aria-expanded", String(expanded));
+  agentToggle.textContent = expanded ? "Close" : "Agent";
+}
+
+function escapeHtml(source: string): string {
+  return source
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 function setActiveTab(tab: "run" | "implementation"): void {
   const runActive = tab === "run";
+  const implementationActive = tab === "implementation";
   runViewTab.classList.toggle("active", runActive);
-  implementationTab.classList.toggle("active", !runActive);
+  implementationTab.classList.toggle("active", implementationActive);
   runViewTab.setAttribute("aria-selected", String(runActive));
-  implementationTab.setAttribute("aria-selected", String(!runActive));
+  implementationTab.setAttribute("aria-selected", String(implementationActive));
   outputEl.classList.toggle("active", runActive);
-  implementationEl.classList.toggle("active", !runActive);
+  implementationEl.classList.toggle("active", implementationActive);
 }
 
 function requiredQuery<T extends Element>(selector: string): T {

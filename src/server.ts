@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { completeWithAnthropic } from "./anthropicComplete";
 import type { CodeCache } from "./codeSheet";
 import { runCodeSheet } from "./codeSheetRunner";
+import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 const codeCache: CodeCache = new Map();
 const port = Number(process.env.PORT ?? 8080);
@@ -31,6 +32,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/complete") {
       await handleComplete(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/agent/chat") {
+      await handleAgentChat(req, res);
       return;
     }
 
@@ -96,6 +102,33 @@ async function handleComplete(req: IncomingMessage, res: ServerResponse): Promis
   }
 
   sendJson(res, 200, { completion: await completeWithAnthropic(prompt) });
+}
+
+async function handleAgentChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Method not allowed" });
+    return;
+  }
+
+  const { sheet, messages } = await readJson(req);
+  if (typeof sheet !== "string" || !isAgentMessages(messages)) {
+    sendJson(res, 400, { error: "Missing sheet or messages" });
+    return;
+  }
+
+  sendJson(res, 200, await runSheetAgent(sheet, messages, completeWithAnthropic));
+}
+
+function isAgentMessages(value: unknown): value is AgentChatMessage[] {
+  return Array.isArray(value) && value.every((message) => {
+    return (
+      typeof message === "object" &&
+      message !== null &&
+      ((message as AgentChatMessage).role === "user" ||
+        (message as AgentChatMessage).role === "assistant") &&
+      typeof (message as AgentChatMessage).content === "string"
+    );
+  });
 }
 
 async function serveStatic(pathname: string, res: ServerResponse): Promise<void> {
