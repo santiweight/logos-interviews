@@ -68,7 +68,7 @@ def test():
 # cells["A"][1] is A1, cells["B"][2] is B2.
 
 type Operator = Mul | Div | Add | Sub
-type Expr = Val(int) | BinOp(Operator, Expr, Expr)
+type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
 type EvalError = RecursiveError(list) | DivByZero
 
 class Spreadsheet:
@@ -94,7 +94,7 @@ def test():
   print(sheet.get("A", 1))
   sheet.set("B", 1, BinOp(Add(), Val(2), Val(3)))
   print(sheet.eval().eval("B", 1))
-  sheet.set("C", 1, BinOp(Mul(), BinOp(Add(), Val(2), Val(3)), Val(4)))
+  sheet.set("C", 1, BinOp(Mul(), BinOp(Add(), Cell("B", 1), Cell("A", 1)), Val(4)))
   print(sheet.eval().eval("C", 1))`,
   },
 ];
