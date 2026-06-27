@@ -354,11 +354,6 @@ h2 {
   line-height: 1.4;
 }
 
-.monaco-editor .codelens-decoration {
-  color: #1f6feb !important;
-  font-weight: 700;
-}
-
 .monaco-editor .not-ready-glyph-dot::before {
   display: inline-block;
   width: 7px;
@@ -370,6 +365,22 @@ h2 {
 
 .monaco-editor .not-ready-glyph-dot::before {
   margin: 0 0 1px 9px;
+}
+
+.monaco-editor .runnable-play-glyph::before {
+  display: inline-block;
+  margin-left: 5px;
+  color: #1f6feb;
+  content: "▶";
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.monaco-editor .runnable-play-glyph-disabled::before {
+  color: #9aa6b2;
+  cursor: not-allowed;
 }
 
 @media (max-width: 900px) {

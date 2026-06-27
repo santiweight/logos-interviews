@@ -244,6 +244,14 @@ let compileController: AbortController | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
 let readinessDecorations: string[] = [];
+let runnableDecorations: string[] = [];
+let runnableStateByLine = new Map<number, RunnableState>();
+
+type RunnableState = {
+  name: Runnable;
+  ready: boolean;
+  blockingDependencies: string[];
+};
 
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
@@ -276,28 +284,32 @@ const editor = monaco.editor.create(editorEl, {
   padding: { top: 12, bottom: 12 },
 });
 
-const runCommandId =
-  editor.addCommand(0, (_accessor, runnable?: Runnable) => {
-    runCurrentProgram(runnable);
-  }) ?? "";
-
 editor.onDidChangeModelContent(() => {
   scheduleCompilation(250);
 });
 
-monaco.languages.registerCodeLensProvider("python", {
-  provideCodeLenses(model) {
-    const lenses = runnables(model.getValue()).map((runnable) => ({
-      range: new monaco.Range(runnable.line, 1, runnable.line, 1),
-      command: {
-        id: runCommandId,
-        title: `▶ Run ${runnable.name}`,
-        arguments: [runnable.name],
-      },
-    }));
+editor.onMouseDown((event) => {
+  if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+    return;
+  }
 
-    return { lenses, dispose: () => undefined };
-  },
+  const lineNumber = event.target.position?.lineNumber;
+  if (lineNumber === undefined) {
+    return;
+  }
+
+  const runnable = runnableStateByLine.get(lineNumber);
+  if (!runnable) {
+    return;
+  }
+
+  if (!runnable.ready) {
+    runStatus.textContent = `${runnable.name} is blocked`;
+    runStatus.dataset.state = "error";
+    return;
+  }
+
+  runCurrentProgram(runnable.name);
 });
 
 runButton.addEventListener("click", () => runCurrentProgram());
@@ -448,8 +460,10 @@ function localReadiness(source: string): DefinitionReadiness[] {
 }
 
 function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
+  const runnableStates = runnableStatesFor(editor.getValue(), definitions);
+  const runnableLines = new Set(runnableStates.map((runnable) => runnable.line));
   const decorations = definitions
-    .filter((definition) => !definition.ready)
+    .filter((definition) => !definition.ready && !runnableLines.has(definition.line))
     .map((definition) => ({
       range: new monaco.Range(definition.line, 1, definition.line, 1),
       options: {
@@ -464,6 +478,60 @@ function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
     }));
 
   readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
+  updateRunnableDecorations(runnableStates);
+  updateToolbarRunState(runnableStates);
+}
+
+function runnableStatesFor(
+  source: string,
+  definitions: DefinitionReadiness[],
+): Array<RunnableState & { line: number }> {
+  const readinessByName = new Map(definitions.map((definition) => [definition.name, definition]));
+
+  return runnables(source).map((runnable) => {
+    const readiness = readinessByName.get(runnable.name);
+    return {
+      name: runnable.name,
+      line: runnable.line,
+      ready: readiness?.ready ?? true,
+      blockingDependencies: readiness?.blockingDependencies ?? [],
+    };
+  });
+}
+
+function updateRunnableDecorations(runnablesState: Array<RunnableState & { line: number }>): void {
+  runnableStateByLine = new Map(
+    runnablesState.map((runnable) => [
+      runnable.line,
+      {
+        name: runnable.name,
+        ready: runnable.ready,
+        blockingDependencies: runnable.blockingDependencies,
+      },
+    ]),
+  );
+
+  runnableDecorations = editor.deltaDecorations(
+    runnableDecorations,
+    runnablesState.map((runnable) => ({
+      range: new monaco.Range(runnable.line, 1, runnable.line, 1),
+      options: {
+        glyphMarginClassName: runnable.ready
+          ? "runnable-play-glyph"
+          : "runnable-play-glyph runnable-play-glyph-disabled",
+        glyphMarginHoverMessage: {
+          value: runnable.ready
+            ? `Run ${runnable.name}`
+            : `${runnable.name} is waiting for ${runnable.blockingDependencies.join(", ")}.`,
+        },
+      },
+    })),
+  );
+}
+
+function updateToolbarRunState(runnablesState: Array<RunnableState & { line: number }>): void {
+  const first = runnablesState[0];
+  runButton.disabled = first !== undefined && !first.ready;
 }
 
 function firstRunnable(source: string): Runnable | null {
