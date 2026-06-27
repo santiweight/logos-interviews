@@ -2,7 +2,13 @@ import "./styles.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
-import { runnables, type Runnable } from "./codeSheet";
+import {
+  definitionReadiness,
+  parse,
+  runnables,
+  type DefinitionReadiness,
+  type Runnable,
+} from "./codeSheet";
 import type { AgentChatMessage } from "./sheetAgent";
 
 globalThis.MonacoEnvironment = {
@@ -186,6 +192,9 @@ app.innerHTML = `
             <span aria-hidden="true">▶</span>
             Run
           </button>
+          <button id="clear-cache-button" class="secondary-button" type="button">
+            Clear cache
+          </button>
         </div>
       </header>
       <div id="editor" class="editor" aria-label="Code editor"></div>
@@ -218,6 +227,7 @@ const editorEl = requiredQuery<HTMLDivElement>("#editor");
 const outputEl = requiredQuery<HTMLPreElement>("#output");
 const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
 const runButton = requiredQuery<HTMLButtonElement>("#run-button");
+const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleSelect = requiredQuery<HTMLSelectElement>("#sample-select");
 const runViewTab = requiredQuery<HTMLButtonElement>("#run-view-tab");
@@ -230,6 +240,10 @@ const agentSend = requiredQuery<HTMLButtonElement>("#agent-send");
 let lastRunLabel = "never";
 let agentMessages: AgentChatMessage[] = [];
 let agentExpanded = false;
+let compileController: AbortController | null = null;
+let compileTimer: ReturnType<typeof setTimeout> | null = null;
+let compileVersion = 0;
+let readinessDecorations: string[] = [];
 
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
@@ -267,6 +281,10 @@ const runCommandId =
     runCurrentProgram(runnable);
   }) ?? "";
 
+editor.onDidChangeModelContent(() => {
+  scheduleCompilation(250);
+});
+
 monaco.languages.registerCodeLensProvider("python", {
   provideCodeLenses(model) {
     const lenses = runnables(model.getValue()).map((runnable) => ({
@@ -283,6 +301,7 @@ monaco.languages.registerCodeLensProvider("python", {
 });
 
 runButton.addEventListener("click", () => runCurrentProgram());
+clearCacheButton.addEventListener("click", () => clearCache());
 runViewTab.addEventListener("click", () => setActiveTab("run"));
 implementationTab.addEventListener("click", () => setActiveTab("implementation"));
 agentToggle.addEventListener("click", () => setAgentExpanded(!agentExpanded));
@@ -298,16 +317,17 @@ sampleSelect.addEventListener("change", () => {
 
   editor.setValue(sample.code);
   outputEl.textContent = "";
-  implementationEl.textContent = "";
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
   runStatus.textContent = "Not run";
   runStatus.dataset.state = "";
+  scheduleCompilation(0);
   setActiveTab("run");
 });
 
 renderAgentLog();
+scheduleCompilation(0);
 
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
@@ -335,7 +355,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     runStatus.textContent = `Ran ${runnable} · last run ${lastRunLabel}`;
     runStatus.dataset.state = "ok";
     outputEl.textContent = result.stdout.length > 0 ? result.stdout.join("\n") : "(no output)";
-    implementationEl.textContent = result.implementation;
     return;
   }
 
@@ -343,7 +362,108 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   runStatus.textContent = `Error · last run ${lastRunLabel}`;
   runStatus.dataset.state = "error";
   outputEl.textContent = result.error;
-  implementationEl.textContent = result.implementation;
+}
+
+async function clearCache(): Promise<void> {
+  clearCacheButton.disabled = true;
+  runStatus.textContent = "Clearing cache";
+  runStatus.dataset.state = "";
+
+  try {
+    const cleared = await clearCacheViaDevApi();
+    scheduleCompilation(0);
+    runStatus.textContent = `Cleared ${cleared} cached snippet${cleared === 1 ? "" : "s"}`;
+    runStatus.dataset.state = "ok";
+  } catch (error) {
+    runStatus.textContent = "Cache clear failed";
+    runStatus.dataset.state = "error";
+    outputEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    clearCacheButton.disabled = false;
+  }
+}
+
+function scheduleCompilation(delayMs: number): void {
+  compileVersion += 1;
+  const version = compileVersion;
+  const source = editor.getValue();
+
+  compileController?.abort();
+  compileController = null;
+  implementationEl.textContent = source;
+  updateReadinessDecorations(localReadiness(source));
+
+  if (compileTimer) {
+    clearTimeout(compileTimer);
+  }
+
+  compileTimer = setTimeout(() => {
+    compileTimer = null;
+    streamImplementation(source, version);
+  }, delayMs);
+}
+
+async function streamImplementation(source: string, version: number): Promise<void> {
+  const controller = new AbortController();
+  compileController = controller;
+
+  try {
+    for await (const event of compileViaDevApi(source, controller.signal)) {
+      if (version !== compileVersion) {
+        controller.abort();
+        return;
+      }
+
+      if (
+        (event.kind === "implementation" || event.kind === "compiled") &&
+        typeof event.implementation === "string"
+      ) {
+        implementationEl.textContent = event.implementation;
+      }
+
+      if (event.kind === "readiness" && Array.isArray(event.definitions)) {
+        updateReadinessDecorations(event.definitions);
+      }
+    }
+  } catch (error) {
+    if (controller.signal.aborted || version !== compileVersion) {
+      return;
+    }
+
+    implementationEl.textContent = source;
+    console.error(error);
+  } finally {
+    if (compileController === controller) {
+      compileController = null;
+    }
+  }
+}
+
+function localReadiness(source: string): DefinitionReadiness[] {
+  try {
+    return definitionReadiness(parse(source), new Map());
+  } catch {
+    return [];
+  }
+}
+
+function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
+  const decorations = definitions
+    .filter((definition) => !definition.ready)
+    .map((definition) => ({
+      range: new monaco.Range(definition.line, 1, definition.line, 1),
+      options: {
+        glyphMarginClassName: "not-ready-glyph-dot",
+        hoverMessage: {
+          value:
+            definition.reason === "implementation"
+              ? `${definition.name} is waiting for its implementation.`
+              : `${definition.name} is waiting for ${definition.blockingDependencies.join(", ")}.`,
+        },
+      },
+    }));
+
+  readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
 }
 
 function firstRunnable(source: string): Runnable | null {
@@ -430,7 +550,6 @@ async function runAgentTurn(): Promise<void> {
   if (!("error" in result) && result.sheet !== null && result.sheet !== editor.getValue()) {
     editor.setValue(result.sheet);
     outputEl.textContent = "";
-    implementationEl.textContent = "";
     agentMessages = [
       ...agentMessages,
       { role: "assistant", content: "Applied the updated sheet to the editor." },
@@ -502,6 +621,83 @@ function escapeHtml(source: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+async function clearCacheViaDevApi(): Promise<number> {
+  const response = await fetch("/api/cache", { method: "DELETE" });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    cleared?: number;
+    error?: string;
+  };
+
+  if (!response.ok || payload.ok !== true || typeof payload.cleared !== "number") {
+    throw new Error(payload.error ?? "Clear cache request failed");
+  }
+
+  return payload.cleared;
+}
+
+type CompileWireEvent =
+  | {
+      kind: string;
+      implementation?: string;
+      error?: string;
+      definitions?: DefinitionReadiness[];
+    };
+
+async function* compileViaDevApi(
+  sheet: string,
+  signal: AbortSignal,
+): AsyncIterable<CompileWireEvent> {
+  const response = await fetch("/api/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error("Compile request failed");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      if (line.trim().length === 0) {
+        continue;
+      }
+
+      const event = JSON.parse(line) as CompileWireEvent;
+      if (event.kind === "error") {
+        throw new Error(event.error);
+      }
+
+      yield event;
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (buffer.trim().length > 0) {
+    const event = JSON.parse(buffer) as CompileWireEvent;
+    if (event.kind === "error") {
+      throw new Error(event.error);
+    }
+
+    yield event;
+  }
 }
 
 function setActiveTab(tab: "run" | "implementation"): void {

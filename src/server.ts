@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWithAnthropic } from "./anthropicComplete";
+import { handleCompileStream } from "./compileStream";
 import type { CodeCache } from "./codeSheet";
 import { runCodeSheet } from "./codeSheetRunner";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
@@ -27,6 +28,16 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/run") {
       await handleRun(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/compile") {
+      await handleCompileStream(req, res, codeCache, completeWithAnthropic);
+      return;
+    }
+
+    if (url.pathname === "/api/cache") {
+      await handleCache(req, res);
       return;
     }
 
@@ -87,6 +98,17 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
     stdout: result.stdout,
     implementation: result.completed.source,
   });
+}
+
+async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== "DELETE") {
+    sendJson(res, 405, { ok: false, error: "Method not allowed" });
+    return;
+  }
+
+  const cleared = codeCache.size;
+  codeCache.clear();
+  sendJson(res, 200, { ok: true, cleared });
 }
 
 async function handleComplete(req: IncomingMessage, res: ServerResponse): Promise<void> {

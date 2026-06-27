@@ -1,4 +1,4 @@
-import type { CodeSheet, CompleteFunction } from "./codeSheet";
+import type { CodeSheet, CompleteFunction, CompleteResult } from "./codeSheet";
 
 export type AgentChatRole = "user" | "assistant";
 
@@ -17,8 +17,28 @@ export async function runSheetAgent(
   messages: AgentChatMessage[],
   complete: CompleteFunction,
 ): Promise<SheetAgentResult> {
-  const response = await complete(buildSheetAgentPrompt(sheet, messages));
+  const response = await completeText(complete(buildSheetAgentPrompt(sheet, messages)));
   return parseSheetAgentResponse(response);
+}
+
+async function completeText(result: CompleteResult): Promise<string> {
+  if (typeof result === "string") {
+    return result;
+  }
+
+  if (isAsyncIterable(result)) {
+    let text = "";
+    for await (const token of result) {
+      text += token;
+    }
+    return text;
+  }
+
+  return result;
+}
+
+function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> {
+  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
 }
 
 function buildSheetAgentPrompt(

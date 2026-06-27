@@ -1,17 +1,49 @@
 import { defineConfig } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer as createNetServer } from "node:net";
 import { runCodeSheet } from "./src/codeSheetRunner";
 import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
+import { handleCompileStream } from "./src/compileStream";
 
-export default defineConfig({
-  plugins: [anthropicCompletionPlugin()],
-  server: {
-    host: "127.0.0.1",
-    port: 5173,
-  },
+const devHost = "127.0.0.1";
+
+export default defineConfig(async ({ command }) => {
+  const devPort = command === "serve" ? await availablePort(devHost) : undefined;
+
+  return {
+    plugins: [anthropicCompletionPlugin()],
+    server: {
+      host: devHost,
+      ...(devPort === undefined ? {} : { port: devPort, strictPort: true }),
+    },
+  };
 });
+
+function availablePort(host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createNetServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Could not allocate a dev server port")));
+        return;
+      }
+
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(address.port);
+      });
+    });
+  });
+}
 
 function anthropicCompletionPlugin() {
   const codeCache: CodeCache = new Map();
@@ -60,6 +92,26 @@ function anthropicCompletionPlugin() {
           const message = error instanceof Error ? error.message : String(error);
           sendJson(res, 500, { ok: false, error: message, stdout: [] });
         }
+      });
+
+      server.middlewares.use("/api/compile", async (req, res) => {
+        try {
+          await handleCompileStream(req, res, codeCache, complete);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message });
+        }
+      });
+
+      server.middlewares.use("/api/cache", (req, res) => {
+        if (req.method !== "DELETE") {
+          sendJson(res, 405, { ok: false, error: "Method not allowed" });
+          return;
+        }
+
+        const cleared = codeCache.size;
+        codeCache.clear();
+        sendJson(res, 200, { ok: true, cleared });
       });
 
       server.middlewares.use("/api/complete", async (req, res) => {

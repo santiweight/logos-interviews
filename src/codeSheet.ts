@@ -2,7 +2,11 @@ export type CodeSheet = string;
 export type Runnable = string;
 export type SnippetHash = string;
 export type CodeCache = Map<SnippetHash, string>;
-export type CompleteFunction = (prompt: string) => string | Promise<string>;
+export type CompleteResult = string | Promise<string> | AsyncIterable<string>;
+export type CompleteOptions = {
+  signal?: AbortSignal;
+};
+export type CompleteFunction = (prompt: string, options?: CompleteOptions) => CompleteResult;
 
 export type RunnableInfo = {
   name: Runnable;
@@ -12,6 +16,8 @@ export type RunnableInfo = {
 export type ParsedSheet = {
   source: CodeSheet;
   runnables: RunnableInfo[];
+  incompleteSnippets: IncompleteSnippet[];
+  declarations: Declaration[];
   sumTypes: SumTypeDecl[];
   typeAliases: TypeAliasDecl[];
   classDecls: ClassDecl[];
@@ -27,6 +33,7 @@ export type CompletedCodeSheet = {
   source: CodeSheet;
   lowered: LoweredCodeSheet;
   completions: Completion[];
+  ir: CompilationIR;
 };
 
 export type Completion = {
@@ -36,7 +43,52 @@ export type Completion = {
   cached: boolean;
 };
 
-type SumTypeDecl = {
+export type CompletionState =
+  | { kind: "partial"; snippet: string; hash: SnippetHash }
+  | { kind: "complete"; snippet: string; hash: SnippetHash; implementation: string };
+
+export type CompilationEvent =
+  | { kind: "parsed"; parsed: ParsedSheet }
+  | { kind: "readiness"; definitions: DefinitionReadiness[] }
+  | { kind: "cache-hit"; hash: SnippetHash; snippet: string }
+  | { kind: "llm-start"; hash: SnippetHash; snippet: string }
+  | { kind: "llm-token"; hash: SnippetHash; token: string }
+  | { kind: "llm-complete"; hash: SnippetHash; implementation: string }
+  | { kind: "implementation"; source: CodeSheet; completedSnippets: number; totalSnippets: number }
+  | { kind: "compiled"; completed: CompletedCodeSheet };
+
+export type CompileOptions = {
+  signal?: AbortSignal;
+  streamTokens?: boolean;
+  abortCurrentCompletion?: boolean;
+};
+
+export type DefinitionReadiness = {
+  name: string;
+  line: number;
+  kind: "function" | "method";
+  ready: boolean;
+  reason?: "implementation" | "dependency";
+  dependencies: string[];
+  blockingDependencies: string[];
+};
+
+export type CompilationIR = {
+  parsed: ParsedSheet;
+  lowered: LoweredCodeSheet;
+  nodes: CompilationNode[];
+};
+
+export type CompilationNode =
+  | { kind: "source"; source: string }
+  | { kind: "incomplete"; line: number; snippetKind: IncompleteSnippet["kind"]; state: CompletionState };
+
+export type Declaration =
+  | { kind: "sum-type"; name: string; line: number; source: string }
+  | { kind: "class"; name: string; line: number; source: string }
+  | { kind: "incomplete"; snippetKind: IncompleteSnippet["kind"]; line: number; source: string };
+
+export type SumTypeDecl = {
   name: string;
   source: string;
   line: number;
@@ -55,13 +107,20 @@ type TypeAliasDecl = {
   target: string;
 };
 
-type IncompleteSnippet = {
+type FunctionDecl = {
+  name: string;
+  line: number;
+  source: string;
+  className?: string;
+};
+
+export type IncompleteSnippet = {
   kind: "function" | "class";
   line: number;
   snippet: string;
 };
 
-type ClassDecl = {
+export type ClassDecl = {
   name: string;
   line: number;
   snippet: string;
@@ -70,13 +129,18 @@ type ClassDecl = {
 export function parse(codeSheet: CodeSheet): ParsedSheet {
   const source = normalizeNewlines(codeSheet);
   const lines = source.split("\n");
+  const sumTypes = lines.flatMap(parseSumTypeLine);
+  const classDecls = discoverClassDecls(lines);
+  const incomplete = discoverIncompleteSnippets(source);
 
   return {
     source,
     runnables: discoverRunnables(lines),
-    sumTypes: lines.flatMap(parseSumTypeLine),
+    incompleteSnippets: incomplete,
+    declarations: declarations(sumTypes, classDecls, incomplete),
+    sumTypes,
     typeAliases: lines.flatMap(parseTypeAliasLine),
-    classDecls: discoverClassDecls(lines),
+    classDecls,
     topLevelComments: lines.filter((line) => line.startsWith("#")),
   };
 }
@@ -99,47 +163,229 @@ export function runnables(codeSheet: CodeSheet): RunnableInfo[] {
   return parse(codeSheet).runnables;
 }
 
+export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
+  const lowered = lower(parsed);
+  const lines = lowered.source.split("\n");
+  const incomplete = discoverIncompleteSnippets(lowered.source);
+  const nodes: CompilationNode[] = [];
+  let cursor = 0;
+
+  for (const item of incomplete) {
+    const start = item.line - 1;
+    if (start > cursor) {
+      nodes.push({
+        kind: "source",
+        source: lines.slice(cursor, start).join("\n") + "\n",
+      });
+    }
+
+    nodes.push({
+      kind: "incomplete",
+      line: item.line,
+      snippetKind: item.kind,
+      state: {
+        kind: "partial",
+        snippet: item.snippet,
+        hash: hashCompletionInput(parsed, item.snippet),
+      },
+    });
+
+    cursor = start + item.snippet.split("\n").length;
+    if (cursor < lines.length) {
+      nodes.push({ kind: "source", source: "\n" });
+    }
+  }
+
+  if (cursor < lines.length) {
+    nodes.push({ kind: "source", source: lines.slice(cursor).join("\n") });
+  }
+
+  if (nodes.length === 0) {
+    nodes.push({ kind: "source", source: lowered.source });
+  }
+
+  return { parsed, lowered, nodes };
+}
+
 export async function completeSheet(
   codeCache: CodeCache,
   codeSheet: CodeSheet,
   complete?: CompleteFunction,
 ): Promise<CompletedCodeSheet> {
-  const parsed = parse(codeSheet);
-  const lowered = lower(parsed);
-  const completions: Completion[] = [];
-  let completedSource = lowered.source;
-  const incomplete = incompleteSnippets(completedSource);
-
-  for (const item of incomplete) {
-    const snippetHash = hashCompletionInput(parsed, item.snippet);
-    const cachedReplacement = codeCache.get(snippetHash);
-
-    let replacement = cachedReplacement;
-    if (!replacement) {
-      if (!complete) {
-        break;
-      }
-      replacement = normalizeSnippet(
-        await complete(buildCompletionPrompt(completedSource, item.snippet)),
-        item.kind,
-      );
-      codeCache.set(snippetHash, replacement);
+  let compiled: CompletedCodeSheet | null = null;
+  for await (const event of compile(codeCache, codeSheet, complete)) {
+    if (event.kind === "compiled") {
+      compiled = event.completed;
     }
-
-    completions.push({
-      hash: snippetHash,
-      snippet: item.snippet,
-      replacement,
-      cached: Boolean(cachedReplacement),
-    });
-    completedSource = replaceIncompleteSnippet(completedSource, item.snippet, replacement);
   }
 
-  return {
-    source: completedSource,
-    lowered,
-    completions,
+  if (!compiled) {
+    throw new Error("Compilation did not produce a compiled sheet");
+  }
+
+  return compiled;
+}
+
+export async function* compile(
+  codeCache: CodeCache,
+  codeSheet: CodeSheet,
+  complete?: CompleteFunction,
+  options: CompileOptions = {},
+): AsyncIterable<CompilationEvent> {
+  const parsed = parse(codeSheet);
+  const ir = buildCompilationIR(parsed);
+  const totalSnippets = ir.nodes.filter((node) => node.kind === "incomplete").length;
+  let completedSnippets = 0;
+  const completions: Completion[] = [];
+
+  if (isAborted(options.signal)) {
+    return;
+  }
+
+  yield { kind: "parsed", parsed };
+  yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+  yield {
+    kind: "implementation",
+    source: renderImplementation(ir),
+    completedSnippets,
+    totalSnippets,
   };
+
+  for (const node of ir.nodes) {
+    if (isAborted(options.signal)) {
+      return;
+    }
+
+    if (node.kind !== "incomplete" || node.state.kind !== "partial") {
+      continue;
+    }
+
+    const { hash, snippet } = node.state;
+    if (codeCache.has(hash)) {
+      const cachedReplacement = codeCache.get(hash) ?? "";
+      node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
+      completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
+      completedSnippets += 1;
+      yield { kind: "cache-hit", hash, snippet };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+      continue;
+    }
+
+    if (!complete) {
+      continue;
+    }
+
+    yield { kind: "llm-start", hash, snippet };
+    const prompt = buildCompletionPrompt(renderImplementation(ir), snippet);
+    let replacement = "";
+    const result = complete(
+      prompt,
+      options.abortCurrentCompletion ? { signal: options.signal } : undefined,
+    );
+
+    if (isAsyncIterable(result)) {
+      for await (const token of result) {
+        replacement += token;
+        if (!isAborted(options.signal) && options.streamTokens !== false) {
+          yield { kind: "llm-token", hash, token };
+        }
+      }
+    } else {
+      replacement = await result;
+    }
+
+    replacement = normalizeSnippet(replacement, node.snippetKind);
+    codeCache.set(hash, replacement);
+    node.state = { kind: "complete", hash, snippet, implementation: replacement };
+    completions.push({ hash, snippet, replacement, cached: false });
+    completedSnippets += 1;
+    if (isAborted(options.signal)) {
+      return;
+    }
+
+    yield { kind: "llm-complete", hash, implementation: replacement };
+    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+    yield {
+      kind: "implementation",
+      source: renderImplementation(ir),
+      completedSnippets,
+      totalSnippets,
+    };
+  }
+
+  yield {
+    kind: "compiled",
+    completed: {
+      source: renderImplementation(ir),
+      lowered: ir.lowered,
+      completions,
+      ir,
+    },
+  };
+}
+
+export function renderImplementation(ir: CompilationIR): CodeSheet {
+  return ir.nodes
+    .map((node) => {
+      if (node.kind === "source") {
+        return node.source;
+      }
+
+      return node.state.kind === "complete" ? node.state.implementation : node.state.snippet;
+    })
+    .join("");
+}
+
+export function definitionReadiness(
+  parsed: ParsedSheet,
+  codeCache: CodeCache,
+): DefinitionReadiness[] {
+  const functionDecls = discoverFunctionDecls(parsed.source);
+  const topLevelNames = new Set(functionDecls.filter((decl) => !decl.className).map((decl) => decl.name));
+  const classNames = new Set(parsed.classDecls.map((decl) => decl.name));
+  const incomplete = incompleteSymbols(parsed, codeCache);
+  const topLevelSources = new Map(
+    discoverTopLevelFunctionBlocks(parsed.source).map((decl) => [decl.name, decl.source]),
+  );
+  const dependencies = new Map<string, string[]>();
+
+  for (const name of topLevelNames) {
+    const source = topLevelSources.get(name) ?? "";
+    dependencies.set(name, referencedKnownSymbols(source, topLevelNames, classNames, name));
+  }
+
+  return functionDecls.map((decl) => {
+    const symbol = decl.className ?? decl.name;
+    const directImplementationMissing =
+      decl.className !== undefined
+        ? incomplete.has(decl.className)
+        : incomplete.has(decl.name);
+    const deps = decl.className ? [] : dependencies.get(decl.name) ?? [];
+    const blockingDependencies = directImplementationMissing
+      ? []
+      : blockingSymbols(symbol, dependencies, incomplete);
+    const reason = directImplementationMissing
+      ? "implementation"
+      : blockingDependencies.length > 0
+        ? "dependency"
+        : undefined;
+
+    return {
+      name: decl.className ? `${decl.className}.${decl.name}` : decl.name,
+      line: decl.line,
+      kind: decl.className ? "method" : "function",
+      ready: !directImplementationMissing && blockingDependencies.length === 0,
+      ...(reason === undefined ? {} : { reason }),
+      dependencies: deps,
+      blockingDependencies,
+    };
+  });
 }
 
 export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
@@ -169,6 +415,132 @@ function hashText(prefix: string, source: string): SnippetHash {
   }
 
   return `${prefix}:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function declarations(
+  sumTypes: SumTypeDecl[],
+  classDecls: ClassDecl[],
+  incomplete: IncompleteSnippet[],
+): Declaration[] {
+  return [
+    ...sumTypes.map((decl) => ({
+      kind: "sum-type" as const,
+      name: decl.name,
+      line: decl.line,
+      source: decl.source,
+    })),
+    ...classDecls.map((decl) => ({
+      kind: "class" as const,
+      name: decl.name,
+      line: decl.line,
+      source: decl.snippet,
+    })),
+    ...incomplete.map((snippet) => ({
+      kind: "incomplete" as const,
+      snippetKind: snippet.kind,
+      line: snippet.line,
+      source: snippet.snippet,
+    })),
+  ].sort((left, right) => left.line - right.line);
+}
+
+function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> {
+  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
+}
+
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false;
+}
+
+function incompleteSymbols(parsed: ParsedSheet, codeCache: CodeCache): Set<string> {
+  const result = new Set<string>();
+
+  for (const snippet of parsed.incompleteSnippets) {
+    if (codeCache.has(hashCompletionInput(parsed, snippet.snippet))) {
+      continue;
+    }
+
+    if (snippet.kind === "function") {
+      const functionName = snippet.snippet.match(/^def\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+      if (functionName) {
+        result.add(functionName);
+      }
+      continue;
+    }
+
+    const className = snippet.snippet.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+    if (className) {
+      result.add(className);
+    }
+  }
+
+  return result;
+}
+
+function blockingSymbols(
+  name: string,
+  dependencies: Map<string, string[]>,
+  incomplete: Set<string>,
+): string[] {
+  const blocking = new Set<string>();
+  const visited = new Set<string>();
+  const queue = [...(dependencies.get(name) ?? [])];
+
+  while (queue.length > 0) {
+    const dependency = queue.shift();
+    if (!dependency || visited.has(dependency)) {
+      continue;
+    }
+
+    visited.add(dependency);
+    if (incomplete.has(dependency)) {
+      blocking.add(dependency);
+      continue;
+    }
+
+    for (const transitive of dependencies.get(dependency) ?? []) {
+      queue.push(transitive);
+    }
+  }
+
+  return Array.from(blocking).sort();
+}
+
+function referencedKnownSymbols(
+  source: string,
+  topLevelNames: Set<string>,
+  classNames: Set<string>,
+  selfName: string,
+): string[] {
+  const ignored = new Set([
+    "None",
+    "True",
+    "False",
+    "int",
+    "str",
+    "list",
+    "dict",
+    "set",
+    "tuple",
+    "print",
+    "range",
+    "len",
+    "self",
+  ]);
+  const matches = source.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) ?? [];
+  const result = new Set<string>();
+
+  for (const identifier of matches) {
+    if (identifier === selfName || ignored.has(identifier)) {
+      continue;
+    }
+
+    if (topLevelNames.has(identifier) || classNames.has(identifier)) {
+      result.add(identifier);
+    }
+  }
+
+  return Array.from(result).sort();
 }
 
 function dependencyContext(parsed: ParsedSheet, snippet: string): string {
@@ -255,6 +627,70 @@ function discoverRunnables(lines: string[]): RunnableInfo[] {
 
     return [{ name: match[1], line: index + 1 }];
   });
+}
+
+function discoverFunctionDecls(codeSheet: CodeSheet): FunctionDecl[] {
+  const source = normalizeNewlines(codeSheet);
+  const lines = source.split("\n");
+  const declarations: FunctionDecl[] = discoverTopLevelFunctionBlocks(source);
+
+  for (const classDecl of discoverClassDecls(lines)) {
+    const classLines = classDecl.snippet.split("\n");
+    for (let index = 1; index < classLines.length; index += 1) {
+      const match = classLines[index].match(
+        /^\s+def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:?\s*$/,
+      );
+      if (!match) {
+        continue;
+      }
+
+      declarations.push({
+        name: match[1],
+        className: classDecl.name,
+        line: classDecl.line + index,
+        source: classLines[index].trimEnd(),
+      });
+    }
+  }
+
+  return declarations.sort((left, right) => left.line - right.line);
+}
+
+function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
+  const lines = normalizeNewlines(codeSheet).split("\n");
+  const declarations: FunctionDecl[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(
+      /^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*:?\s*$/,
+    );
+    if (!match) {
+      continue;
+    }
+
+    let end = index + 1;
+    while (end < lines.length) {
+      const candidate = lines[end];
+      if (candidate.trim().length === 0) {
+        end += 1;
+        continue;
+      }
+
+      if (!/^\s+/.test(candidate)) {
+        break;
+      }
+
+      end += 1;
+    }
+
+    declarations.push({
+      name: match[1],
+      line: index + 1,
+      source: trimTrailingBlankLines(lines.slice(index, end)).join("\n"),
+    });
+  }
+
+  return declarations;
 }
 
 function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
@@ -421,7 +857,7 @@ function toPythonType(source: string): string {
   return `"${trimmed}"`;
 }
 
-function incompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
+function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
   const lines = normalizeNewlines(codeSheet).split("\n");
   const snippets: IncompleteSnippet[] = [];
   const coveredLines = new Set<number>();
@@ -581,29 +1017,6 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
-}
-
-function replaceIncompleteSnippet(
-  source: string,
-  snippet: string,
-  replacement: string,
-): string {
-  const lines = normalizeNewlines(source).split("\n");
-  const snippetLines = snippet.split("\n");
-  const lineIndex = lines.findIndex((_, index) => {
-    const candidate = lines
-      .slice(index, index + snippetLines.length)
-      .map((line) => line.trimEnd())
-      .join("\n");
-    return candidate === snippet;
-  });
-
-  if (lineIndex < 0) {
-    throw new Error(`Could not find incomplete snippet: ${snippet}`);
-  }
-
-  lines.splice(lineIndex, snippetLines.length, replacement);
-  return lines.join("\n");
 }
 
 function splitTopLevel(source: string, separator: string): string[] {

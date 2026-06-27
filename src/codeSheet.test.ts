@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  compile,
+  definitionReadiness,
   completeSheet,
   hashCompletionInput,
   hashSnippet,
   lower,
   parse,
+  renderImplementation,
   runnables,
   type CodeCache,
+  type CompilationEvent,
 } from "./codeSheet";
 import { runCodeSheet, type RunResult } from "./codeSheetRunner";
 
@@ -69,7 +73,10 @@ describe("codeSheet", () => {
     const cache: CodeCache = new Map();
     const complete = (prompt: string): string => {
       prompts.push(prompt);
-      const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+      const target =
+        prompt
+          .split("Your job is to finish the implementation of:")
+          .at(-1) ?? "";
       if (target.includes("class Spreadsheet:")) {
         return `class Spreadsheet:
   cells: [[int]]
@@ -324,6 +331,21 @@ def test():
         print(Val(7))",
         "parsed": {
           "classDecls": [],
+          "declarations": [
+            {
+              "kind": "sum-type",
+              "line": 1,
+              "name": "Op",
+              "source": "type Op = Mul | Div | Add | Sub",
+            },
+            {
+              "kind": "sum-type",
+              "line": 2,
+              "name": "Expr",
+              "source": "type Expr = Val(int) | BinOp(Op, Expr, Expr)",
+            },
+          ],
+          "incompleteSnippets": [],
           "runnables": [
             {
               "line": 4,
@@ -449,6 +471,33 @@ def test():
         print(parse_cell("A1"))",
         "parsed": {
           "classDecls": [],
+          "declarations": [
+            {
+              "kind": "sum-type",
+              "line": 1,
+              "name": "Operator",
+              "source": "type Operator = Mul | Div | Add | Sub",
+            },
+            {
+              "kind": "sum-type",
+              "line": 2,
+              "name": "Expr",
+              "source": "type Expr = Val(int) | Cell(str, int)",
+            },
+            {
+              "kind": "incomplete",
+              "line": 5,
+              "snippetKind": "function",
+              "source": "def parse_cell(str) -> CellAddress | None",
+            },
+          ],
+          "incompleteSnippets": [
+            {
+              "kind": "function",
+              "line": 5,
+              "snippet": "def parse_cell(str) -> CellAddress | None",
+            },
+          ],
           "runnables": [
             {
               "line": 7,
@@ -645,6 +694,192 @@ class SpreadsheetResult:
         "spreadsheetInvalidatedByExprChange": true,
       }
     `);
+  });
+
+  it("streams compilation events and renders partial and completed IR", async () => {
+    const cache: CodeCache = new Map();
+    const events: CompilationEvent[] = [];
+    async function* complete(): AsyncIterable<string> {
+      yield "def add(x: int, y: int) -> int:\n";
+      yield "  return x + y";
+    }
+
+    for await (const event of compile(cache, sheet, complete)) {
+      events.push(event);
+    }
+
+    const compiled = events.find((event) => event.kind === "compiled");
+    if (compiled?.kind !== "compiled") {
+      throw new Error("expected compiled event");
+    }
+
+    expect(events.map((event) => event.kind)).toEqual([
+      "parsed",
+      "readiness",
+      "implementation",
+      "llm-start",
+      "llm-token",
+      "llm-token",
+      "llm-complete",
+      "readiness",
+      "implementation",
+      "compiled",
+    ]);
+    expect(renderImplementation(compiled.completed.ir)).toContain(
+      "def add(x: int, y: int) -> int:\n  return x + y",
+    );
+    expect(cache.get(compiled.completed.completions[0].hash)).toBe(
+      "def add(x: int, y: int) -> int:\n  return x + y",
+    );
+  });
+
+  it("can compile to a partial implementation when snippets are unresolved", async () => {
+    const events: CompilationEvent[] = [];
+
+    for await (const event of compile(new Map(), sheet)) {
+      events.push(event);
+    }
+
+    const compiled = events.find((event) => event.kind === "compiled");
+    if (compiled?.kind !== "compiled") {
+      throw new Error("expected compiled event");
+    }
+
+    expect(events.map((event) => event.kind)).toEqual([
+      "parsed",
+      "readiness",
+      "implementation",
+      "compiled",
+    ]);
+    expect(compiled.completed.completions).toEqual([]);
+    expect(renderImplementation(compiled.completed.ir)).toBe(sheet);
+  });
+
+  it("emits cache hits without invoking the LLM", async () => {
+    const cache: CodeCache = new Map();
+    const first = await completeSheet(cache, sheet, () => `def add(x: int, y: int) -> int:
+  return x + y`);
+    const events: CompilationEvent[] = [];
+
+    for await (const event of compile(cache, sheet, () => {
+      throw new Error("should not complete cached snippet");
+    })) {
+      events.push(event);
+    }
+
+    expect(first.completions).toHaveLength(1);
+    expect(events.map((event) => event.kind)).toEqual([
+      "parsed",
+      "readiness",
+      "implementation",
+      "cache-hit",
+      "readiness",
+      "implementation",
+      "compiled",
+    ]);
+  });
+
+  it("models readiness through incomplete definitions and dependencies", async () => {
+    const cache: CodeCache = new Map();
+    const parsed = parse(sheet);
+
+    expect(definitionReadiness(parsed, cache)).toEqual([
+      {
+        name: "add",
+        line: 1,
+        kind: "function",
+        ready: false,
+        reason: "implementation",
+        dependencies: [],
+        blockingDependencies: [],
+      },
+      {
+        name: "test",
+        line: 3,
+        kind: "function",
+        ready: false,
+        reason: "dependency",
+        dependencies: ["add"],
+        blockingDependencies: ["add"],
+      },
+    ]);
+
+    await completeSheet(cache, sheet, () => `def add(x: int, y: int) -> int:
+  return x + y`);
+
+    expect(definitionReadiness(parsed, cache)).toEqual([
+      {
+        name: "add",
+        line: 1,
+        kind: "function",
+        ready: true,
+        dependencies: [],
+        blockingDependencies: [],
+      },
+      {
+        name: "test",
+        line: 3,
+        kind: "function",
+        ready: true,
+        dependencies: ["add"],
+        blockingDependencies: [],
+      },
+    ]);
+  });
+
+  it("keeps completed cache entries after cancelling an in-progress compile", async () => {
+    const cache: CodeCache = new Map();
+    const abortController = new AbortController();
+    const firstEvents: CompilationEvent[] = [];
+    const calls: string[] = [];
+    const complete = (prompt: string): string => {
+      calls.push(prompt);
+      abortController.abort();
+      return `def add(x: int, y: int) -> int:
+  return x + y`;
+    };
+
+    for await (const event of compile(cache, multiIncompleteSheet, complete, {
+      signal: abortController.signal,
+    })) {
+      firstEvents.push(event);
+    }
+
+    expect(firstEvents.map((event) => event.kind)).toEqual([
+      "parsed",
+      "readiness",
+      "implementation",
+      "llm-start",
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(cache.size).toBe(1);
+
+    const secondEvents: CompilationEvent[] = [];
+    const secondComplete = (prompt: string): string => {
+      calls.push(prompt);
+      return `def mul(x: int, y: int) -> int:
+  return x * y`;
+    };
+
+    for await (const event of compile(cache, multiIncompleteSheet, secondComplete)) {
+      secondEvents.push(event);
+    }
+
+    expect(secondEvents.map((event) => event.kind)).toEqual([
+      "parsed",
+      "readiness",
+      "implementation",
+      "cache-hit",
+      "readiness",
+      "implementation",
+      "llm-start",
+      "llm-complete",
+      "readiness",
+      "implementation",
+      "compiled",
+    ]);
+    expect(calls).toHaveLength(2);
+    expect(cache.size).toBe(2);
   });
 });
 

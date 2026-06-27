@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 export type AnthropicCompleteOptions = {
   model?: string;
   apiKey?: string;
+  signal?: AbortSignal;
 };
 
 export async function completeWithAnthropic(
@@ -15,12 +16,15 @@ export async function completeWithAnthropic(
   }
 
   const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
-    model: options.model ?? process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-4-6",
-    max_tokens: 4096,
-    temperature: 0,
-    messages: [{ role: "user", content: prompt }],
-  });
+  const message = await client.messages.create(
+    {
+      model: options.model ?? process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-4-6",
+      max_tokens: 4096,
+      temperature: 0,
+      messages: [{ role: "user", content: prompt }],
+    },
+    { signal: options.signal },
+  );
 
   return message.content
     .map((block) => (block.type === "text" ? block.text : ""))

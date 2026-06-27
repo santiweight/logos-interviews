@@ -167,6 +167,30 @@ h2 {
   background: #175fc9;
 }
 
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  border: 1px solid #c9d3df;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #ffffff;
+  color: #344457;
+  cursor: pointer;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.secondary-button:hover {
+  border-color: #9baabc;
+  background: #f8fafc;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .toolbar-actions {
   display: flex;
   align-items: center;
@@ -333,6 +357,19 @@ h2 {
 .monaco-editor .codelens-decoration {
   color: #1f6feb !important;
   font-weight: 700;
+}
+
+.monaco-editor .not-ready-glyph-dot::before {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #d92d20;
+  content: "";
+}
+
+.monaco-editor .not-ready-glyph-dot::before {
+  margin: 0 0 1px 9px;
 }
 
 @media (max-width: 900px) {
