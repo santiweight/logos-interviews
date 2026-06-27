@@ -41,14 +41,18 @@ function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> 
   return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
 }
 
-function buildSheetAgentPrompt(
+export function buildSheetAgentPrompt(
   sheet: CodeSheet,
   messages: AgentChatMessage[],
 ): string {
   return `You are a simple coding agent for an in-memory Python-like code sheet.
 
 You can discuss the sheet with the user and propose edits. You do not have filesystem access.
-When the user asks for a code change, return the entire revised code sheet.
+The code sheet is an architecture-level interview scaffold, not a full implementation file.
+When editing, update comments, types, class fields, function/method signatures, and runnable test code.
+Do not add concrete implementation bodies for parsers, evaluators, storage logic, or helper functions unless the user explicitly asks for a full implementation.
+If the user includes implementation code as an example, extract the requested API/contract change and keep the sheet at the definition level.
+When the user asks for a code change, return the entire revised code sheet so it can replace the editor contents.
 When the user is only asking a question, set "sheet" to null.
 
 Current code sheet:

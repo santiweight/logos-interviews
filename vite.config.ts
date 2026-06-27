@@ -6,6 +6,7 @@ import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
+import { handleSessionEvents } from "./src/sessionCapture";
 
 const devHost = "127.0.0.1";
 
@@ -152,6 +153,10 @@ function anthropicCompletionPlugin() {
           const message = error instanceof Error ? error.message : String(error);
           sendJson(res, 500, { error: message });
         }
+      });
+
+      server.middlewares.use("/api/session-events", async (req, res) => {
+        await handleSessionEvents(req, res);
       });
     },
   };

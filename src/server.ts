@@ -6,6 +6,7 @@ import { completeWithAnthropic } from "./anthropicComplete";
 import { handleCompileStream } from "./compileStream";
 import type { CodeCache } from "./codeSheet";
 import { runCodeSheet } from "./codeSheetRunner";
+import { handleSessionEvents } from "./sessionCapture";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 const codeCache: CodeCache = new Map();
@@ -48,6 +49,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/agent/chat") {
       await handleAgentChat(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/session-events") {
+      await handleSessionEvents(req, res);
       return;
     }
 

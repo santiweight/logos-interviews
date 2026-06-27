@@ -28,6 +28,15 @@ def test():
     expectedStdout: ["3"],
   },
   {
+    name: "single incomplete add with untyped parameters",
+    sheet: `def add(x, y) -> int
+
+def test():
+  print(add(1,2))`,
+    runnable: "test",
+    expectedStdout: ["3"],
+  },
+  {
     name: "multiple incomplete functions",
     sheet: `def add(x: int, y: int) -> int
 
@@ -233,6 +242,12 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
               "name": "test",
             },
           ],
+          "single incomplete add with untyped parameters": [
+            {
+              "line": 3,
+              "name": "test",
+            },
+          ],
         }
       `);
     },
@@ -277,6 +292,43 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
           {
             "attempts": 3,
             "case": "single incomplete add",
+            "expectedStdout": [
+              "3",
+            ],
+            "results": [
+              {
+                "attempt": 1,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "3",
+                  ],
+                },
+              },
+              {
+                "attempt": 2,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "3",
+                  ],
+                },
+              },
+              {
+                "attempt": 3,
+                "result": {
+                  "ok": true,
+                  "stdout": [
+                    "3",
+                  ],
+                },
+              },
+            ],
+            "successes": 3,
+          },
+          {
+            "attempts": 3,
+            "case": "single incomplete add with untyped parameters",
             "expectedStdout": [
               "3",
             ],
@@ -543,7 +595,7 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
         expect(summary.successes).toBe(attempts);
       }
     },
-    120_000,
+    240_000,
   );
 
   it(

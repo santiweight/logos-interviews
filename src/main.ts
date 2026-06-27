@@ -9,6 +9,7 @@ import {
   type DefinitionReadiness,
   type Runnable,
 } from "./codeSheet";
+import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import type { AgentChatMessage } from "./sheetAgent";
 
 globalThis.MonacoEnvironment = {
@@ -284,8 +285,12 @@ const editor = monaco.editor.create(editorEl, {
   padding: { top: 12, bottom: 12 },
 });
 
+const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
+let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
+
 editor.onDidChangeModelContent(() => {
   scheduleCompilation(250);
+  scheduleEditorCapture();
 });
 
 editor.onMouseDown((event) => {
@@ -303,6 +308,12 @@ editor.onMouseDown((event) => {
     return;
   }
 
+  sessionCapture.track(
+    "gutter_run_click",
+    { lineNumber, runnable: runnable.name, ready: runnable.ready },
+    true,
+  );
+
   if (!runnable.ready) {
     runStatus.textContent = `${runnable.name} is blocked`;
     runStatus.dataset.state = "error";
@@ -312,13 +323,30 @@ editor.onMouseDown((event) => {
   runCurrentProgram(runnable.name);
 });
 
-runButton.addEventListener("click", () => runCurrentProgram());
-clearCacheButton.addEventListener("click", () => clearCache());
-runViewTab.addEventListener("click", () => setActiveTab("run"));
-implementationTab.addEventListener("click", () => setActiveTab("implementation"));
-agentToggle.addEventListener("click", () => setAgentExpanded(!agentExpanded));
+runButton.addEventListener("click", () => {
+  sessionCapture.track("run_button_click", undefined, true);
+  runCurrentProgram();
+});
+clearCacheButton.addEventListener("click", () => {
+  sessionCapture.track("clear_cache_requested", undefined, true);
+  clearCache();
+});
+runViewTab.addEventListener("click", () => {
+  setActiveTab("run");
+  sessionCapture.track("tab_changed", { tab: "run" }, true);
+});
+implementationTab.addEventListener("click", () => {
+  setActiveTab("implementation");
+  sessionCapture.track("tab_changed", { tab: "implementation" }, true);
+});
+agentToggle.addEventListener("click", () => {
+  const expanded = !agentExpanded;
+  setAgentExpanded(expanded);
+  sessionCapture.track("agent_toggle", { expanded }, true);
+});
 agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  sessionCapture.track("agent_submit", { input: agentInput.value }, true);
   runAgentTurn();
 });
 sampleSelect.addEventListener("change", () => {
@@ -336,6 +364,7 @@ sampleSelect.addEventListener("change", () => {
   runStatus.dataset.state = "";
   scheduleCompilation(0);
   setActiveTab("run");
+  sessionCapture.track("sample_changed", { sampleId: sample.id, sampleLabel: sample.label }, true);
 });
 
 renderAgentLog();
@@ -345,12 +374,14 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
   const runnable = requestedRunnable ?? firstRunnable(source);
   if (!runnable) {
+    sessionCapture.track("run_blocked", { reason: "no_runnable" }, true);
     runStatus.textContent = `No runnable · last run ${lastRunLabel}`;
     runStatus.dataset.state = "error";
     outputEl.textContent = "No zero-argument function found.";
     return;
   }
 
+  sessionCapture.track("run_requested", { runnable, source }, true);
   runStatus.textContent = `Running ${runnable} · last run ${lastRunLabel}`;
   runStatus.dataset.state = "";
   outputEl.textContent = "";
@@ -367,6 +398,11 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     runStatus.textContent = `Ran ${runnable} · last run ${lastRunLabel}`;
     runStatus.dataset.state = "ok";
     outputEl.textContent = result.stdout.length > 0 ? result.stdout.join("\n") : "(no output)";
+    sessionCapture.track(
+      "run_completed",
+      { runnable, stdout: result.stdout, implementation: result.implementation },
+      true,
+    );
     return;
   }
 
@@ -374,6 +410,16 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   runStatus.textContent = `Error · last run ${lastRunLabel}`;
   runStatus.dataset.state = "error";
   outputEl.textContent = result.error;
+  sessionCapture.track(
+    "run_failed",
+    {
+      runnable,
+      error: result.error,
+      stdout: result.stdout,
+      implementation: result.implementation,
+    },
+    true,
+  );
 }
 
 async function clearCache(): Promise<void> {
@@ -386,13 +432,34 @@ async function clearCache(): Promise<void> {
     scheduleCompilation(0);
     runStatus.textContent = `Cleared ${cleared} cached snippet${cleared === 1 ? "" : "s"}`;
     runStatus.dataset.state = "ok";
+    sessionCapture.track("clear_cache_completed", { cleared }, true);
   } catch (error) {
     runStatus.textContent = "Cache clear failed";
     runStatus.dataset.state = "error";
     outputEl.textContent = error instanceof Error ? error.message : String(error);
+    sessionCapture.track(
+      "clear_cache_failed",
+      { error: error instanceof Error ? error.message : String(error) },
+      true,
+    );
   } finally {
     clearCacheButton.disabled = false;
   }
+}
+
+function scheduleEditorCapture(): void {
+  if (editorCaptureTimer) {
+    clearTimeout(editorCaptureTimer);
+  }
+
+  editorCaptureTimer = setTimeout(() => {
+    editorCaptureTimer = null;
+    sessionCapture.track(
+      "editor_snapshot",
+      { modelVersionId: editor.getModel()?.getVersionId() ?? null },
+      true,
+    );
+  }, 750);
 }
 
 function scheduleCompilation(delayMs: number): void {
@@ -418,6 +485,7 @@ function scheduleCompilation(delayMs: number): void {
 async function streamImplementation(source: string, version: number): Promise<void> {
   const controller = new AbortController();
   compileController = controller;
+  sessionCapture.track("compile_stream_started", { version, source }, false);
 
   try {
     for await (const event of compileViaDevApi(source, controller.signal)) {
@@ -437,6 +505,7 @@ async function streamImplementation(source: string, version: number): Promise<vo
         updateReadinessDecorations(event.definitions);
       }
     }
+    sessionCapture.track("compile_stream_completed", { version }, true);
   } catch (error) {
     if (controller.signal.aborted || version !== compileVersion) {
       return;
@@ -444,6 +513,11 @@ async function streamImplementation(source: string, version: number): Promise<vo
 
     implementationEl.textContent = source;
     console.error(error);
+    sessionCapture.track(
+      "compile_stream_failed",
+      { version, error: error instanceof Error ? error.message : String(error) },
+      true,
+    );
   } finally {
     if (compileController === controller) {
       compileController = null;
@@ -553,6 +627,11 @@ async function runViaDevApi(
   | { ok: true; stdout: string[]; implementation: string }
   | { ok: false; error: string; stdout: string[]; implementation: string }
 > {
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/run",
+    body: { sheet, runnable },
+  });
   const response = await fetch("/api/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -565,6 +644,13 @@ async function runViaDevApi(
     error?: string;
     implementation?: string;
   };
+
+  sessionCapture.track("api_response", {
+    method: "POST",
+    path: "/api/run",
+    status: response.status,
+    body: payload,
+  });
 
   if (
     !response.ok ||
@@ -627,6 +713,15 @@ async function runAgentTurn(): Promise<void> {
   agentInput.disabled = false;
   agentSend.disabled = false;
   renderAgentLog();
+  sessionCapture.track(
+    "agent_turn_completed",
+    {
+      reply: result.reply,
+      sheet: result.sheet,
+      error: "error" in result,
+    },
+    true,
+  );
   agentInput.focus();
 }
 
@@ -634,6 +729,11 @@ async function askAgent(
   sheet: string,
   messages: AgentChatMessage[],
 ): Promise<{ reply: string; sheet: string | null }> {
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/agent/chat",
+    body: { sheet, messages },
+  });
   const response = await fetch("/api/agent/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -645,6 +745,13 @@ async function askAgent(
     sheet?: string | null;
     error?: string;
   };
+
+  sessionCapture.track("api_response", {
+    method: "POST",
+    path: "/api/agent/chat",
+    status: response.status,
+    body: payload,
+  });
 
   if (!response.ok || typeof payload.reply !== "string") {
     throw new Error(payload.error ?? "Agent request failed");
@@ -692,12 +799,20 @@ function escapeHtml(source: string): string {
 }
 
 async function clearCacheViaDevApi(): Promise<number> {
+  sessionCapture.track("api_request", { method: "DELETE", path: "/api/cache" });
   const response = await fetch("/api/cache", { method: "DELETE" });
   const payload = (await response.json()) as {
     ok?: boolean;
     cleared?: number;
     error?: string;
   };
+
+  sessionCapture.track("api_response", {
+    method: "DELETE",
+    path: "/api/cache",
+    status: response.status,
+    body: payload,
+  });
 
   if (!response.ok || payload.ok !== true || typeof payload.cleared !== "number") {
     throw new Error(payload.error ?? "Clear cache request failed");
@@ -718,11 +833,22 @@ async function* compileViaDevApi(
   sheet: string,
   signal: AbortSignal,
 ): AsyncIterable<CompileWireEvent> {
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/compile",
+    body: { sheet },
+  });
   const response = await fetch("/api/compile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sheet }),
     signal,
+  });
+
+  sessionCapture.track("api_response_started", {
+    method: "POST",
+    path: "/api/compile",
+    status: response.status,
   });
 
   if (!response.ok || !response.body) {
@@ -777,6 +903,59 @@ function setActiveTab(tab: "run" | "implementation"): void {
   implementationTab.setAttribute("aria-selected", String(implementationActive));
   outputEl.classList.toggle("active", runActive);
   implementationEl.classList.toggle("active", implementationActive);
+}
+
+function appSnapshot(): JsonObject {
+  const position = editor.getPosition();
+  return {
+    browser: {
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+      },
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
+      url: window.location.href,
+    },
+    editor: {
+      value: editor.getValue(),
+      modelVersionId: editor.getModel()?.getVersionId() ?? null,
+      cursor:
+        position === null
+          ? null
+          : {
+              lineNumber: position.lineNumber,
+              column: position.column,
+            },
+      scrollTop: editor.getScrollTop(),
+      scrollLeft: editor.getScrollLeft(),
+    },
+    ui: {
+      selectedSampleId: sampleSelect.value,
+      selectedSampleLabel: sampleSelect.selectedOptions[0]?.textContent ?? null,
+      activeTab: outputEl.classList.contains("active") ? "run" : "implementation",
+      lastRunLabel,
+      runStatus: {
+        text: runStatus.textContent ?? "",
+        state: runStatus.dataset.state ?? "",
+      },
+      output: outputEl.textContent ?? "",
+      implementation: implementationEl.textContent ?? "",
+    },
+    agent: {
+      expanded: agentExpanded,
+      input: agentInput.value,
+      inputDisabled: agentInput.disabled,
+      sendDisabled: agentSend.disabled,
+      messages: agentMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      })),
+    },
+  };
 }
 
 function requiredQuery<T extends Element>(selector: string): T {

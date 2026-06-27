@@ -25,6 +25,24 @@ The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
 Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
 memory for the lifetime of the process.
 
+## Session Capture
+
+The browser posts first-party session events to `/api/session-events` while the
+app is open. Events include clicks, form changes, editor snapshots, browser
+errors, page visibility changes, API request/response metadata, run results, and
+agent turns. Important events include an app snapshot with the current editor
+contents, output, implementation view, selected sample, active tab, run status,
+agent messages, viewport, focus state, and URL.
+
+The server appends JSONL records to `SESSION_CAPTURE_DIR/session-events.jsonl`.
+If `SESSION_CAPTURE_DIR` is unset, it writes to `logs/session-events.jsonl`.
+Each line includes `sessionId`, request metadata, receive time, and the captured
+event. The log directory is ignored by git.
+
+This captures browser-visible and application state only. Browsers do not expose
+arbitrary OS or machine state to web apps; for full reproduction, replay against
+the captured app snapshots and API responses for a given `sessionId`.
+
 Fly deployment is configured with `Dockerfile`, `fly.toml`, and
 `.github/workflows/deploy.yml`. Configure the repository with:
 
