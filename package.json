@@ -6,13 +6,16 @@
   "packageManager": "pnpm@11.8.0",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && vite build --config vite.server.config.ts",
+    "start": "node dist-server/server.mjs",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "preview": "vite preview"
   },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.106.0"
+  },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.106.0",
     "@types/node": "^22.10.2",
     "monaco-editor": "^0.55.1",
     "typescript": "^5.7.2",

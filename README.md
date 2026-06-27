@@ -15,6 +15,22 @@ pnpm install
 pnpm dev
 pnpm test
 pnpm build
+pnpm start
 ```
 
-The main evaluator lives in `src/spreadsheet.ts`. The hole detector lives in `src/holes.ts`.
+`pnpm dev` runs the Vite development server. `pnpm build && pnpm start`
+builds and serves the deployable app with a production Node server.
+
+The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
+Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
+memory for the lifetime of the process.
+
+Fly deployment is configured with `Dockerfile`, `fly.toml`, and
+`.github/workflows/deploy.yml`. Configure the repository with:
+
+- `FLY_API_TOKEN` repository secret
+- `FLY_APP_NAME` repository variable
+- `ANTHROPIC_API_KEY` Fly secret
+
+The main code sheet compiler lives in `src/codeSheet.ts`. The runtime API lives
+in `src/codeSheetRunner.ts` and `src/server.ts`.

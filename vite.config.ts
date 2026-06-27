@@ -1,8 +1,8 @@
 import { defineConfig } from "vite";
-import Anthropic from "@anthropic-ai/sdk";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { runCodeSheet } from "./src/codeSheetRunner";
 import type { CodeCache } from "./src/codeSheet";
+import { completeWithAnthropic } from "./src/anthropicComplete";
 
 export default defineConfig({
   plugins: [anthropicCompletionPlugin()],
@@ -14,7 +14,7 @@ export default defineConfig({
 
 function anthropicCompletionPlugin() {
   const codeCache: CodeCache = new Map();
-  const complete = (prompt: string) => completeWithAnthropic(prompt);
+  const complete = completeWithAnthropic;
 
   return {
     name: "anthropic-completion-api",
@@ -82,26 +82,6 @@ function anthropicCompletionPlugin() {
       });
     },
   };
-}
-
-async function completeWithAnthropic(prompt: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("ANTHROPIC_API_KEY is not configured");
-  }
-
-  const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
-    model: process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-4-6",
-    max_tokens: 4096,
-    temperature: 0,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  return message.content
-    .map((block) => (block.type === "text" ? block.text : ""))
-    .join("")
-    .trim();
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
