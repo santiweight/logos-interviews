@@ -173,6 +173,8 @@ app.innerHTML = `
         </div>
       </aside>
 
+      <div id="agent-code-resize-handle" class="agent-code-resize-handle" aria-hidden="true"></div>
+
       <section id="code-pane" class="code-pane" aria-label="Code editor panel">
         <div class="source-tabs-bar">
           <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
@@ -218,7 +220,7 @@ app.innerHTML = `
           <span id="run-status" class="status"></span>
         </div>
         <div id="tool-panels" class="tool-panels">
-          <pre id="run-placeholder" class="output tab-panel active" aria-live="polite">Run output will appear here.</pre>
+          <pre id="run-placeholder" class="output run-placeholder tab-panel active" aria-live="polite">Runs will appear here.</pre>
         </div>
       </section>
     </section>
@@ -227,10 +229,12 @@ app.innerHTML = `
 
 const shell = requiredQuery<HTMLElement>("#shell");
 const agentSidebar = requiredQuery<HTMLElement>("#agent-sidebar");
+const agentCodeResizeHandle = requiredQuery<HTMLDivElement>("#agent-code-resize-handle");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const codePane = requiredQuery<HTMLElement>("#code-pane");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
 const codeRunResizeHandle = requiredQuery<HTMLDivElement>("#code-run-resize-handle");
+const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
@@ -473,6 +477,9 @@ agentForm.addEventListener("submit", (event) => {
 codeRunResizeHandle.addEventListener("pointerdown", (event) => {
   beginCodeRunResize(event);
 });
+agentCodeResizeHandle.addEventListener("pointerdown", (event) => {
+  beginAgentCodeResize(event);
+});
 codeRunResizeHandle.addEventListener("keydown", (event) => {
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
     return;
@@ -539,8 +546,17 @@ function openProject(sampleId: string): void {
 
 renderSourceTabs();
 renderAgentLog();
+updateShellResizeHandles();
 scheduleCompilation(0);
 void hydrateSourceTabsFromDatabase();
+
+const shellResizeObserver = new ResizeObserver(() => {
+  updateShellResizeHandles();
+});
+shellResizeObserver.observe(shell);
+shellResizeObserver.observe(agentSidebar);
+shellResizeObserver.observe(codePane);
+shellResizeObserver.observe(outputPane);
 
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
@@ -1590,6 +1606,10 @@ function truncateLabel(label: string): string {
 }
 
 function beginCodeRunResize(event: PointerEvent): void {
+  if (window.matchMedia("(max-width: 1080px)").matches) {
+    return;
+  }
+
   event.preventDefault();
   codeRunResizeHandle.setPointerCapture(event.pointerId);
   shell.classList.add("resizing-code-run");
@@ -1599,12 +1619,14 @@ function beginCodeRunResize(event: PointerEvent): void {
 
   const onPointerMove = (moveEvent: PointerEvent): void => {
     setCodePaneWidth(startWidth + moveEvent.clientX - startX);
+    requestAnimationFrame(updateShellResizeHandles);
   };
   const onPointerUp = (): void => {
     shell.classList.remove("resizing-code-run");
     codeRunResizeHandle.removeEventListener("pointermove", onPointerMove);
     codeRunResizeHandle.removeEventListener("pointerup", onPointerUp);
     codeRunResizeHandle.removeEventListener("pointercancel", onPointerUp);
+    requestAnimationFrame(updateShellResizeHandles);
   };
 
   codeRunResizeHandle.addEventListener("pointermove", onPointerMove);
@@ -1615,16 +1637,79 @@ function beginCodeRunResize(event: PointerEvent): void {
 function setCodePaneWidth(width: number): void {
   const shellRect = shell.getBoundingClientRect();
   const codeRect = codePane.getBoundingClientRect();
-  const minCodeWidth = 360;
-  const minOutputWidth = 300;
-  const dividerAndGapWidth = 18;
+  const minCodeWidth = agentExpanded ? 420 : 500;
+  const minOutputWidth = 340;
   const maxCodeWidth = Math.max(
     minCodeWidth,
-    shellRect.right - codeRect.left - minOutputWidth - dividerAndGapWidth,
+    shellRect.right - codeRect.left - minOutputWidth,
   );
   const nextWidth = Math.min(maxCodeWidth, Math.max(minCodeWidth, width));
-  shell.style.setProperty("--code-pane-width", `${Math.round(nextWidth)}px`);
+  setCodePaneBasis(nextWidth);
   editor.layout();
+}
+
+function beginAgentCodeResize(event: PointerEvent): void {
+  if (window.matchMedia("(max-width: 1080px)").matches || !agentExpanded) {
+    return;
+  }
+
+  event.preventDefault();
+  agentCodeResizeHandle.setPointerCapture(event.pointerId);
+  shell.classList.add("resizing-code-run");
+
+  const startX = event.clientX;
+  const startAgentWidth = agentSidebar.getBoundingClientRect().width;
+  const startCodeWidth = codePane.getBoundingClientRect().width;
+  const minAgentWidth = 188;
+  const maxAgentWidth = 460;
+  const minCodeWidth = 420;
+
+  const onPointerMove = (moveEvent: PointerEvent): void => {
+    const delta = moveEvent.clientX - startX;
+    const minDelta = minAgentWidth - startAgentWidth;
+    const maxDelta = Math.min(
+      maxAgentWidth - startAgentWidth,
+      startCodeWidth - minCodeWidth,
+    );
+    const nextDelta = clamp(delta, minDelta, maxDelta);
+    shell.style.setProperty("--agent-pane-width", `${Math.round(startAgentWidth + nextDelta)}px`);
+    setCodePaneBasis(startCodeWidth - nextDelta);
+    editor.layout();
+    requestAnimationFrame(updateShellResizeHandles);
+  };
+  const onPointerUp = (): void => {
+    shell.classList.remove("resizing-code-run");
+    agentCodeResizeHandle.removeEventListener("pointermove", onPointerMove);
+    agentCodeResizeHandle.removeEventListener("pointerup", onPointerUp);
+    agentCodeResizeHandle.removeEventListener("pointercancel", onPointerUp);
+    requestAnimationFrame(updateShellResizeHandles);
+  };
+
+  agentCodeResizeHandle.addEventListener("pointermove", onPointerMove);
+  agentCodeResizeHandle.addEventListener("pointerup", onPointerUp);
+  agentCodeResizeHandle.addEventListener("pointercancel", onPointerUp);
+}
+
+function updateShellResizeHandles(): void {
+  const shellRect = shell.getBoundingClientRect();
+  const codeRect = codePane.getBoundingClientRect();
+  const outputRect = outputPane.getBoundingClientRect();
+
+  agentCodeResizeHandle.style.left = `${Math.round(codeRect.left - shellRect.left)}px`;
+  codeRunResizeHandle.style.left = `${Math.round(outputRect.left - shellRect.left)}px`;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (max < min) {
+    return min;
+  }
+
+  return Math.min(max, Math.max(min, value));
+}
+
+function setCodePaneBasis(width: number): void {
+  shell.style.setProperty("--code-pane-basis", `${Math.round(width)}px`);
+  shell.style.setProperty("--code-pane-grow", "0");
 }
 
 function beginSnippetPanelResize(event: PointerEvent): void {
@@ -2378,6 +2463,7 @@ function setAgentExpanded(expanded: boolean): void {
   agentToggle.setAttribute("aria-expanded", String(expanded));
   agentToggle.setAttribute("aria-label", expanded ? "Close edit panel" : "Open edit panel");
   agentToggle.innerHTML = expanded ? logosWordmark : lambdaMark;
+  requestAnimationFrame(updateShellResizeHandles);
 }
 
 function escapeHtml(source: string): string {
