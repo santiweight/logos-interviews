@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import type { CodeCache, CompleteFunction } from "./codeSheet";
+import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 
 const runSessionSheet = `def add(x: int, y: int) -> int
@@ -16,6 +17,28 @@ def test_basic():
   product = \`mul 3 and 4\`
   print(added)
   print(product)`;
+
+const exactRunSessionSheet = `# In Logos, LLMs will complete partial code for you.
+# Click \`add\` in the code view to see its implementation.
+def add(x: int, y: int) -> int
+
+def mul(x: int, y: int) -> int
+
+# Click the run button to run this class (once it's been compiled).
+# Click \`test\` in the code view to see its implementation.
+def test_basic():
+  # In Logos, you can use regular python...
+  print("(1 + 2) * 3 == ", mul(add(1, 2), 3))
+
+  # Or use a snippet to have the LLM write it for you...
+  \`print mul of (add one and two) and 3\`
+  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+
+  added = \`add 1 and 2\`
+  product = \`mul 3 and 4\`
+  print(added)
+  print(product)
+`;
 
 describe("interactive run API", () => {
   const servers: Array<ReturnType<typeof createServer>> = [];
@@ -88,6 +111,73 @@ describe("interactive run API", () => {
       },
     ]);
   });
+
+  it("starts repeated runs after compile warmed the shared cache", async () => {
+    const cache: CodeCache = new Map();
+    const baseUrl = await listen(servers, cache, completeRunSessionSheet);
+    const compileEvents = await compileViaApi(baseUrl, exactRunSessionSheet);
+
+    expect(compileEvents.at(-1)).toMatchObject({ kind: "compiled" });
+    expect(
+      compileEvents
+        .filter((event) => event.kind === "readiness")
+        .at(-1),
+    ).toMatchObject({
+      definitions: [
+        expect.objectContaining({ name: "add", ready: true }),
+        expect.objectContaining({ name: "mul", ready: true }),
+        expect.objectContaining({ name: "test_basic", ready: true }),
+      ],
+    });
+
+    const started = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+          sheet: exactRunSessionSheet,
+          runnable: "test_basic",
+        })),
+    );
+    const completed = await Promise.all(
+      started.map((run) => pollUntilExited(baseUrl, run.sessionId, run.chunks)),
+    );
+    const repolled = await Promise.all(
+      started.map((run) =>
+        postJson<RunPollResponse>(baseUrl, "/api/run/poll", {
+          sessionId: run.sessionId,
+        })),
+    );
+
+    expect(completed.map((run) => ({
+      ok: run.ok,
+      status: run.status,
+      output: run.output.trimEnd().split("\n"),
+    }))).toEqual([
+      {
+        ok: true,
+        status: { state: "exited", code: 0, signal: null },
+        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+      },
+      {
+        ok: true,
+        status: { state: "exited", code: 0, signal: null },
+        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+      },
+      {
+        ok: true,
+        status: { state: "exited", code: 0, signal: null },
+        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+      },
+    ]);
+    expect(repolled.map((run) => ({
+      ok: run.ok,
+      chunks: run.chunks,
+      status: run.status,
+    }))).toEqual([
+      { ok: true, chunks: [], status: { state: "exited", code: 0, signal: null } },
+      { ok: true, chunks: [], status: { state: "exited", code: 0, signal: null } },
+      { ok: true, chunks: [], status: { state: "exited", code: 0, signal: null } },
+    ]);
+  });
 });
 
 type RunChunk = {
@@ -130,6 +220,11 @@ async function listen(
 
     if (req.url === "/api/run/poll") {
       await api.handlePoll(req, res);
+      return;
+    }
+
+    if (req.url === "/api/compile") {
+      await handleCompileStream(req, res, cache, complete);
       return;
     }
 
@@ -197,6 +292,24 @@ async function postJson<T>(
   return payload as T;
 }
 
+async function compileViaApi(baseUrl: string, sheet: string): Promise<Array<Record<string, unknown>>> {
+  const response = await fetch(`${baseUrl}/api/compile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet }),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(text);
+  }
+
+  return text
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 function completeRunSessionSheet(prompt: string): string {
   const implementationTarget =
     prompt
@@ -215,31 +328,33 @@ function completeRunSessionSheet(prompt: string): string {
     }
   }
 
-  if (prompt.includes("print mul of (add one and two) and 3")) {
-    return "print(9)";
-  }
-
-  if (prompt.includes("the number one")) {
-    return "1";
-  }
-
-  if (prompt.includes("the number two")) {
-    return "2";
-  }
-
-  if (prompt.includes("the number three")) {
-    return "3";
-  }
-
-  if (prompt.includes("add 1 and 2")) {
-    return "3";
-  }
-
-  if (prompt.includes("mul 3 and 4")) {
-    return "12";
+  switch (naturalFragment(prompt)) {
+    case "`print mul of (add one and two) and 3`":
+      return "print(9)";
+    case "`add`":
+      return "add";
+    case "`test`":
+      return "test";
+    case "`the number one`":
+      return "1";
+    case "`the number two`":
+      return "2";
+    case "`the number three`":
+      return "3";
+    case "`add 1 and 2`":
+      return "3";
+    case "`mul 3 and 4`":
+      return "12";
   }
 
   throw new Error(`unexpected prompt: ${prompt}`);
+}
+
+function naturalFragment(prompt: string): string | null {
+  const [, rest] = prompt.split(
+    "Your job is to replace this natural-language Python fragment with valid Python code:\n\n",
+  );
+  return rest?.split("\n\nReturn only")[0]?.trim() ?? null;
 }
 
 function sendJson(
