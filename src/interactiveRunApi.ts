@@ -128,12 +128,9 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       return;
     }
 
-    const [id, record] = entry;
+    const [, record] = entry;
     const chunks = record.session.drainOutput();
     const status = record.session.status();
-    if (status.state === "exited") {
-      sessions.delete(id);
-    }
 
     sendJson(res, 200, {
       ok: true,

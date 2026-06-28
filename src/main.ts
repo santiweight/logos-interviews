@@ -563,7 +563,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
 
   if (result.status.state === "running") {
     scheduleRunPoll(currentTab.id, 80);
-    focusRunInput(currentTab.id);
     return;
   }
 
@@ -1695,7 +1694,6 @@ async function sendTerminalInput(runTabId: string): Promise<void> {
 
   try {
     await sendInteractiveRunInputViaDevApi(tab.sessionId, input);
-    focusRunInput(tab.id);
   } catch (error) {
     appendTerminalChunks(tab, [{
       stream: "stderr",
@@ -1859,14 +1857,6 @@ function closeAllRunTabs(): void {
   runTabs = [];
   activeToolTabId = "implementation";
   renderRunTabs();
-}
-
-function focusRunInput(runTabId: string): void {
-  if (activeToolTabId !== runTabId) {
-    return;
-  }
-
-  document.querySelector<HTMLInputElement>(`[data-run-input-id="${cssEscape(runTabId)}"]`)?.focus();
 }
 
 function runTabById(runTabId: string): RunTab | undefined {
@@ -2267,9 +2257,6 @@ function setActiveTab(tab: ToolTabId): void {
   implementationEl.classList.toggle("active", implementationActive);
   outputPane.classList.toggle("snippet-open", implementationActive);
   renderRunTabs();
-  if (activeToolTabId !== "implementation") {
-    focusRunInput(activeToolTabId);
-  }
 }
 
 function appSnapshot(): JsonObject {
