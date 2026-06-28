@@ -50,7 +50,7 @@ export type CompletionState =
 export type CompilationEvent =
   | { kind: "parsed"; parsed: ParsedSheet }
   | { kind: "readiness"; definitions: DefinitionReadiness[] }
-  | { kind: "cache-hit"; hash: SnippetHash; snippet: string }
+  | { kind: "cache-hit"; hash: SnippetHash; snippet: string; implementation: string }
   | { kind: "llm-start"; hash: SnippetHash; snippet: string }
   | { kind: "llm-token"; hash: SnippetHash; token: string }
   | { kind: "llm-complete"; hash: SnippetHash; implementation: string }
@@ -307,7 +307,7 @@ export async function* compile(
       node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
       completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
       completedSnippets += 1;
-      yield { kind: "cache-hit", hash, snippet };
+      yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
       yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
       yield {
         kind: "implementation",

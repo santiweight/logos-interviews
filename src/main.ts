@@ -4,10 +4,13 @@ import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
 import {
   definitionReadiness,
+  hashCompletionInput,
   parse,
   runnables,
   type DefinitionReadiness,
+  type IncompleteSnippet,
   type Runnable,
+  type SnippetHash,
 } from "./codeSheet";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import type { AgentChatMessage } from "./sheetAgent";
@@ -420,7 +423,7 @@ app.innerHTML = `
         <div id="editor" class="editor" aria-label="Code editor"></div>
       </section>
 
-      <section class="output-pane" aria-label="Program output panel">
+      <section id="output-pane" class="output-pane" aria-label="Program output panel">
         <div class="tool-tabs">
           <div class="tabs" role="tablist" aria-label="Run output views">
             <button id="run-view-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="run-view-panel">
@@ -440,6 +443,24 @@ app.innerHTML = `
           </footer>
         </div>
         <pre id="implementation" class="output tab-panel" role="tabpanel" aria-labelledby="implementation-tab"></pre>
+        <section id="snippet-panel" class="snippet-panel" aria-label="Selected incomplete implementation">
+          <div
+            id="snippet-resize-handle"
+            class="snippet-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize incomplete implementation panel"
+            tabindex="0"
+          ></div>
+          <header class="snippet-panel-header">
+            <div class="snippet-panel-title">
+              <p class="eyebrow">Incomplete Snippet</p>
+              <h2 id="snippet-title">No snippet selected</h2>
+            </div>
+            <span id="snippet-status" class="snippet-status">Idle</span>
+          </header>
+          <pre id="snippet-preview" class="output snippet-preview">Click an incomplete definition in the worksheet.</pre>
+        </section>
       </section>
     </section>
   </section>
@@ -448,9 +469,15 @@ app.innerHTML = `
 const shell = requiredQuery<HTMLElement>("#shell");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
+const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const runViewPanel = requiredQuery<HTMLDivElement>("#run-view-panel");
 const outputEl = requiredQuery<HTMLPreElement>("#output");
 const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
+const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
+const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
+const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
+const snippetStatus = requiredQuery<HTMLSpanElement>("#snippet-status");
+const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
 const runStaleFooter = requiredQuery<HTMLElement>("#run-stale-footer");
 const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
@@ -476,12 +503,34 @@ let compileVersion = 0;
 let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
+let incompleteSnippetDecorations: string[] = [];
 let runnableStateByLine = new Map<number, RunnableState>();
+let incompleteSnippetsByLine = new Map<number, IncompleteSnippetTarget[]>();
+let incompleteSnippetByHash = new Map<SnippetHash, IncompleteSnippetTarget>();
+let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
+let selectedSnippetHash: SnippetHash | null = null;
 
 type RunnableState = {
   name: Runnable;
   ready: boolean;
   blockingDependencies: string[];
+};
+
+type IncompleteSnippetTarget = {
+  hash: SnippetHash;
+  line: number;
+  startColumn: number;
+  endColumn: number;
+  kind: IncompleteSnippet["kind"];
+  snippet: string;
+  label: string;
+};
+
+type SnippetPreviewState = {
+  snippet: string;
+  streamed: string;
+  implementation: string | null;
+  status: "stub" | "generating" | "cached" | "complete";
 };
 
 monaco.editor.defineTheme("interview-light", {
@@ -532,11 +581,21 @@ editor.onDidChangeModelContent(() => {
 });
 
 editor.onMouseDown((event) => {
+  const lineNumber = event.target.position?.lineNumber;
+
+  if (lineNumber !== undefined && event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+    const column = event.target.position?.column ?? 1;
+    const incompleteSnippet = incompleteSnippetForPosition(lineNumber, column);
+    if (incompleteSnippet) {
+      selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
+      return;
+    }
+  }
+
   if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
     return;
   }
 
-  const lineNumber = event.target.position?.lineNumber;
   if (lineNumber === undefined) {
     return;
   }
@@ -583,6 +642,18 @@ agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
   sessionCapture.track("agent_submit", { input: agentInput.value }, true);
   runAgentTurn();
+});
+snippetResizeHandle.addEventListener("pointerdown", (event) => {
+  beginSnippetPanelResize(event);
+});
+snippetResizeHandle.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+    return;
+  }
+
+  event.preventDefault();
+  const currentHeight = snippetPanel.getBoundingClientRect().height;
+  setSnippetPanelHeight(currentHeight + (event.key === "ArrowUp" ? 24 : -24));
 });
 sampleMenuItems.forEach((item) => {
   item.addEventListener("click", () => {
@@ -728,7 +799,8 @@ function scheduleCompilation(delayMs: number): void {
 
   compileController?.abort();
   compileController = null;
-  implementationEl.textContent = source;
+  setHighlightedPythonCode(implementationEl, source);
+  refreshIncompleteSnippets(source);
   updateReadinessDecorations(localReadiness(source));
   updateRunStaleness(source);
   updateEditorAvailability();
@@ -1030,8 +1102,10 @@ async function streamImplementation(source: string, version: number): Promise<vo
         (event.kind === "implementation" || event.kind === "compiled") &&
         typeof event.implementation === "string"
       ) {
-        implementationEl.textContent = event.implementation;
+        setHighlightedPythonCode(implementationEl, event.implementation);
       }
+
+      updateSnippetPreviewFromCompileEvent(event);
 
       if (event.kind === "readiness" && Array.isArray(event.definitions)) {
         updateReadinessDecorations(event.definitions);
@@ -1043,7 +1117,7 @@ async function streamImplementation(source: string, version: number): Promise<vo
       return;
     }
 
-    implementationEl.textContent = source;
+    setHighlightedPythonCode(implementationEl, source);
     console.error(error);
     sessionCapture.track(
       "compile_stream_failed",
@@ -1126,6 +1200,276 @@ function updateRunStaleness(source = editor.getValue()): void {
     runStatus.textContent = lastRunStatusText;
     runStatus.dataset.state = lastRunStatusText.startsWith("Error") ? "error" : "ok";
   }
+}
+
+function refreshIncompleteSnippets(source: string): void {
+  let targets: IncompleteSnippetTarget[] = [];
+
+  try {
+    const parsed = parse(source);
+    targets = parsed.incompleteSnippets.map((snippet) => ({
+      hash: hashCompletionInput(parsed, snippet.snippet),
+      line: snippet.line,
+      startColumn: snippet.column ?? 1,
+      endColumn: snippet.column === undefined
+        ? Number.MAX_SAFE_INTEGER
+        : snippet.column + firstLineLength(snippet.snippet),
+      kind: snippet.kind,
+      snippet: snippet.snippet,
+      label: incompleteSnippetLabel(snippet),
+    }));
+  } catch {
+    targets = [];
+  }
+
+  const nextPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
+  for (const target of targets) {
+    const existing = snippetPreviewByHash.get(target.hash);
+    nextPreviewByHash.set(target.hash, {
+      snippet: target.snippet,
+      streamed: existing?.streamed ?? "",
+      implementation: existing?.implementation ?? null,
+      status: existing?.status ?? "stub",
+    });
+  }
+
+  incompleteSnippetsByLine = targets.reduce((byLine, target) => {
+    const existing = byLine.get(target.line) ?? [];
+    byLine.set(target.line, [...existing, target]);
+    return byLine;
+  }, new Map<number, IncompleteSnippetTarget[]>());
+  incompleteSnippetByHash = new Map(targets.map((target) => [target.hash, target]));
+  snippetPreviewByHash = nextPreviewByHash;
+
+  if (selectedSnippetHash === null || !incompleteSnippetByHash.has(selectedSnippetHash)) {
+    selectedSnippetHash = targets[0]?.hash ?? null;
+  }
+
+  updateIncompleteSnippetDecorations();
+  renderSnippetPanel();
+}
+
+function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "auto"): void {
+  if (!incompleteSnippetByHash.has(hash)) {
+    return;
+  }
+
+  selectedSnippetHash = hash;
+  updateIncompleteSnippetDecorations();
+  renderSnippetPanel();
+  sessionCapture.track("incomplete_snippet_selected", {
+    hash,
+    source,
+    label: incompleteSnippetByHash.get(hash)?.label ?? null,
+  }, true);
+}
+
+function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
+  if (typeof event.hash !== "string") {
+    return;
+  }
+
+  const current = snippetPreviewByHash.get(event.hash);
+  if (!current) {
+    return;
+  }
+
+  if (event.kind === "llm-start") {
+    snippetPreviewByHash.set(event.hash, {
+      ...current,
+      streamed: "",
+      implementation: null,
+      status: "generating",
+    });
+    renderSnippetPanel();
+    return;
+  }
+
+  if (event.kind === "llm-token" && typeof event.token === "string") {
+    snippetPreviewByHash.set(event.hash, {
+      ...current,
+      streamed: current.streamed + event.token,
+      status: "generating",
+    });
+    renderSnippetPanel();
+    return;
+  }
+
+  if (
+    (event.kind === "llm-complete" || event.kind === "cache-hit") &&
+    typeof event.implementation === "string"
+  ) {
+    snippetPreviewByHash.set(event.hash, {
+      ...current,
+      streamed: "",
+      implementation: event.implementation,
+      status: event.kind === "cache-hit" ? "cached" : "complete",
+    });
+    renderSnippetPanel();
+  }
+}
+
+function updateIncompleteSnippetDecorations(): void {
+  const decorations = Array.from(incompleteSnippetByHash.values()).map((target) => ({
+    range: new monaco.Range(
+      target.line,
+      target.startColumn,
+      target.line,
+      target.endColumn,
+    ),
+    options: {
+      isWholeLine: target.kind !== "natural",
+      className: target.kind === "natural"
+        ? undefined
+        : target.hash === selectedSnippetHash
+          ? "incomplete-snippet-line incomplete-snippet-line-selected"
+          : "incomplete-snippet-line",
+      inlineClassName: target.kind !== "natural"
+        ? undefined
+        : target.hash === selectedSnippetHash
+          ? "natural-snippet-inline natural-snippet-inline-selected"
+          : "natural-snippet-inline",
+      hoverMessage: {
+        value: `Show generated implementation for ${target.label}.`,
+      },
+    },
+  }));
+
+  incompleteSnippetDecorations = editor.deltaDecorations(
+    incompleteSnippetDecorations,
+    decorations,
+  );
+}
+
+function renderSnippetPanel(): void {
+  const target = selectedSnippetHash === null
+    ? null
+    : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
+
+  if (!target) {
+    snippetTitle.textContent = "No snippet selected";
+    snippetStatus.textContent = "Idle";
+    snippetStatus.dataset.state = "";
+    snippetPreview.textContent = "Click an incomplete definition in the worksheet.";
+    return;
+  }
+
+  const preview = snippetPreviewByHash.get(target.hash);
+  const status = preview?.status ?? "stub";
+  const text =
+    preview?.implementation ??
+    (preview?.streamed.length ? preview.streamed : null) ??
+    preview?.snippet ??
+    target.snippet;
+
+  snippetTitle.textContent = target.label;
+  snippetStatus.textContent = snippetStatusLabel(status);
+  snippetStatus.dataset.state = status;
+  setHighlightedPythonCode(snippetPreview, text);
+}
+
+function setHighlightedPythonCode(element: HTMLPreElement, source: string): void {
+  const version = Number(element.dataset.highlightVersion ?? "0") + 1;
+  element.dataset.highlightVersion = String(version);
+  element.textContent = source;
+  const colorized = document.createElement("pre");
+  colorized.textContent = source;
+
+  void monaco.editor.colorizeElement(colorized, {
+    mimeType: "text/x-python",
+    tabSize: 2,
+    theme: "vs-dark",
+  }).then(() => {
+    if (element.dataset.highlightVersion === String(version)) {
+      element.innerHTML = colorized.innerHTML;
+    }
+  }).catch(() => {
+    if (element.dataset.highlightVersion === String(version)) {
+      element.textContent = source;
+    }
+  });
+}
+
+function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
+  const firstLine = snippet.snippet.trim().split("\n")[0] ?? "";
+  if (snippet.kind === "natural") {
+    const inner = firstLine.replace(/^`|`$/g, "").trim();
+    return inner.length > 0 ? truncateLabel(inner) : "backtick snippet";
+  }
+
+  const functionMatch = firstLine.match(/^(?:async\s+)?(?:def|fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  if (functionMatch) {
+    return functionMatch[1];
+  }
+
+  const classMatch = firstLine.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  if (classMatch) {
+    return classMatch[1];
+  }
+
+  return snippet.kind === "class" ? "class snippet" : "function snippet";
+}
+
+function incompleteSnippetForPosition(
+  lineNumber: number,
+  column: number,
+): IncompleteSnippetTarget | null {
+  const snippets = incompleteSnippetsByLine.get(lineNumber) ?? [];
+  const exact = snippets.find((snippet) => {
+    return column >= snippet.startColumn && column <= snippet.endColumn;
+  });
+
+  return exact ?? snippets[0] ?? null;
+}
+
+function firstLineLength(source: string): number {
+  return source.split("\n")[0]?.length ?? source.length;
+}
+
+function truncateLabel(label: string): string {
+  return label.length <= 44 ? label : `${label.slice(0, 41)}...`;
+}
+
+function snippetStatusLabel(status: SnippetPreviewState["status"]): string {
+  switch (status) {
+    case "generating":
+      return "Generating";
+    case "cached":
+      return "Cached";
+    case "complete":
+      return "Complete";
+    case "stub":
+      return "Stub";
+  }
+}
+
+function beginSnippetPanelResize(event: PointerEvent): void {
+  event.preventDefault();
+  snippetResizeHandle.setPointerCapture(event.pointerId);
+
+  const startY = event.clientY;
+  const startHeight = snippetPanel.getBoundingClientRect().height;
+
+  const onPointerMove = (moveEvent: PointerEvent): void => {
+    setSnippetPanelHeight(startHeight + startY - moveEvent.clientY);
+  };
+  const onPointerUp = (): void => {
+    snippetResizeHandle.removeEventListener("pointermove", onPointerMove);
+    snippetResizeHandle.removeEventListener("pointerup", onPointerUp);
+    snippetResizeHandle.removeEventListener("pointercancel", onPointerUp);
+  };
+
+  snippetResizeHandle.addEventListener("pointermove", onPointerMove);
+  snippetResizeHandle.addEventListener("pointerup", onPointerUp);
+  snippetResizeHandle.addEventListener("pointercancel", onPointerUp);
+}
+
+function setSnippetPanelHeight(height: number): void {
+  const outputHeight = outputPane.getBoundingClientRect().height;
+  const minHeight = 132;
+  const maxHeight = Math.max(minHeight, Math.floor(outputHeight * 0.72));
+  const nextHeight = Math.min(maxHeight, Math.max(minHeight, height));
+  snippetPanel.style.flexBasis = `${nextHeight}px`;
 }
 
 function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
@@ -1419,6 +1763,9 @@ async function clearCacheViaDevApi(): Promise<number> {
 type CompileWireEvent =
   | {
       kind: string;
+      hash?: string;
+      snippet?: string;
+      token?: string;
       implementation?: string;
       error?: string;
       definitions?: DefinitionReadiness[];
@@ -1541,6 +1888,14 @@ function appSnapshot(): JsonObject {
       runStale: !runStaleFooter.hidden,
       output: outputEl.textContent ?? "",
       implementation: implementationEl.textContent ?? "",
+      selectedSnippet: selectedSnippetHash === null
+        ? null
+        : {
+            hash: selectedSnippetHash,
+            label: incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
+            preview: snippetPreview.textContent ?? "",
+            status: snippetStatus.textContent ?? "",
+          },
     },
     agent: {
       expanded: agentExpanded,
