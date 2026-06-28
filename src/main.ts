@@ -155,81 +155,130 @@ def test():
 const seedCode = samples[0].code;
 
 const app = requiredQuery<HTMLDivElement>("#app");
+const logosMark = `
+  <svg class="logos-mark" viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M6.5 26.5 Q9.2 10.8 14.4 5.4 Q15.8 4.1 17.1 5.4 L22.4 16 L27.7 5.4" />
+  </svg>
+`;
+const assistantMark = `
+  <svg class="assistant-mark" viewBox="0 0 32 32" aria-hidden="true">
+    <path d="M16 3.8l2.9 8.5 8.9 3.7-8.9 3.7L16 28.2l-2.9-8.5L4.2 16l8.9-3.7z" />
+  </svg>
+`;
+const sendIcon = `
+  <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M10 3.4 5.4 8l1.1 1.1 2.7-2.7v10.2h1.6V6.4l2.7 2.7L14.6 8z" />
+  </svg>
+`;
+const menuIcon = `
+  <svg class="menu-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M4 6.25h12M4 10h12M4 13.75h12" />
+  </svg>
+`;
 
 app.innerHTML = `
-  <section id="shell" class="shell agent-collapsed">
-    <aside id="agent-sidebar" class="agent-sidebar">
-      <button id="agent-toggle" class="agent-toggle-button" type="button" aria-expanded="false" aria-controls="agent-content">
-        Agent
-      </button>
-      <div id="agent-content" class="agent-content">
-        <header class="agent-header">
+  <section class="app-frame" aria-label="Spreadsheet interview workspace">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="brand-mark" href="/" aria-label="Logos">
+          ${logosMark}
+        </a>
+        <details id="project-menu" class="project-menu">
+          <summary class="menu-trigger" aria-label="Open project menu">
+            ${menuIcon}
+          </summary>
+          <div class="menu-popover" role="menu">
+            <div class="menu-section">
+              <div class="menu-section-title">Samples</div>
+              <div class="sample-menu-list">
+                ${samples
+                  .map(
+                    (sample) =>
+                      `<button class="menu-item sample-menu-item" type="button" role="menuitem" data-sample-id="${sample.id}">${sample.label}</button>`,
+                  )
+                  .join("")}
+              </div>
+            </div>
+            <div class="menu-separator" aria-hidden="true"></div>
+            <button id="clear-cache-button" class="menu-item" type="button" role="menuitem">
+              Clear coding cache
+            </button>
+          </div>
+        </details>
+      </div>
+      <div class="workspace-title" aria-hidden="true"></div>
+    </header>
+
+    <section id="shell" class="shell agent-collapsed">
+      <aside id="agent-sidebar" class="agent-sidebar">
+        <button id="agent-toggle" class="agent-toggle-button" type="button" aria-label="Open assistant" aria-expanded="false" aria-controls="agent-content">
+          ${assistantMark}
+          <span class="toggle-chevron" aria-hidden="true">›</span>
+        </button>
+        <div id="agent-content" class="agent-content">
+          <header class="agent-header">
+            <div>
+              <p class="eyebrow">Sheet Agent</p>
+              <h2>Assistant</h2>
+            </div>
+          </header>
+          <div id="agent-log" class="agent-log" aria-live="polite"></div>
+          <form id="agent-form" class="agent-form">
+            <textarea id="agent-input" class="agent-input" rows="3" placeholder="Ask the agent to change or explain this sheet"></textarea>
+            <button id="agent-send" class="send-button" type="submit" aria-label="Send message" title="Send">
+              ${sendIcon}
+            </button>
+          </form>
+        </div>
+      </aside>
+
+      <section class="code-pane" aria-label="Code editor panel">
+        <header class="panel-header code-header">
           <div>
-            <p class="eyebrow">Sheet Agent</p>
-            <h2>Assistant</h2>
+            <p class="eyebrow">Source</p>
+            <h2>Editor</h2>
           </div>
         </header>
-        <div id="agent-log" class="agent-log" aria-live="polite"></div>
-        <form id="agent-form" class="agent-form">
-          <textarea id="agent-input" class="agent-input" rows="3" placeholder="Ask the agent to change or explain this sheet"></textarea>
-          <button id="agent-send" class="run-button" type="submit">Send</button>
-        </form>
-      </div>
-    </aside>
+        <div id="editor" class="editor" aria-label="Code editor"></div>
+      </section>
 
-    <aside class="code-pane">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">Interview Tool</p>
-          <h1>Python Exercise</h1>
+      <section class="output-pane" aria-label="Program output panel">
+        <div class="tool-tabs">
+          <div class="tabs" role="tablist" aria-label="Run output views">
+            <button id="run-view-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="run-view-panel">
+              Run View
+            </button>
+            <button id="implementation-tab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="implementation">
+              Implementation
+            </button>
+          </div>
+          <span id="run-status" class="status">Not run</span>
         </div>
-        <div class="toolbar-actions">
-          <label class="sample-select-label" for="sample-select">Sample</label>
-          <select id="sample-select" class="sample-select" aria-label="Sample program">
-            ${samples.map((sample) => `<option value="${sample.id}">${sample.label}</option>`).join("")}
-          </select>
-          <button id="run-button" class="run-button" type="button" aria-label="Run selected runnable">
-            <span aria-hidden="true">▶</span>
-            Run
-          </button>
-          <button id="clear-cache-button" class="secondary-button" type="button">
-            Clear cache
-          </button>
+        <div id="run-view-panel" class="run-view tab-panel active" role="tabpanel" aria-labelledby="run-view-tab">
+          <pre id="output" class="output" aria-live="polite"></pre>
+          <footer id="run-stale-footer" class="run-stale-footer" hidden>
+            <span class="run-stale-pill">Changes since last run</span>
+            <span class="run-stale-copy">Run a function to refresh this output.</span>
+          </footer>
         </div>
-      </header>
-      <div id="editor" class="editor" aria-label="Code editor"></div>
-    </aside>
-
-    <section class="output-pane">
-      <header class="panel-header">
-        <div>
-          <p class="eyebrow">Program Output</p>
-          <h2>Console</h2>
-        </div>
-        <span id="run-status" class="status">Not run</span>
-      </header>
-      <div class="tabs" role="tablist" aria-label="Run output views">
-        <button id="run-view-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="run-view-panel">
-          Run View
-        </button>
-        <button id="implementation-tab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="implementation-panel">
-          Implementation
-        </button>
-      </div>
-      <pre id="output" class="output tab-panel active" role="tabpanel" aria-labelledby="run-view-tab" aria-live="polite"></pre>
-      <pre id="implementation" class="output tab-panel" role="tabpanel" aria-labelledby="implementation-tab"></pre>
+        <pre id="implementation" class="output tab-panel" role="tabpanel" aria-labelledby="implementation-tab"></pre>
+      </section>
     </section>
   </section>
 `;
 
 const shell = requiredQuery<HTMLElement>("#shell");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
+const runViewPanel = requiredQuery<HTMLDivElement>("#run-view-panel");
 const outputEl = requiredQuery<HTMLPreElement>("#output");
 const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
-const runButton = requiredQuery<HTMLButtonElement>("#run-button");
+const runStaleFooter = requiredQuery<HTMLElement>("#run-stale-footer");
 const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
-const sampleSelect = requiredQuery<HTMLSelectElement>("#sample-select");
+const projectMenu = requiredQuery<HTMLDetailsElement>("#project-menu");
+const sampleMenuItems = Array.from(
+  document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
+);
 const runViewTab = requiredQuery<HTMLButtonElement>("#run-view-tab");
 const implementationTab = requiredQuery<HTMLButtonElement>("#implementation-tab");
 const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
@@ -238,6 +287,8 @@ const agentForm = requiredQuery<HTMLFormElement>("#agent-form");
 const agentInput = requiredQuery<HTMLTextAreaElement>("#agent-input");
 const agentSend = requiredQuery<HTMLButtonElement>("#agent-send");
 let lastRunLabel = "never";
+let lastRunStatusText = "Not run";
+let lastRunDefinitionHash: string | null = null;
 let agentMessages: AgentChatMessage[] = [];
 let agentExpanded = false;
 let compileController: AbortController | null = null;
@@ -258,10 +309,12 @@ monaco.editor.defineTheme("interview-light", {
   inherit: true,
   rules: [],
   colors: {
-    "editor.background": "#ffffff",
-    "editorGutter.background": "#f5f7fa",
-    "editorLineNumber.foreground": "#8a97a8",
-    "editorLineNumber.activeForeground": "#1f2933",
+    "editor.background": "#fbfcfe",
+    "editorGutter.background": "#f4f7fb",
+    "editorLineNumber.foreground": "#98a3b3",
+    "editorLineNumber.activeForeground": "#202b3a",
+    "editor.selectionBackground": "#dbeafe",
+    "editor.lineHighlightBackground": "#eef4fb",
   },
 });
 
@@ -312,8 +365,10 @@ editor.onMouseDown((event) => {
   runCurrentProgram(runnable.name);
 });
 
-runButton.addEventListener("click", () => runCurrentProgram());
-clearCacheButton.addEventListener("click", () => clearCache());
+clearCacheButton.addEventListener("click", () => {
+  projectMenu.open = false;
+  clearCache();
+});
 runViewTab.addEventListener("click", () => setActiveTab("run"));
 implementationTab.addEventListener("click", () => setActiveTab("implementation"));
 agentToggle.addEventListener("click", () => setAgentExpanded(!agentExpanded));
@@ -321,22 +376,37 @@ agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
   runAgentTurn();
 });
-sampleSelect.addEventListener("change", () => {
-  const sample = samples.find((item) => item.id === sampleSelect.value);
+sampleMenuItems.forEach((item) => {
+  item.addEventListener("click", () => {
+    loadSample(item.dataset.sampleId ?? "");
+  });
+});
+
+function loadSample(sampleId: string): void {
+  const sample = samples.find((item) => item.id === sampleId);
   if (!sample) {
     return;
   }
 
   editor.setValue(sample.code);
+  sampleMenuItems.forEach((item) => {
+    item.classList.toggle("active", item.dataset.sampleId === sample.id);
+  });
+  projectMenu.open = false;
   outputEl.textContent = "";
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
+  lastRunStatusText = "Not run";
   runStatus.textContent = "Not run";
   runStatus.dataset.state = "";
+  lastRunDefinitionHash = null;
+  updateRunStaleness();
   scheduleCompilation(0);
   setActiveTab("run");
-});
+}
+
+sampleMenuItems[0]?.classList.add("active");
 
 renderAgentLog();
 scheduleCompilation(0);
@@ -364,16 +434,22 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
 
   if (result.ok) {
     lastRunLabel = formatRunTime(new Date());
-    runStatus.textContent = `Ran ${runnable} · last run ${lastRunLabel}`;
+    lastRunDefinitionHash = definitionHash(source);
+    lastRunStatusText = `Ran ${runnable} · last run ${lastRunLabel}`;
+    runStatus.textContent = lastRunStatusText;
     runStatus.dataset.state = "ok";
     outputEl.textContent = result.stdout.length > 0 ? result.stdout.join("\n") : "(no output)";
+    updateRunStaleness();
     return;
   }
 
   lastRunLabel = formatRunTime(new Date());
-  runStatus.textContent = `Error · last run ${lastRunLabel}`;
+  lastRunDefinitionHash = definitionHash(source);
+  lastRunStatusText = `Error · last run ${lastRunLabel}`;
+  runStatus.textContent = lastRunStatusText;
   runStatus.dataset.state = "error";
   outputEl.textContent = result.error;
+  updateRunStaleness();
 }
 
 async function clearCache(): Promise<void> {
@@ -404,6 +480,7 @@ function scheduleCompilation(delayMs: number): void {
   compileController = null;
   implementationEl.textContent = source;
   updateReadinessDecorations(localReadiness(source));
+  updateRunStaleness(source);
 
   if (compileTimer) {
     clearTimeout(compileTimer);
@@ -456,6 +533,69 @@ function localReadiness(source: string): DefinitionReadiness[] {
     return definitionReadiness(parse(source), new Map());
   } catch {
     return [];
+  }
+}
+
+function definitionHash(source: string): string {
+  try {
+    const parsed = parse(source);
+    return hashString(JSON.stringify({
+      definitions: definitionBlocks(parsed.source),
+      runnables: parsed.runnables,
+    }));
+  } catch {
+    return hashString(source);
+  }
+}
+
+function definitionBlocks(source: string): string[] {
+  const lines = source.replaceAll("\r\n", "\n").split("\n");
+  const blocks: string[] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    const isTopLevelDefinition = /^(class|def|type)\s+/.test(line);
+    if (isTopLevelDefinition && current.length > 0) {
+      blocks.push(current.join("\n").trimEnd());
+      current = [];
+    }
+
+    if (isTopLevelDefinition || current.length > 0) {
+      current.push(line);
+    }
+  }
+
+  if (current.length > 0) {
+    blocks.push(current.join("\n").trimEnd());
+  }
+
+  return blocks;
+}
+
+function hashString(source: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function updateRunStaleness(source = editor.getValue()): void {
+  const stale = lastRunDefinitionHash !== null && definitionHash(source) !== lastRunDefinitionHash;
+  runStaleFooter.hidden = !stale;
+  runViewPanel.classList.toggle("run-view-stale", stale);
+
+  if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error")) {
+    runStatus.textContent = `Stale · last run ${lastRunLabel}`;
+    runStatus.dataset.state = "stale";
+    return;
+  }
+
+  if (!stale && runStatus.dataset.state === "stale") {
+    runStatus.textContent = lastRunStatusText;
+    runStatus.dataset.state = lastRunStatusText.startsWith("Error") ? "error" : "ok";
   }
 }
 
@@ -530,8 +670,7 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
 }
 
 function updateToolbarRunState(runnablesState: Array<RunnableState & { line: number }>): void {
-  const first = runnablesState[0];
-  runButton.disabled = first !== undefined && !first.ready;
+  void runnablesState;
 }
 
 function firstRunnable(source: string): Runnable | null {
@@ -679,7 +818,8 @@ function setAgentExpanded(expanded: boolean): void {
   agentExpanded = expanded;
   shell.classList.toggle("agent-collapsed", !expanded);
   agentToggle.setAttribute("aria-expanded", String(expanded));
-  agentToggle.textContent = expanded ? "Close" : "Agent";
+  agentToggle.setAttribute("aria-label", expanded ? "Close assistant" : "Open assistant");
+  agentToggle.innerHTML = `${assistantMark}<span class="toggle-chevron" aria-hidden="true">${expanded ? "‹" : "›"}</span>`;
 }
 
 function escapeHtml(source: string): string {
@@ -775,7 +915,7 @@ function setActiveTab(tab: "run" | "implementation"): void {
   implementationTab.classList.toggle("active", implementationActive);
   runViewTab.setAttribute("aria-selected", String(runActive));
   implementationTab.setAttribute("aria-selected", String(implementationActive));
-  outputEl.classList.toggle("active", runActive);
+  runViewPanel.classList.toggle("active", runActive);
   implementationEl.classList.toggle("active", implementationActive);
 }
 
