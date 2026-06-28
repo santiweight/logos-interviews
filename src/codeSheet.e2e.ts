@@ -513,6 +513,144 @@ def test():
 });
 
 describe("codeSheet definition syntax evals", () => {
+  it("documents the current broken behavior when a natural snippet names a class generically", async () => {
+    const sheet = `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str
+
+def gen_magic_square():
+  \`\`\`
+  generate a magic square
+  pretty print it
+  check the magic square is valid, and show the work
+  \`\`\``;
+
+    const result = await runCodeSheet(sheet, "gen_magic_square", {
+      complete(prompt) {
+        if (prompt.includes("Your job is to finish the implementation of:")) {
+          return `class MagicSquare:
+  size: int
+
+  def __init__(self, size: int = 3):
+    self.size = size
+    self.grid = [
+      [8, 1, 6],
+      [3, 5, 7],
+      [4, 9, 2],
+    ]
+
+  def gen(self) -> "MagicSquare":
+    return self
+
+  def pretty(self) -> str:
+    lines = ["+--+--+--+"]
+    for row in self.grid:
+      lines.append("|" + "|".join(f"{value} " for value in row) + "|")
+      lines.append("+--+--+--+")
+    return "\\n".join(lines)
+
+  def validate_with_work(self) -> str:
+    return "Magic Constant: 15"`;
+        }
+
+        return `ms = MagicSquare().gen()
+print(ms.pretty())
+print()
+print("Magic Constant: 15")
+print(ms.verify_with_work())`;
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: false,
+      stdout: [
+        "+--+--+--+",
+        "|8 |1 |6 |",
+        "+--+--+--+",
+        "|3 |5 |7 |",
+        "+--+--+--+",
+        "|4 |9 |2 |",
+        "+--+--+--+",
+        "",
+        "Magic Constant: 15",
+      ],
+      error: expect.stringContaining(
+        "AttributeError: 'MagicSquare' object has no attribute 'verify_with_work'",
+      ),
+    });
+  });
+
+  it("runs when the natural snippet explicitly references the MagicSquare class", async () => {
+    const sheet = `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str
+
+def gen_magic_square():
+  \`\`\`
+  generate a {MagicSquare}
+  pretty print it
+  check the {MagicSquare} is valid, and show the work
+  \`\`\``;
+    let naturalPrompt = "";
+
+    const result = await runCodeSheet(sheet, "gen_magic_square", {
+      complete(prompt) {
+        if (prompt.includes("Your job is to finish the implementation of:")) {
+          return `class MagicSquare:
+  size: int
+
+  def __init__(self, size: int = 3):
+    self.size = size
+    self.grid = [
+      [8, 1, 6],
+      [3, 5, 7],
+      [4, 9, 2],
+    ]
+
+  def gen(self) -> "MagicSquare":
+    return self
+
+  def pretty(self) -> str:
+    lines = ["+--+--+--+"]
+    for row in self.grid:
+      lines.append("|" + "|".join(f"{value} " for value in row) + "|")
+      lines.append("+--+--+--+")
+    return "\\n".join(lines)
+
+  def validate_with_work(self) -> str:
+    return "Magic Constant: 15"`;
+        }
+
+        naturalPrompt = prompt;
+        return `ms = MagicSquare().gen()
+print(ms.pretty())
+print()
+print(ms.validate_with_work())`;
+      },
+    });
+
+    expect(naturalPrompt).toContain("generate a {MagicSquare}");
+    expect(naturalPrompt).toContain("def validate_with_work(self) -> str:");
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: [
+        "+--+--+--+",
+        "|8 |1 |6 |",
+        "+--+--+--+",
+        "|3 |5 |7 |",
+        "+--+--+--+",
+        "|4 |9 |2 |",
+        "+--+--+--+",
+        "",
+        "Magic Constant: 15",
+      ],
+    });
+  });
+
   it("runs additive function and async-function definition forms", async () => {
     const sheet = `add(x: int, y: int) -> int
 
