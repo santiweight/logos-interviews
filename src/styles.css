@@ -667,6 +667,93 @@ h2 {
   flex-direction: column;
 }
 
+.snippet-panel {
+  position: relative;
+  display: flex;
+  flex: 0 0 25%;
+  min-height: 132px;
+  max-height: 72%;
+  flex-direction: column;
+  border-top: 1px solid #2e3746;
+  background: #101722;
+  color: #dce6f1;
+}
+
+.snippet-resize-handle {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 8px;
+  cursor: ns-resize;
+}
+
+.snippet-resize-handle::before {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 42px;
+  height: 2px;
+  border-radius: 999px;
+  background: #66758b;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.snippet-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  min-width: 0;
+  gap: 8px;
+  border-bottom: 1px solid #263142;
+  background: #151d29;
+  padding: 8px 10px;
+}
+
+.snippet-panel-title {
+  min-width: 0;
+}
+
+.snippet-panel-title h2 {
+  overflow: hidden;
+  color: #f4f7fb;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snippet-status {
+  flex: 0 0 auto;
+  border: 1px solid #4f6076;
+  border-radius: 999px;
+  color: #b9c6d7;
+  font-size: 0.66rem;
+  font-weight: 850;
+  line-height: 1;
+  padding: 4px 7px;
+}
+
+.snippet-status[data-state="generating"] {
+  border-color: #6d91d4;
+  color: #b8d0ff;
+  background: rgba(68, 103, 170, 0.22);
+}
+
+.snippet-status[data-state="complete"],
+.snippet-status[data-state="cached"] {
+  border-color: #6fa889;
+  color: #bde8cc;
+  background: rgba(64, 128, 91, 0.2);
+}
+
+.snippet-preview {
+  flex: 1;
+  min-height: 0;
+}
+
 .run-stale-footer {
   display: flex;
   align-items: center;
@@ -780,9 +867,31 @@ h2 {
 .send-button:focus-visible,
 .agent-toggle-button:focus-visible,
 .menu-trigger:focus-visible,
-.menu-item:focus-visible {
+.menu-item:focus-visible,
+.snippet-resize-handle:focus-visible {
   outline: 2px solid #9cbcff;
   outline-offset: 1px;
+}
+
+.monaco-editor .incomplete-snippet-line {
+  background: rgba(245, 158, 11, 0.08);
+  cursor: pointer;
+}
+
+.monaco-editor .incomplete-snippet-line-selected {
+  background: rgba(50, 103, 214, 0.13);
+  box-shadow: inset 3px 0 0 #3267d6;
+}
+
+.monaco-editor .natural-snippet-inline {
+  border-radius: 3px;
+  background: rgba(245, 158, 11, 0.16);
+  cursor: pointer;
+}
+
+.monaco-editor .natural-snippet-inline-selected {
+  background: rgba(50, 103, 214, 0.24);
+  outline: 1px solid rgba(50, 103, 214, 0.45);
 }
 
 .monaco-editor .not-ready-glyph-dot::before {

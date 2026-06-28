@@ -13,6 +13,7 @@ import {
   type CompilationEvent,
 } from "./codeSheet";
 import { runCodeSheet, type RunResult } from "./codeSheetRunner";
+import { typeCheck } from "./typeCheck";
 
 const sheet = `def add(x: int, y: int) -> int
 
@@ -571,6 +572,53 @@ def test():
     `);
   });
 
+  it("type checks obvious function, method, constructor, and return mismatches", () => {
+    const typedSheet = `type Op = Mul | Div
+type Expr = Val(int) | Empty
+
+def add(x: int, y: int) -> int:
+  return "wrong"
+
+class Spreadsheet:
+  def set(self, col: str, row: int, val: int) -> None
+
+def test():
+  sheet = Spreadsheet()
+  print(add("1", 2))
+  print(Val("7"))
+  sheet.set("A", "1", 7)`;
+    const diagnostics = typeCheck(parse(typedSheet));
+
+    expect(diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "Return type str is not assignable to int.",
+      "Argument 1 to add has type str, expected int.",
+      "Argument 1 to Val has type str, expected int.",
+      "Argument 2 to sheet.set has type str, expected int.",
+    ]);
+    expect(diagnostics.map(({ line, column, endColumn }) => ({ line, column, endColumn }))).toEqual([
+      { line: 5, column: 3, endColumn: 17 },
+      { line: 12, column: 13, endColumn: 16 },
+      { line: 13, column: 13, endColumn: 16 },
+      { line: 14, column: 18, endColumn: 21 },
+    ]);
+  });
+
+  it("type checks valid sample-level calls without diagnostics", () => {
+    const typedSheet = `type Expr = Val(int) | Empty
+type CellAddress = (str, int)
+
+def c(address: str) -> CellAddress
+
+class Spreadsheet:
+  def set(self, cell: CellAddress, expr: Expr) -> None
+
+def test():
+  sheet = Spreadsheet()
+  sheet.set(c("A1"), Val(7))`;
+
+    expect(typeCheck(parse(typedSheet))).toEqual([]);
+  });
+
   it("lowers conservative function and dataclass shorthand syntax", async () => {
     const shorthandSheet = `class Point(x: int, y: int)
 
@@ -604,6 +652,23 @@ class Point:
     expect(simplifyRunResult(await runCodeSheet(shorthandSheet, "test", { cache: new Map() }))).toEqual({
       ok: true,
       stdout: ["Point(x=0, y=0)"],
+    });
+  });
+
+  it("does not lower uppercase constructor calls as dataclass shorthand inside function bodies", async () => {
+    const constructorCallSheet = `class Point(x: int, y: int)
+
+def test():
+  point = Point(0, 1)
+  print(point)`;
+
+    const lowered = lower(parse(constructorCallSheet)).source;
+
+    expect(lowered).toContain("point = Point(0, 1)");
+    expect(lowered).not.toContain("  class Point:");
+    expect(simplifyRunResult(await runCodeSheet(constructorCallSheet, "test", { cache: new Map() }))).toEqual({
+      ok: true,
+      stdout: ["Point(x=0, y=1)"],
     });
   });
 
@@ -920,6 +985,7 @@ class SpreadsheetResult:
 
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
+      "typecheck",
       "readiness",
       "implementation",
       "llm-start",
@@ -952,6 +1018,7 @@ class SpreadsheetResult:
 
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
+      "typecheck",
       "readiness",
       "implementation",
       "compiled",
@@ -975,6 +1042,7 @@ class SpreadsheetResult:
     expect(first.completions).toHaveLength(1);
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
+      "typecheck",
       "readiness",
       "implementation",
       "cache-hit",
@@ -1179,6 +1247,57 @@ math.sqrt(5)`;
     `);
   });
 
+  it("can observe the first stdout line from a generated delayed loop before later sleeps finish", async () => {
+    const delayMs = 500;
+    const fractalSheet = `def add(x: int, y: int) -> int
+
+def test():
+  \`a for loop where a random fractal is printed every 10 seconds and printed in ascii of width 20 (no delay on the first print)\``;
+    const startedAt = Date.now();
+    let firstFractalLineMs: number | null = null;
+
+    const result = await runCodeSheet(fractalSheet, "test", {
+      complete(prompt) {
+        if (prompt.includes("Your job is to finish the implementation of:")) {
+          return `def add(x: int, y: int) -> int:
+  return x + y`;
+        }
+
+        return `import time
+
+for i in range(3):
+  if i != 0:
+    time.sleep(${delayMs / 1000})
+  print(f"fractal {i}")
+  for row in range(10):
+    print("#" * 20 if row in (0, 9) else "#" + "." * 18 + "#")`;
+      },
+      onStdoutLine(line) {
+        if (line === "fractal 0" && firstFractalLineMs === null) {
+          firstFractalLineMs = Date.now() - startedAt;
+        }
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(firstFractalLineMs).not.toBeNull();
+    expect(firstFractalLineMs ?? Number.POSITIVE_INFINITY).toBeLessThan(delayMs);
+    expect(result.stdout.slice(0, 11)).toEqual([
+      "fractal 0",
+      "####################",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "####################",
+    ]);
+    expect(result.stdout).toHaveLength(33);
+  });
+
   it("models readiness through incomplete definitions and dependencies", async () => {
     const cache: CodeCache = new Map();
     const parsed = parse(sheet);
@@ -1247,6 +1366,7 @@ math.sqrt(5)`;
 
     expect(firstEvents.map((event) => event.kind)).toEqual([
       "parsed",
+      "typecheck",
       "readiness",
       "implementation",
       "llm-start",
@@ -1267,6 +1387,7 @@ math.sqrt(5)`;
 
     expect(secondEvents.map((event) => event.kind)).toEqual([
       "parsed",
+      "typecheck",
       "readiness",
       "implementation",
       "cache-hit",
