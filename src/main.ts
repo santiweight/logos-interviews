@@ -1,7 +1,10 @@
 import "./styles.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
+import {
+  conf as pythonLanguageConfiguration,
+  language as pythonLanguage,
+} from "monaco-editor/esm/vs/basic-languages/python/python.js";
 import {
   definitionReadiness,
   hashCompletionInput,
@@ -303,10 +306,17 @@ type SnippetPreviewState = {
   status: "stub" | "generating" | "cached" | "complete";
 };
 
+const logosPythonLanguageId = "logos-python";
+
+registerLogosPythonLanguage();
+
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
   inherit: true,
-  rules: [],
+  rules: [
+    { token: "naturalSnippet", foreground: "9a4f00" },
+    { token: "naturalSnippet.delimiter", foreground: "c2410c" },
+  ],
   colors: {
     "editor.background": "#fcfcfc",
     "editorGutter.background": "#f6f5f2",
@@ -319,7 +329,7 @@ monaco.editor.defineTheme("interview-light", {
 
 const editor = monaco.editor.create(editorEl, {
   value: seedCode,
-  language: "python",
+  language: logosPythonLanguageId,
   theme: "interview-light",
   automaticLayout: true,
   fontFamily:
@@ -1350,7 +1360,7 @@ function setHighlightedPythonCode(element: HTMLPreElement, source: string): void
   colorized.textContent = source;
 
   void monaco.editor.colorizeElement(colorized, {
-    mimeType: "text/x-python",
+    mimeType: "text/x-logos-python",
     tabSize: 2,
     theme: "interview-light",
   }).then(() => {
@@ -1361,6 +1371,36 @@ function setHighlightedPythonCode(element: HTMLPreElement, source: string): void
     if (element.dataset.highlightVersion === String(version)) {
       element.textContent = source;
     }
+  });
+}
+
+function registerLogosPythonLanguage(): void {
+  monaco.languages.register({
+    id: logosPythonLanguageId,
+    aliases: ["Logos Python", "logos-python"],
+    mimetypes: ["text/x-logos-python"],
+  });
+  monaco.languages.setLanguageConfiguration(logosPythonLanguageId, pythonLanguageConfiguration);
+  monaco.languages.setMonarchTokensProvider(logosPythonLanguageId, {
+    ...pythonLanguage,
+    tokenPostfix: ".logos-python",
+    tokenizer: {
+      ...pythonLanguage.tokenizer,
+      root: [
+        [/```/, "naturalSnippet.delimiter", "@logosTripleNaturalSnippet"],
+        [/`/, "naturalSnippet.delimiter", "@logosInlineNaturalSnippet"],
+        ...pythonLanguage.tokenizer.root,
+      ],
+      logosInlineNaturalSnippet: [
+        [/[^`]+/, "naturalSnippet"],
+        [/`/, "naturalSnippet.delimiter", "@pop"],
+      ],
+      logosTripleNaturalSnippet: [
+        [/[^`]+/, "naturalSnippet"],
+        [/```/, "naturalSnippet.delimiter", "@pop"],
+        [/`+/, "naturalSnippet"],
+      ],
+    },
   });
 }
 
