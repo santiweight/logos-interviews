@@ -11,6 +11,7 @@ import {
   parse,
   renderImplementation,
   runnables,
+  selectionContextAtPosition,
   type CodeCache,
   type CompilationEvent,
 } from "./codeSheet";
@@ -45,6 +46,33 @@ def test():
   print(sheet.get("A", 1))
   sheet.set("A", 1, 7)
   print(sheet.get("A", 1))`;
+
+function sourceWithCursorMarkers(markedSource: string): {
+  source: string;
+  positions: Array<{ line: number; column: number }>;
+} {
+  let source = "";
+  const positions: Array<{ line: number; column: number }> = [];
+  let line = 1;
+  let column = 1;
+
+  for (const char of markedSource) {
+    if (char === "|") {
+      positions.push({ line, column });
+      continue;
+    }
+
+    source += char;
+    if (char === "\n") {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+
+  return { source, positions };
+}
 
 describe("codeSheet", () => {
   it("captures runnables output", () => {
@@ -1655,6 +1683,63 @@ def main():
       source: `def main():
   print(Counter().next())`,
     });
+  });
+
+  it("maps cursor locations inside a multi-line function to the enclosing implementation", () => {
+    const { source, positions } = sourceWithCursorMarkers(`def test_basic():|
+  # In Logos, |you can use regular python...
+  print(mul(add(1, 2), 3))|
+|
+  # Or use a snippet to have |the LLM write it for you...
+  \`print mul of (add one and two) and 3\`
+  |print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+|
+  added = \`add 1 and 2\`
+  product = \`mul 3 and 4\`
+  print(added)
+  print(product)`);
+
+    expect(positions).toHaveLength(7);
+    expect(positions.map((position) => {
+      const context = selectionContextAtPosition(source, position.line, position.column);
+      return context.kind === "implementation" ? context.target.name : context.kind;
+    })).toEqual([
+      "test_basic",
+      "test_basic",
+      "test_basic",
+      "test_basic",
+      "test_basic",
+      "test_basic",
+      "test_basic",
+    ]);
+  });
+
+  it("maps exact natural-snippet cursor locations to snippets before the enclosing function", () => {
+    const { source, positions } = sourceWithCursorMarkers(`def test_basic():
+  added = \`add 1 |and 2\`
+  print(added)`);
+    const context = selectionContextAtPosition(source, positions[0]!.line, positions[0]!.column);
+
+    expect(context.kind).toBe("snippet");
+    if (context.kind === "snippet") {
+      expect(context.snippet.kind).toBe("natural");
+      expect(context.snippet.snippet).toBe("`add 1 and 2`");
+    }
+  });
+
+  it("maps cursor locations immediately after backtick snippets to the preceding snippet", () => {
+    const { source, positions } = sourceWithCursorMarkers(`def main():
+  \`foo\`|
+  \`bar\`|`);
+
+    expect(positions).toHaveLength(2);
+    expect(positions.map((position) => {
+      const context = selectionContextAtPosition(source, position.line, position.column);
+      return context.kind === "snippet" ? context.snippet.snippet : context.kind;
+    })).toEqual([
+      "`foo`",
+      "`bar`",
+    ]);
   });
 
   it("extracts the generated implementation for a clicked function with natural statements", () => {

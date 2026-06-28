@@ -85,6 +85,11 @@ export type ImplementationTarget = {
   source: string;
 };
 
+export type SourceSelectionContext =
+  | { kind: "snippet"; snippet: IncompleteSnippet }
+  | { kind: "implementation"; target: ImplementationTarget }
+  | { kind: "whole-file" };
+
 export type CompilationIR = {
   parsed: ParsedSheet;
   lowered: LoweredCodeSheet;
@@ -502,6 +507,28 @@ export function implementationTargetAtLine(
   return targets.find((target) => (
     lineNumber >= target.line && lineNumber <= target.endLine
   )) ?? null;
+}
+
+export function selectionContextAtPosition(
+  codeSheet: CodeSheet,
+  lineNumber: number,
+  column: number,
+): SourceSelectionContext {
+  const source = normalizeNewlines(codeSheet);
+  const exactSnippet = parse(source).incompleteSnippets.find((snippet) => (
+    snippetContainsPosition(source, snippet, lineNumber, column)
+  ));
+
+  if (exactSnippet) {
+    return { kind: "snippet", snippet: exactSnippet };
+  }
+
+  const target = implementationTargetAtLine(source, lineNumber);
+  if (target) {
+    return { kind: "implementation", target };
+  }
+
+  return { kind: "whole-file" };
 }
 
 export function implementationBlockForTarget(
@@ -1504,6 +1531,19 @@ function lineOverlapsRanges(
   const end = start + lines[index].length;
   const lineRange = { start, end: end === start ? end + 1 : end };
   return ranges.some((range) => rangesOverlap(lineRange, range));
+}
+
+function snippetContainsPosition(
+  source: string,
+  snippet: IncompleteSnippet,
+  lineNumber: number,
+  column: number,
+): boolean {
+  const range = snippet.range ?? rangeForLineSnippet(source, snippet.line, snippet.snippet);
+  const lineStarts = lineStartOffsets(source);
+  const offset = (lineStarts[lineNumber - 1] ?? source.length) + Math.max(0, column - 1);
+
+  return offset >= range.start && offset <= range.end;
 }
 
 function snippetWithRange(snippet: IncompleteSnippet, range: SourceRange): IncompleteSnippet {

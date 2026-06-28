@@ -1142,12 +1142,11 @@ h2 {
 
 .monaco-editor .incomplete-snippet-line-selected {
   cursor: pointer;
-  background-color: rgba(50, 103, 214, 0.13) !important;
-  box-shadow: inset 3px 0 0 #3267d6;
+  background-color: rgba(50, 103, 214, 0.055) !important;
 }
 
 .monaco-editor .snippet-source-inline-selected {
-  background-color: rgba(50, 103, 214, 0.18) !important;
+  background-color: rgba(50, 103, 214, 0.09) !important;
 }
 
 .monaco-editor .natural-snippet-inline {
@@ -1158,8 +1157,8 @@ h2 {
 
 .monaco-editor .natural-snippet-inline-selected {
   cursor: pointer;
-  background-color: rgba(50, 103, 214, 0.24) !important;
-  outline: 1px solid rgba(50, 103, 214, 0.45);
+  background-color: rgba(50, 103, 214, 0.11) !important;
+  outline: 1px solid rgba(50, 103, 214, 0.18);
 }
 
 .monaco-editor .natural-snippet-plain,
@@ -1172,8 +1171,21 @@ h2 {
 
 .monaco-editor .definition-implementation-line-selected {
   cursor: pointer;
-  background-color: rgba(50, 103, 214, 0.1) !important;
-  box-shadow: inset 3px 0 0 #3267d6;
+  background-color: rgba(50, 103, 214, 0.035) !important;
+}
+
+.monaco-editor .selected-implementation-gutter {
+  position: relative;
+}
+
+.monaco-editor .selected-implementation-gutter::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: rgba(50, 103, 214, 0.32);
+  content: "";
 }
 
 .monaco-editor .not-ready-glyph-dot::before {

@@ -12,6 +12,7 @@ import {
   implementationTargetAtLine,
   parse,
   runnables,
+  selectionContextAtPosition,
   type DefinitionReadiness,
   type IncompleteSnippet,
   type ImplementationTarget,
@@ -378,15 +379,24 @@ editor.onMouseDown((event) => {
 
   if (lineNumber !== undefined && event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
     const column = event.target.position?.column ?? 1;
-    const incompleteSnippet = incompleteSnippetForPosition(lineNumber, column);
-    if (incompleteSnippet) {
-      selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
+    const context = selectionContextAtPosition(editor.getValue(), lineNumber, column);
+
+    if (context.kind === "snippet") {
+      const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
+      if (incompleteSnippet) {
+        selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
+        return;
+      }
+    }
+
+    if (context.kind === "implementation") {
+      selectDefinitionImplementation(context.target);
       return;
     }
 
-    const definitionTarget = implementationTargetForLine(lineNumber);
-    if (definitionTarget) {
-      selectDefinitionImplementation(definitionTarget);
+    const nearbyNaturalSnippet = nearbyNaturalSnippetForLine(lineNumber);
+    if (nearbyNaturalSnippet) {
+      selectIncompleteSnippet(nearbyNaturalSnippet.hash, "editor_click");
       return;
     }
 
@@ -1305,13 +1315,18 @@ function updateIncompleteSnippetDecorations(): void {
       target.endColumn,
     ),
     options: {
-      isWholeLine: target.kind !== "natural",
+      isWholeLine: target.kind !== "natural" || target.hash === selectedSnippetHash,
       stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
       className: target.kind === "natural"
-        ? undefined
+        ? target.hash === selectedSnippetHash
+          ? "incomplete-snippet-line-selected"
+          : undefined
         : target.hash === selectedSnippetHash
           ? "incomplete-snippet-line incomplete-snippet-line-selected"
           : "incomplete-snippet-line",
+      marginClassName: target.hash === selectedSnippetHash
+        ? "selected-implementation-gutter"
+        : undefined,
       inlineClassName: target.kind !== "natural"
         ? target.hash === selectedSnippetHash
           ? "snippet-source-inline-selected"
@@ -1333,21 +1348,10 @@ function updateIncompleteSnippetDecorations(): void {
 
 function updateSelectedDefinitionDecorations(): void {
   const target = selectedDefinitionTarget;
-  const modelLineCount = editor.getModel()?.getLineCount() ?? 1;
   selectedDefinitionDecorations = editor.deltaDecorations(
     selectedDefinitionDecorations,
     selectedWholeFileImplementation
-      ? [{
-          range: new monaco.Range(1, 1, modelLineCount, Number.MAX_SAFE_INTEGER),
-          options: {
-            isWholeLine: true,
-            className: "definition-implementation-line-selected",
-            inlineClassName: "snippet-source-inline-selected",
-            hoverMessage: {
-              value: "Showing generated implementation for the whole file.",
-            },
-          },
-        }]
+      ? []
       : target === null
       ? []
       : [{
@@ -1355,10 +1359,7 @@ function updateSelectedDefinitionDecorations(): void {
           options: {
             isWholeLine: true,
             className: "definition-implementation-line-selected",
-            inlineClassName: "snippet-source-inline-selected",
-            hoverMessage: {
-              value: `Showing generated implementation for ${target.name}.`,
-            },
+            marginClassName: "selected-implementation-gutter",
           },
         }],
   );
@@ -1472,14 +1473,44 @@ function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
   return snippet.kind === "class" ? "class snippet" : "function snippet";
 }
 
-function incompleteSnippetForPosition(
+function exactIncompleteSnippetForPosition(
   lineNumber: number,
   column: number,
 ): IncompleteSnippetTarget | null {
   const snippets = incompleteSnippetsByLine.get(lineNumber) ?? [];
-  const exact = snippets.find((snippet) => targetContainsPosition(snippet, lineNumber, column));
+  return snippets.find((snippet) => targetContainsPosition(snippet, lineNumber, column)) ?? null;
+}
 
-  return exact ?? snippets[0] ?? null;
+function nearbyNaturalSnippetForLine(lineNumber: number): IncompleteSnippetTarget | null {
+  const maxContextLines = 2;
+  const definitionTarget = implementationTargetForLine(lineNumber);
+  let closest: { distance: number; target: IncompleteSnippetTarget } | null = null;
+
+  if (definitionTarget?.line === lineNumber) {
+    return null;
+  }
+
+  for (const target of incompleteSnippetByHash.values()) {
+    if (target.kind !== "natural") {
+      continue;
+    }
+
+    const distance = lineNumber < target.startLine
+      ? target.startLine - lineNumber
+      : lineNumber > target.endLine
+        ? lineNumber - target.endLine
+        : 0;
+
+    if (distance > maxContextLines) {
+      continue;
+    }
+
+    if (closest === null || distance < closest.distance) {
+      closest = { distance, target };
+    }
+  }
+
+  return closest?.target ?? null;
 }
 
 function targetContainsPosition(
