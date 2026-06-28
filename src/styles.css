@@ -514,20 +514,20 @@ h2 {
   position: relative;
   z-index: 5;
   display: flex;
-  align-items: flex-end;
-  flex: 0 0 32px;
+  align-items: stretch;
+  flex: 0 0 29px;
   min-width: 0;
   overflow: visible;
   border-bottom: 1px solid var(--border);
-  background: var(--paper-pressed);
-  padding: 4px 6px 0;
+  background: var(--paper);
+  padding: 0;
 }
 
 .source-tabs {
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   flex: 0 1 auto;
-  gap: 2px;
+  gap: 0;
   width: auto;
   max-width: calc(100% - 76px);
   height: 100%;
@@ -545,24 +545,35 @@ h2 {
   flex: 0 1 190px;
   min-width: 118px;
   max-width: 190px;
-  height: 28px;
+  height: 29px;
+  margin-right: -1px;
+}
+
+.source-tab-shell:first-child .source-tab {
+  border-left-color: transparent;
+}
+
+.source-tab-shell:first-child .source-tab.active {
+  border-left-color: var(--border);
 }
 
 .source-tab {
+  position: relative;
   width: 100%;
-  height: 28px;
+  height: 29px;
   min-width: 0;
   border: 1px solid var(--border);
-  border-bottom-color: var(--border);
-  border-radius: 5px 5px 0 0;
+  border-top: 0;
+  border-bottom: 0;
+  border-radius: 0;
   padding: 0 28px 0 10px;
   overflow: hidden;
-  background: var(--paper-soft);
-  color: var(--muted);
+  background: var(--paper-pressed);
+  color: #3f4248;
   cursor: pointer;
   font-size: 0.78rem;
   font-weight: 760;
-  line-height: 26px;
+  line-height: 28px;
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -570,10 +581,22 @@ h2 {
 
 .source-tab.active {
   border-color: var(--border);
-  border-bottom-color: var(--paper);
+  border-top: 0;
+  border-bottom: 0;
   background: var(--paper);
   color: var(--ink);
-  box-shadow: inset 0 2px 0 var(--accent);
+  box-shadow: none;
+}
+
+.source-tab.active::after {
+  position: absolute;
+  right: 1px;
+  bottom: -1px;
+  left: 1px;
+  z-index: 1;
+  height: 1px;
+  background: var(--paper);
+  content: "";
 }
 
 .source-tab-close {
@@ -586,31 +609,49 @@ h2 {
   place-items: center;
   border-radius: 3px;
   background: transparent;
-  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+  color: #6d7076;
   cursor: pointer;
-  font-size: 1rem;
+  font-size: 0.92rem;
+  font-weight: 600;
   line-height: 1;
   padding: 0;
 }
 
+.source-tab-shell:hover .source-tab-close,
+.source-tab-close:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .source-tab.active + .source-tab-close {
-  color: var(--muted);
+  color: #55585e;
 }
 
 .source-tab:hover,
 .source-tab-close:hover {
-  background: var(--paper);
   color: var(--ink);
+}
+
+.source-tab:hover {
+  background: var(--paper);
+}
+
+.source-tab-close:hover {
+  background: transparent;
+  color: var(--accent);
 }
 
 .source-add-tab {
   display: grid;
   width: 34px;
-  height: 28px;
+  height: 29px;
   place-items: center;
   border: 1px solid var(--border);
-  border-bottom-color: var(--border);
-  border-radius: 5px 5px 0 0;
+  border-top: 0;
+  border-bottom: 0;
+  border-radius: 0;
   background: var(--paper-soft);
   color: var(--muted);
   cursor: pointer;
@@ -623,7 +664,6 @@ h2 {
 
 .sample-menu[open] .source-add-tab,
 .source-add-tab:hover {
-  border-bottom-color: #ffffff;
   background: var(--paper);
   color: var(--accent);
 }
@@ -1000,19 +1040,21 @@ h2 {
 .snippet-panel-header {
   display: flex;
   align-items: center;
-  flex: 0 0 auto;
+  flex: 0 0 27px;
   min-width: 0;
   gap: 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--paper-soft);
-  padding: 8px 10px;
+  background: var(--paper);
+  padding: 0 9px;
 }
 
 .snippet-panel-header h2 {
+  min-width: 0;
   overflow: hidden;
-  color: var(--ink);
-  font-size: 0.86rem;
-  font-weight: 820;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+  line-height: 27px;
   margin: 0;
   text-overflow: ellipsis;
   white-space: nowrap;

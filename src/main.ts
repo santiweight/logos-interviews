@@ -201,6 +201,9 @@ app.innerHTML = `
             aria-label="Resize incomplete implementation panel"
             tabindex="0"
           ></div>
+          <header class="snippet-panel-header">
+            <h2 id="snippet-title">Compilation View</h2>
+          </header>
           <pre id="snippet-preview" class="output snippet-preview"></pre>
         </section>
       </section>
@@ -241,6 +244,7 @@ const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
+const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
 const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
@@ -1371,11 +1375,13 @@ function renderSnippetPanel(): void {
       implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
       selectedDefinitionTarget.source;
 
+    setSnippetPanelTitle(selectedDefinitionTarget.name);
     setHighlightedPythonCode(snippetPreview, text);
     return;
   }
 
   if (selectedWholeFileImplementation) {
+    setSnippetPanelTitle("Whole file");
     setHighlightedPythonCode(snippetPreview, latestImplementationSource);
     return;
   }
@@ -1385,6 +1391,7 @@ function renderSnippetPanel(): void {
     : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
 
   if (!target) {
+    setSnippetPanelTitle(null);
     snippetPreview.textContent = "";
     return;
   }
@@ -1396,7 +1403,13 @@ function renderSnippetPanel(): void {
     preview?.snippet ??
     target.snippet;
 
+  setSnippetPanelTitle(target.label);
   setHighlightedPythonCode(snippetPreview, text);
+}
+
+function setSnippetPanelTitle(label: string | null): void {
+  snippetTitle.textContent = label === null ? "Compilation View" : `Compilation View: ${label}`;
+  snippetTitle.title = snippetTitle.textContent;
 }
 
 function setHighlightedPythonCode(element: HTMLPreElement, source: string): void {
