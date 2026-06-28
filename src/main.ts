@@ -62,9 +62,15 @@ const sendIcon = `
     <path d="M10 3.4 5.4 8l1.1 1.1 2.7-2.7v10.2h1.6V6.4l2.7 2.7L14.6 8z" />
   </svg>
 `;
-const menuIcon = `
+const settingsIcon = `
   <svg class="menu-icon" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M4 6.25h12M4 10h12M4 13.75h12" />
+    <path d="M8.6 3.6h2.8l.5 2 1.8.8 1.8-1.1 2 2-1.1 1.8.8 1.8 2 .5v2.8l-2 .5-.8 1.8 1.1 1.8-2 2-1.8-1.1-1.8.8-.5 2H8.6l-.5-2-1.8-.8-1.8 1.1-2-2 1.1-1.8-.8-1.8-2-.5v-2.8l2-.5.8-1.8-1.1-1.8 2-2 1.8 1.1 1.8-.8.5-2Z" />
+    <circle cx="10" cy="10" r="2.4" />
+  </svg>
+`;
+const plusIcon = `
+  <svg class="plus-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M10 4.5v11M4.5 10h11" />
   </svg>
 `;
 
@@ -91,23 +97,20 @@ app.innerHTML = `
         <a class="brand-mark" href="/" aria-label="Logos">
           <img class="logos-wordmark" src="/logos-wordmark.png" alt="" />
         </a>
-        <details id="project-menu" class="project-menu">
-          <summary class="menu-trigger" aria-label="Open project menu">
-            ${menuIcon}
+      </div>
+      <div class="workspace-title" aria-hidden="true"></div>
+      <div class="app-header-right">
+        <details id="settings-menu" class="settings-menu">
+          <summary class="menu-trigger" aria-label="Open settings menu" title="Settings">
+            ${settingsIcon}
           </summary>
-          <div class="menu-popover" role="menu">
-            <div class="menu-section">
-              <div class="menu-section-title">Samples</div>
-              ${sampleGroups.map(renderSampleGroup).join("")}
-            </div>
-            <div class="menu-separator" aria-hidden="true"></div>
+          <div class="menu-popover menu-popover-right" role="menu">
             <button id="clear-cache-button" class="menu-item" type="button" role="menuitem">
               Clear coding cache
             </button>
           </div>
         </details>
       </div>
-      <div class="workspace-title" aria-hidden="true"></div>
     </header>
 
     <section id="shell" class="shell agent-collapsed">
@@ -136,6 +139,17 @@ app.innerHTML = `
       <section class="code-pane" aria-label="Code editor panel">
         <div class="source-tabs-bar">
           <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
+          <details id="sample-menu" class="sample-menu">
+            <summary class="source-add-tab" aria-label="Add sample" title="Add sample">
+              ${plusIcon}
+            </summary>
+            <div class="menu-popover sample-popover" role="menu">
+              <div class="menu-section">
+                <div class="menu-section-title">Samples</div>
+                ${sampleGroups.map(renderSampleGroup).join("")}
+              </div>
+            </div>
+          </details>
         </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
       </section>
@@ -198,7 +212,8 @@ const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
 const runStaleFooter = requiredQuery<HTMLElement>("#run-stale-footer");
 const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
-const projectMenu = requiredQuery<HTMLDetailsElement>("#project-menu");
+const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
+const settingsMenu = requiredQuery<HTMLDetailsElement>("#settings-menu");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
@@ -338,7 +353,7 @@ editor.onMouseDown((event) => {
 });
 
 clearCacheButton.addEventListener("click", () => {
-  projectMenu.open = false;
+  settingsMenu.open = false;
   sessionCapture.track("clear_cache_requested", undefined, true);
   clearCache();
 });
@@ -401,7 +416,7 @@ function openProject(sampleId: string): void {
     return;
   }
 
-  projectMenu.open = false;
+  sampleMenu.open = false;
   openProjectTab(sample);
   sessionCapture.track("project_opened", { sampleId: sample.id, sampleLabel: sample.label }, true);
 }
@@ -1625,7 +1640,8 @@ function appSnapshot(): JsonObject {
     ui: {
       selectedSampleId: activeSampleItem()?.dataset.sampleId ?? null,
       selectedSampleLabel: activeSampleItem()?.textContent ?? null,
-      projectMenuOpen: projectMenu.open,
+      sampleMenuOpen: sampleMenu.open,
+      settingsMenuOpen: settingsMenu.open,
       activeTab: runViewPanel.classList.contains("active") ? "run" : "implementation",
       lastRunLabel,
       runStatus: {
