@@ -39,8 +39,8 @@ type SourceTabState = {
 const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
-const sourceTabStateKey = "source-tabs-v1";
-const defaultProjectIds = ["add", "multi", "spreadsheet", "parking-lot"];
+const sourceTabStateKey = "source-tabs-v2";
+const defaultProjectIds = ["multi", "natural-language", "spreadsheet"];
 
 const samples: SampleProgram[] = [
   {
@@ -61,6 +61,16 @@ def mul(x: int, y: int) -> int
 def test():
   print(add(1,2))
   print(mul(2,3))`,
+  },
+  {
+    id: "natural-language",
+    label: "Natural language",
+    code: `def test():
+  subtotal = \`add 19 and 23\`
+  tax = \`calculate 8 percent of subtotal\`
+  print(subtotal)
+  print(round(tax, 2))
+  print(round(subtotal + tax, 2))`,
   },
   {
     id: "spreadsheet",
