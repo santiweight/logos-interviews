@@ -35,7 +35,7 @@ export async function handleCompileStream(
   try {
     for await (const event of compile(cache, sheet, complete, {
       signal: abortController.signal,
-      streamTokens: false,
+      streamTokens: true,
     })) {
       if (abortController.signal.aborted || res.destroyed) {
         return;
@@ -65,13 +65,18 @@ function toWireEvent(event: CompilationEvent): Record<string, unknown> {
     case "readiness":
       return { kind: "readiness", definitions: event.definitions };
     case "cache-hit":
-      return { kind: "cache-hit", hash: event.hash, snippet: event.snippet };
+      return {
+        kind: "cache-hit",
+        hash: event.hash,
+        snippet: event.snippet,
+        implementation: event.implementation,
+      };
     case "llm-start":
       return { kind: "llm-start", hash: event.hash, snippet: event.snippet };
     case "llm-token":
       return { kind: "llm-token", hash: event.hash, token: event.token };
     case "llm-complete":
-      return { kind: "llm-complete", hash: event.hash };
+      return { kind: "llm-complete", hash: event.hash, implementation: event.implementation };
     case "implementation":
       return {
         kind: "implementation",
