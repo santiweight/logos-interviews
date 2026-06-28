@@ -266,6 +266,7 @@ let incompleteSnippetByHash = new Map<SnippetHash, IncompleteSnippetTarget>();
 let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
 let selectedSnippetHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
+let selectedWholeFileImplementation = false;
 let latestImplementationSource = seedCode;
 let runTabs: RunTab[] = [];
 let activeToolTabId: ToolTabId = "implementation";
@@ -292,6 +293,7 @@ type RunTab = {
 type IncompleteSnippetTarget = {
   hash: SnippetHash;
   line: number;
+  endLine: number;
   startColumn: number;
   endColumn: number;
   kind: IncompleteSnippet["kind"];
@@ -369,6 +371,9 @@ editor.onMouseDown((event) => {
       selectDefinitionImplementation(definitionTarget);
       return;
     }
+
+    selectWholeFileImplementation(lineNumber);
+    return;
   }
 
   if (event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
@@ -1028,6 +1033,7 @@ function refreshIncompleteSnippets(source: string): void {
     targets = parsed.incompleteSnippets.map((snippet) => ({
       hash: hashCompletionInput(parsed, snippet.snippet),
       line: snippet.line,
+      endLine: snippet.line + snippet.snippet.split("\n").length - 1,
       startColumn: snippet.column ?? 1,
       endColumn: snippet.column === undefined
         ? Number.MAX_SAFE_INTEGER
@@ -1052,8 +1058,11 @@ function refreshIncompleteSnippets(source: string): void {
   }
 
   incompleteSnippetsByLine = targets.reduce((byLine, target) => {
-    const existing = byLine.get(target.line) ?? [];
-    byLine.set(target.line, [...existing, target]);
+    const targetEndLine = target.kind === "natural" ? target.line : target.endLine;
+    for (let line = target.line; line <= targetEndLine; line += 1) {
+      const existing = byLine.get(line) ?? [];
+      byLine.set(line, [...existing, target]);
+    }
     return byLine;
   }, new Map<number, IncompleteSnippetTarget[]>());
   incompleteSnippetByHash = new Map(targets.map((target) => [target.hash, target]));
@@ -1062,10 +1071,12 @@ function refreshIncompleteSnippets(source: string): void {
 
   if (
     selectedDefinitionTarget === null &&
+    !selectedWholeFileImplementation &&
     (selectedSnippetHash === null || !incompleteSnippetByHash.has(selectedSnippetHash))
   ) {
     selectedSnippetHash = targets[0]?.hash ?? null;
   } else if (selectedDefinitionTarget !== null) {
+    selectedWholeFileImplementation = false;
     selectedSnippetHash = null;
   }
 
@@ -1080,6 +1091,7 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
   }
 
   selectedDefinitionTarget = null;
+  selectedWholeFileImplementation = false;
   selectedSnippetHash = hash;
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
@@ -1093,6 +1105,7 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
 
 function selectDefinitionImplementation(target: ImplementationTarget): void {
   selectedDefinitionTarget = target;
+  selectedWholeFileImplementation = false;
   selectedSnippetHash = null;
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
@@ -1101,6 +1114,18 @@ function selectDefinitionImplementation(target: ImplementationTarget): void {
     kind: target.kind,
     name: target.name,
     line: target.line,
+  }, true);
+}
+
+function selectWholeFileImplementation(lineNumber: number): void {
+  selectedDefinitionTarget = null;
+  selectedSnippetHash = null;
+  selectedWholeFileImplementation = true;
+  updateSelectedDefinitionDecorations();
+  updateIncompleteSnippetDecorations();
+  renderSnippetPanel();
+  sessionCapture.track("whole_file_implementation_selected", {
+    line: lineNumber,
   }, true);
 }
 
@@ -1171,7 +1196,7 @@ function updateIncompleteSnippetDecorations(): void {
     range: new monaco.Range(
       target.line,
       target.startColumn,
-      target.line,
+      target.kind === "natural" ? target.line : target.endLine,
       target.endColumn,
     ),
     options: {
@@ -1200,9 +1225,21 @@ function updateIncompleteSnippetDecorations(): void {
 
 function updateSelectedDefinitionDecorations(): void {
   const target = selectedDefinitionTarget;
+  const modelLineCount = editor.getModel()?.getLineCount() ?? 1;
   selectedDefinitionDecorations = editor.deltaDecorations(
     selectedDefinitionDecorations,
-    target === null
+    selectedWholeFileImplementation
+      ? [{
+          range: new monaco.Range(1, 1, modelLineCount, Number.MAX_SAFE_INTEGER),
+          options: {
+            isWholeLine: true,
+            className: "definition-implementation-line-selected",
+            hoverMessage: {
+              value: "Showing generated implementation for the whole file.",
+            },
+          },
+        }]
+      : target === null
       ? []
       : [{
           range: new monaco.Range(target.line, 1, target.endLine, Number.MAX_SAFE_INTEGER),
@@ -1224,6 +1261,11 @@ function renderSnippetPanel(): void {
       selectedDefinitionTarget.source;
 
     setHighlightedPythonCode(snippetPreview, text);
+    return;
+  }
+
+  if (selectedWholeFileImplementation) {
+    setHighlightedPythonCode(snippetPreview, latestImplementationSource);
     return;
   }
 

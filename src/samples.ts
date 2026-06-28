@@ -304,6 +304,7 @@ def test_basic():
         label: "Beyond the Basics",
         code: `# You may also define classes, even if they're not complete!
 # Notice how the agent internally generates a field for tracking the grid.
+
 class MagicSquare:
   size: int
 

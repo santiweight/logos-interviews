@@ -1537,6 +1537,30 @@ def main():
     return 1`);
   });
 
+  it("finds the full implementation target for a typed class with incomplete methods", () => {
+    const source = `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str
+
+def gen_magic_square():
+  pass`;
+    const target = implementationTargetAtLine(source, 1);
+
+    expect(target).toEqual({
+      kind: "class",
+      name: "MagicSquare",
+      line: 1,
+      endLine: 5,
+      source: `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str`,
+    });
+  });
+
   it("keeps completed cache entries after cancelling an in-progress compile", async () => {
     const cache: CodeCache = new Map();
     const abortController = new AbortController();
