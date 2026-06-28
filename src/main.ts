@@ -150,6 +150,165 @@ def test():
   sheet.set(c("C1"), "(B1 + A1) * 4)")
   print(sheet.eval().eval(c("C1")))`,
   },
+  {
+    id: "parking-lot",
+    label: "Parking lot",
+    code: `# Parking lot spots and vehicles have sizes: small < medium < large.
+# A vehicle must be assigned the smallest available spot that fits it.
+# Vehicle types: motorcycle fits small, car fits medium, truck fits large.
+# park returns an opaque ticket id or None when no spot fits.
+# unpark returns the vehicle id for a valid active ticket, otherwise None.
+# active_vehicle_ids returns sorted active vehicle ids.
+
+class ParkingLot:
+  layout: dict
+  occupied: dict
+  tickets: dict
+  next_ticket_id: int
+
+  def __init__(self, layout: dict) -> None
+  def park(self, vehicle_id: str, vehicle_type: str) -> str | None
+  def unpark(self, ticket_id: str) -> str | None
+  def available(self, spot_size: str) -> int
+  def active_vehicle_ids(self) -> list
+
+def test():
+  lot = ParkingLot({"small": 1, "medium": 1, "large": 1})
+  print(lot.available("medium"))
+  motorcycle_ticket = lot.park("m1", "motorcycle")
+  car_ticket = lot.park("c1", "car")
+  truck_ticket = lot.park("t1", "truck")
+  print(motorcycle_ticket is not None, car_ticket is not None, truck_ticket is not None)
+  print(lot.available("small"), lot.available("medium"), lot.available("large"))
+  print(lot.park("c2", "car"))
+  print(lot.unpark(car_ticket))
+  print(lot.available("medium"))
+  replacement_ticket = lot.park("c2", "car")
+  print(replacement_ticket is not None and replacement_ticket != car_ticket)
+  print(lot.active_vehicle_ids())`,
+  },
+  {
+    id: "email-dispatcher",
+    label: "Email dispatcher",
+    code: `# Structured events are dicts with id, type, email, and payload fields.
+# templates maps event type to subject/body format strings.
+# handle_event returns "sent", "duplicate", "ignored", or "dead_letter".
+# Duplicate event ids are never sent twice.
+# Unknown event types are ignored.
+# TransientEmailError should be retried up to max_attempts.
+# PermanentEmailError should go directly to dead letters.
+# sent and dead_letters return event ids in the order they reach that state.
+
+class TransientEmailError(Exception):
+  pass
+
+class PermanentEmailError(Exception):
+  pass
+
+class FakeSender:
+  def __init__(self):
+    self.attempts = {}
+
+  def send(self, to: str, subject: str, body: str) -> None:
+    key = (to, subject)
+    self.attempts[key] = self.attempts.get(key, 0) + 1
+    if to == "retry@example.com" and self.attempts[key] == 1:
+      raise TransientEmailError("try again")
+    if to == "bad@example.com":
+      raise PermanentEmailError("blocked")
+
+  def attempts_for(self, to: str, subject: str) -> int:
+    return self.attempts.get((to, subject), 0)
+
+class EmailDispatcher:
+  sender: FakeSender
+  templates: dict
+  max_attempts: int
+  seen_event_ids: set
+  sent_event_ids: list
+  dead_letter_event_ids: list
+
+  def __init__(self, sender: FakeSender, templates: dict, max_attempts: int) -> None
+  def handle_event(self, event: dict) -> str
+  def sent(self) -> list
+  def dead_letters(self) -> list
+
+def test():
+  templates = {
+    "signup": {"subject": "Welcome {name}", "body": "Hi {name}"},
+    "reset": {"subject": "Reset {name}", "body": "Code {code}"},
+  }
+  sender = FakeSender()
+  dispatcher = EmailDispatcher(sender, templates, 2)
+  print(dispatcher.handle_event({
+    "id": "e1", "type": "signup", "email": "ada@example.com", "payload": {"name": "Ada"}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e1", "type": "signup", "email": "ada@example.com", "payload": {"name": "Ada"}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e2", "type": "reset", "email": "retry@example.com", "payload": {"name": "Ada", "code": "123"}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e3", "type": "invoice", "email": "ada@example.com", "payload": {}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e4", "type": "signup", "email": "bad@example.com", "payload": {"name": "Bad"}
+  }))
+  print(dispatcher.sent())
+  print(dispatcher.dead_letters())
+  print(sender.attempts_for("retry@example.com", "Reset Ada"))`,
+  },
+  {
+    id: "kv-store",
+    label: "KV store",
+    code: `# In-memory key/value store with an injectable clock.
+# clock.now is an integer timestamp.
+# set stores string values. ttl is optional seconds from the current time.
+# A key expires when clock.now is greater than or equal to its expiration time.
+# begin starts a transaction; reads inside the transaction see staged writes/deletes.
+# rollback discards staged changes; commit applies them.
+# items returns sorted live (key, value) pairs.
+
+class Clock:
+  def __init__(self):
+    self.now = 0
+
+class KVStore:
+  clock: Clock
+  data: dict
+  transaction: dict
+
+  def __init__(self, clock: Clock) -> None
+  def set(self, key: str, value: str, ttl: int | None = None) -> None
+  def get(self, key: str) -> str | None
+  def delete(self, key: str) -> None
+  def begin(self) -> None
+  def rollback(self) -> None
+  def commit(self) -> None
+  def items(self) -> list
+
+def test():
+  clock = Clock()
+  store = KVStore(clock)
+  store.set("a", "1", ttl=10)
+  print(store.get("a"))
+  clock.now = 10
+  print(store.get("a"))
+  store.set("a", "1")
+  store.begin()
+  store.set("a", "2")
+  store.set("b", "3", ttl=5)
+  print(store.get("a"), store.get("b"))
+  store.rollback()
+  print(store.get("a"), store.get("b"))
+  store.begin()
+  store.delete("a")
+  store.set("c", "4")
+  store.commit()
+  print(store.get("a"), store.get("c"))
+  print(store.items())`,
+  },
 ];
 
 const seedCode = samples[0].code;
