@@ -5,6 +5,8 @@ import {
   completeSheet,
   hashCompletionInput,
   hashSnippet,
+  implementationBlockForTarget,
+  implementationTargetAtLine,
   lower,
   parse,
   renderImplementation,
@@ -1436,6 +1438,75 @@ User(name: str, active: bool = true):
         blockingDependencies: [],
       },
     ]);
+  });
+
+  it("finds implementation targets for complete functions and classes", () => {
+    const source = `class Counter:
+  def next(self) -> int:
+    return 1
+
+def main():
+  print(Counter().next())`;
+    const classTarget = implementationTargetAtLine(source, 2);
+    const functionTarget = implementationTargetAtLine(source, 5);
+
+    expect(classTarget).toEqual({
+      kind: "class",
+      name: "Counter",
+      line: 1,
+      endLine: 3,
+      source: `class Counter:
+  def next(self) -> int:
+    return 1`,
+    });
+    expect(functionTarget).toEqual({
+      kind: "function",
+      name: "main",
+      line: 5,
+      endLine: 6,
+      source: `def main():
+  print(Counter().next())`,
+    });
+  });
+
+  it("extracts the generated implementation for a clicked function with natural statements", () => {
+    const source = `def main():
+  \`print 4\`
+  \`print 1 + 2\`
+
+  foo = \`calculate the sum of all primes less than 50\`
+  print(foo)`;
+    const implementation = `def main():
+  print(4)
+  print(1 + 2)
+
+  foo = 328
+  print(foo)`;
+    const target = implementationTargetAtLine(source, 1);
+
+    expect(target?.name).toBe("main");
+    expect(target).not.toBeNull();
+    expect(implementationBlockForTarget(implementation, target!)).toBe(implementation);
+  });
+
+  it("extracts the generated implementation for a clicked class method", () => {
+    const source = `class Counter:
+  def next(self) -> int
+
+def main():
+  print(Counter().next())`;
+    const implementation = `class Counter:
+  def next(self) -> int:
+    return 1
+
+def main():
+  print(Counter().next())`;
+    const target = implementationTargetAtLine(source, 2);
+
+    expect(target?.kind).toBe("class");
+    expect(implementationBlockForTarget(implementation, target!)).toBe(`class Counter:
+  def next(self) -> int:
+    return 1`);
   });
 
   it("keeps completed cache entries after cancelling an in-progress compile", async () => {

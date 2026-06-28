@@ -5,10 +5,13 @@ import "monaco-editor/esm/vs/basic-languages/python/python.contribution";
 import {
   definitionReadiness,
   hashCompletionInput,
+  implementationBlockForTarget,
+  implementationTargetAtLine,
   parse,
   runnables,
   type DefinitionReadiness,
   type IncompleteSnippet,
+  type ImplementationTarget,
   type Runnable,
   type SnippetHash,
 } from "./codeSheet";
@@ -174,7 +177,7 @@ app.innerHTML = `
           </footer>
         </div>
         <pre id="implementation" class="output tab-panel" role="tabpanel" aria-labelledby="implementation-tab"></pre>
-        <section id="snippet-panel" class="snippet-panel" aria-label="Selected incomplete implementation">
+        <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
           <div
             id="snippet-resize-handle"
             class="snippet-resize-handle"
@@ -185,12 +188,12 @@ app.innerHTML = `
           ></div>
           <header class="snippet-panel-header">
             <div class="snippet-panel-title">
-              <p class="eyebrow">Incomplete Snippet</p>
+              <p class="eyebrow">Implementation Preview</p>
               <h2 id="snippet-title">No snippet selected</h2>
             </div>
             <span id="snippet-status" class="snippet-status">Idle</span>
           </header>
-          <pre id="snippet-preview" class="output snippet-preview">Click an incomplete definition in the worksheet.</pre>
+          <pre id="snippet-preview" class="output snippet-preview">Click a function, class, or incomplete snippet in the worksheet.</pre>
         </section>
       </section>
     </section>
@@ -236,11 +239,14 @@ let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
 let incompleteSnippetDecorations: string[] = [];
+let selectedDefinitionDecorations: string[] = [];
 let runnableStateByLine = new Map<number, RunnableState>();
 let incompleteSnippetsByLine = new Map<number, IncompleteSnippetTarget[]>();
 let incompleteSnippetByHash = new Map<SnippetHash, IncompleteSnippetTarget>();
 let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
 let selectedSnippetHash: SnippetHash | null = null;
+let selectedDefinitionTarget: ImplementationTarget | null = null;
+let latestImplementationSource = seedCode;
 
 type RunnableState = {
   name: Runnable;
@@ -320,6 +326,12 @@ editor.onMouseDown((event) => {
     const incompleteSnippet = incompleteSnippetForPosition(lineNumber, column);
     if (incompleteSnippet) {
       selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
+      return;
+    }
+
+    const definitionTarget = implementationTargetForLine(lineNumber);
+    if (definitionTarget) {
+      selectDefinitionImplementation(definitionTarget);
       return;
     }
   }
@@ -456,6 +468,8 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     runStatus.textContent = lastRunStatusText;
     runStatus.dataset.state = "ok";
     outputEl.textContent = result.stdout.length > 0 ? result.stdout.join("\n") : "(no output)";
+    latestImplementationSource = result.implementation;
+    renderSnippetPanel();
     sessionCapture.track(
       "run_completed",
       { runnable, stdout: result.stdout, implementation: result.implementation },
@@ -471,6 +485,8 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   runStatus.textContent = lastRunStatusText;
   runStatus.dataset.state = "error";
   outputEl.textContent = result.error;
+  latestImplementationSource = result.implementation;
+  renderSnippetPanel();
   sessionCapture.track(
     "run_failed",
     {
@@ -531,6 +547,7 @@ function scheduleCompilation(delayMs: number): void {
 
   compileController?.abort();
   compileController = null;
+  latestImplementationSource = source;
   setHighlightedPythonCode(implementationEl, source);
   refreshIncompleteSnippets(source);
   updateTypeCheckMarkers([]);
@@ -835,7 +852,9 @@ async function streamImplementation(source: string, version: number): Promise<vo
         (event.kind === "implementation" || event.kind === "compiled") &&
         typeof event.implementation === "string"
       ) {
+        latestImplementationSource = event.implementation;
         setHighlightedPythonCode(implementationEl, event.implementation);
+        renderSnippetPanel();
       }
 
       updateSnippetPreviewFromCompileEvent(event);
@@ -977,11 +996,18 @@ function refreshIncompleteSnippets(source: string): void {
   }, new Map<number, IncompleteSnippetTarget[]>());
   incompleteSnippetByHash = new Map(targets.map((target) => [target.hash, target]));
   snippetPreviewByHash = nextPreviewByHash;
+  selectedDefinitionTarget = refreshedDefinitionTarget(source);
 
-  if (selectedSnippetHash === null || !incompleteSnippetByHash.has(selectedSnippetHash)) {
+  if (
+    selectedDefinitionTarget === null &&
+    (selectedSnippetHash === null || !incompleteSnippetByHash.has(selectedSnippetHash))
+  ) {
     selectedSnippetHash = targets[0]?.hash ?? null;
+  } else if (selectedDefinitionTarget !== null) {
+    selectedSnippetHash = null;
   }
 
+  updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   renderSnippetPanel();
 }
@@ -991,7 +1017,9 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
     return;
   }
 
+  selectedDefinitionTarget = null;
   selectedSnippetHash = hash;
+  updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   renderSnippetPanel();
   sessionCapture.track("incomplete_snippet_selected", {
@@ -999,6 +1027,36 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
     source,
     label: incompleteSnippetByHash.get(hash)?.label ?? null,
   }, true);
+}
+
+function selectDefinitionImplementation(target: ImplementationTarget): void {
+  selectedDefinitionTarget = target;
+  selectedSnippetHash = null;
+  updateSelectedDefinitionDecorations();
+  updateIncompleteSnippetDecorations();
+  renderSnippetPanel();
+  sessionCapture.track("definition_implementation_selected", {
+    kind: target.kind,
+    name: target.name,
+    line: target.line,
+  }, true);
+}
+
+function refreshedDefinitionTarget(source: string): ImplementationTarget | null {
+  if (selectedDefinitionTarget === null) {
+    return null;
+  }
+
+  const refreshed = implementationTargetForLine(selectedDefinitionTarget.line, source);
+  if (
+    refreshed === null ||
+    refreshed.kind !== selectedDefinitionTarget.kind ||
+    refreshed.name !== selectedDefinitionTarget.name
+  ) {
+    return null;
+  }
+
+  return refreshed;
 }
 
 function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
@@ -1078,7 +1136,38 @@ function updateIncompleteSnippetDecorations(): void {
   );
 }
 
+function updateSelectedDefinitionDecorations(): void {
+  const target = selectedDefinitionTarget;
+  selectedDefinitionDecorations = editor.deltaDecorations(
+    selectedDefinitionDecorations,
+    target === null
+      ? []
+      : [{
+          range: new monaco.Range(target.line, 1, target.endLine, Number.MAX_SAFE_INTEGER),
+          options: {
+            isWholeLine: true,
+            className: "definition-implementation-line-selected",
+            hoverMessage: {
+              value: `Showing generated implementation for ${target.name}.`,
+            },
+          },
+        }],
+  );
+}
+
 function renderSnippetPanel(): void {
+  if (selectedDefinitionTarget !== null) {
+    const text =
+      implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
+      selectedDefinitionTarget.source;
+
+    snippetTitle.textContent = selectedDefinitionTarget.name;
+    snippetStatus.textContent = "Implementation";
+    snippetStatus.dataset.state = "complete";
+    setHighlightedPythonCode(snippetPreview, text);
+    return;
+  }
+
   const target = selectedSnippetHash === null
     ? null
     : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
@@ -1087,7 +1176,7 @@ function renderSnippetPanel(): void {
     snippetTitle.textContent = "No snippet selected";
     snippetStatus.textContent = "Idle";
     snippetStatus.dataset.state = "";
-    snippetPreview.textContent = "Click an incomplete definition in the worksheet.";
+    snippetPreview.textContent = "Click a function, class, or incomplete snippet in the worksheet.";
     return;
   }
 
@@ -1157,6 +1246,17 @@ function incompleteSnippetForPosition(
   });
 
   return exact ?? snippets[0] ?? null;
+}
+
+function implementationTargetForLine(
+  lineNumber: number,
+  source = editor.getValue(),
+): ImplementationTarget | null {
+  try {
+    return implementationTargetAtLine(source, lineNumber);
+  } catch {
+    return null;
+  }
 }
 
 function firstLineLength(source: string): number {

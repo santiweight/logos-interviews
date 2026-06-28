@@ -77,6 +77,14 @@ export type DefinitionReadiness = {
   blockingDependencies: string[];
 };
 
+export type ImplementationTarget = {
+  kind: "function" | "class";
+  name: string;
+  line: number;
+  endLine: number;
+  source: string;
+};
+
 export type CompilationIR = {
   parsed: ParsedSheet;
   lowered: LoweredCodeSheet;
@@ -464,6 +472,55 @@ export function definitionReadiness(
   });
 }
 
+export function implementationTargetAtLine(
+  codeSheet: CodeSheet,
+  lineNumber: number,
+): ImplementationTarget | null {
+  const source = normalizeNewlines(codeSheet);
+  const lines = source.split("\n");
+  const targets: ImplementationTarget[] = [
+    ...discoverClassDecls(lines).map((decl) => implementationTargetFromBlock(
+      "class",
+      decl.name,
+      decl.line,
+      decl.snippet,
+    )),
+    ...discoverTopLevelFunctionBlocks(source).map((decl) => implementationTargetFromBlock(
+      "function",
+      decl.name,
+      decl.line,
+      decl.source,
+    )),
+  ].sort((left, right) => {
+    if (left.line !== right.line) {
+      return left.line - right.line;
+    }
+
+    return right.endLine - left.endLine;
+  });
+
+  return targets.find((target) => (
+    lineNumber >= target.line && lineNumber <= target.endLine
+  )) ?? null;
+}
+
+export function implementationBlockForTarget(
+  implementation: CodeSheet,
+  target: ImplementationTarget,
+): string | null {
+  const source = normalizeNewlines(implementation);
+
+  if (target.kind === "class") {
+    return discoverClassDecls(source.split("\n"))
+      .find((decl) => decl.name === target.name)
+      ?.snippet ?? null;
+  }
+
+  return discoverTopLevelFunctionBlocks(source)
+    .find((decl) => decl.name === target.name)
+    ?.source ?? null;
+}
+
 export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
   return hashText("snippet", incompleteCodeSnippet);
 }
@@ -639,6 +696,21 @@ function referencedKnownSymbols(
   }
 
   return Array.from(result).sort();
+}
+
+function implementationTargetFromBlock(
+  kind: ImplementationTarget["kind"],
+  name: string,
+  line: number,
+  source: string,
+): ImplementationTarget {
+  return {
+    kind,
+    name,
+    line,
+    endLine: line + source.split("\n").length - 1,
+    source,
+  };
 }
 
 function dependencyContext(parsed: ParsedSheet, snippet: string): string {

@@ -959,6 +959,11 @@ h2 {
   outline: 1px solid rgba(50, 103, 214, 0.45);
 }
 
+.monaco-editor .definition-implementation-line-selected {
+  background: rgba(50, 103, 214, 0.1);
+  box-shadow: inset 3px 0 0 #3267d6;
+}
+
 .monaco-editor .not-ready-glyph-dot::before {
   display: inline-block;
   width: 7px;
