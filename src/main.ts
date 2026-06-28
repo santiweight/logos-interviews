@@ -1388,7 +1388,7 @@ function setHighlightedPythonCode(element: HTMLPreElement, source: string): void
   void monaco.editor.colorizeElement(colorized, {
     mimeType: "text/x-python",
     tabSize: 2,
-    theme: "vs-dark",
+    theme: "interview-light",
   }).then(() => {
     if (element.dataset.highlightVersion === String(version)) {
       element.innerHTML = colorized.innerHTML;

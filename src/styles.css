@@ -807,10 +807,7 @@ h2 {
   margin: 0;
   border: 0;
   overflow: auto;
-  background:
-    linear-gradient(rgba(14, 21, 37, 0.035) 1px, transparent 1px),
-    var(--paper);
-  background-size: 100% 22px;
+  background: var(--paper);
   color: var(--ink);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 0.84rem;
