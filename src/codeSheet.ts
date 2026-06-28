@@ -974,13 +974,15 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
   const source = normalizeNewlines(codeSheet);
   const lines = source.split("\n");
   const lineStarts = lineStartOffsets(source);
+  const naturalSnippets = discoverNaturalSnippets(source);
+  const naturalRanges = naturalSnippets.flatMap((snippet) => snippet.range ?? []);
   const snippets: IncompleteSnippet[] = [];
   const coveredLines = new Set<number>();
   const coveredRanges: SourceRange[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    if (!isCompletableClassHeader(line)) {
+    if (lineOverlapsRanges(lineStarts, lines, index, naturalRanges) || !isCompletableClassHeader(line)) {
       continue;
     }
 
@@ -1027,7 +1029,11 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
   }
 
   for (let index = 0; index < lines.length; index += 1) {
-    if (coveredLines.has(index + 1) || !isIncompleteTopLevelFunction(lines[index])) {
+    if (
+      coveredLines.has(index + 1) ||
+      lineOverlapsRanges(lineStarts, lines, index, naturalRanges) ||
+      !isIncompleteTopLevelFunction(lines[index])
+    ) {
       continue;
     }
 
@@ -1036,6 +1042,7 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
     while (
       end < lines.length &&
       !coveredLines.has(end + 1) &&
+      !lineOverlapsRanges(lineStarts, lines, end, naturalRanges) &&
       isIncompleteTopLevelFunction(lines[end])
     ) {
       end += 1;
@@ -1056,7 +1063,7 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
     index = end - 1;
   }
 
-  for (const snippet of discoverNaturalSnippets(source)) {
+  for (const snippet of naturalSnippets) {
     if (!coveredRanges.some((range) => rangesOverlap(range, snippet.range))) {
       snippets.push(snippet);
     }
@@ -1081,8 +1088,18 @@ function lowerSurfaceSyntax(source: string): {
   const output: string[] = [];
   let needsDataclass = false;
   let recordBlockIndent: number | null = null;
+  let inFence = false;
 
   for (const line of source.split("\n")) {
+    const fenceCount = fencedBacktickCount(line);
+    if (inFence || fenceCount > 0) {
+      output.push(line);
+      if (fenceCount % 2 === 1) {
+        inFence = !inFence;
+      }
+      continue;
+    }
+
     if (recordBlockIndent !== null && line.trim().length > 0 && indentWidth(line) <= recordBlockIndent) {
       recordBlockIndent = null;
     }
@@ -1294,6 +1311,28 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
       break;
     }
 
+    if (source.startsWith("```", start)) {
+      const end = source.indexOf("```", start + 3);
+      if (end < 0) {
+        break;
+      }
+
+      const inner = source.slice(start + 3, end).trim();
+      if (inner.length > 0) {
+        const line = lineForOffset(lineStarts, start);
+        const lineStart = lineStarts[line - 1] ?? 0;
+        snippets.push(snippetWithRange({
+          kind: "natural",
+          line,
+          column: start - lineStart + 1,
+          snippet: source.slice(start, end + 3),
+        }, { start, end: end + 3 }));
+      }
+
+      index = end + 3;
+      continue;
+    }
+
     const end = source.indexOf("`", start + 1);
     if (end < 0) {
       break;
@@ -1315,6 +1354,22 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
   }
 
   return snippets;
+}
+
+function fencedBacktickCount(line: string): number {
+  return line.match(/```/g)?.length ?? 0;
+}
+
+function lineOverlapsRanges(
+  lineStarts: number[],
+  lines: string[],
+  index: number,
+  ranges: SourceRange[],
+): boolean {
+  const start = lineStarts[index] ?? 0;
+  const end = start + lines[index].length;
+  const lineRange = { start, end: end === start ? end + 1 : end };
+  return ranges.some((range) => rangesOverlap(lineRange, range));
 }
 
 function snippetWithRange(snippet: IncompleteSnippet, range: SourceRange): IncompleteSnippet {

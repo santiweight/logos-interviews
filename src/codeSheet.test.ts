@@ -1298,6 +1298,65 @@ for i in range(3):
     expect(result.stdout).toHaveLength(33);
   });
 
+  it("supports fenced natural-language snippets", async () => {
+    const cache: CodeCache = new Map();
+    const calls: string[] = [];
+    const sheet = `def test():
+  total = \`\`\`
+add one and two
+then multiply by three
+\`\`\`
+  \`\`\`
+print the total
+on its own line
+\`\`\``;
+
+    const completed = await runCodeSheet(sheet, "test", {
+      cache,
+      complete(prompt) {
+        calls.push(prompt);
+        if (prompt.includes("add one and two")) {
+          return "(1 + 2) * 3";
+        }
+
+        if (prompt.includes("print the total")) {
+          return "print(total)";
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+    });
+
+    expect(simplifyRunResult(completed)).toEqual({ ok: true, stdout: ["9"] });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain(`\`\`\`
+add one and two
+then multiply by three
+\`\`\``);
+    expect(calls[1]).toContain(`\`\`\`
+print the total
+on its own line
+\`\`\``);
+    expect(Array.from(cache.values())).toEqual(["(1 + 2) * 3", "print(total)"]);
+  });
+
+  it("does not lower code-like text inside fenced natural-language snippets", async () => {
+    const sheet = `def test():
+  \`\`\`
+User(name: str, active: bool = true):
+  function label(self) -> str
+\`\`\``;
+    const parsed = parse(sheet);
+    const lowered = lower(parsed).source;
+
+    expect(parsed.incompleteSnippets.map((snippet) => snippet.kind)).toEqual(["natural"]);
+    expect(parsed.incompleteSnippets[0]?.snippet).toContain("function label(self) -> str");
+    expect(lowered).toContain("User(name: str, active: bool = true):");
+    expect(lowered).toContain("function label(self) -> str");
+    expect(lowered).not.toContain("@dataclass");
+    expect(lowered).not.toContain("def label(self) -> str");
+  });
+
   it("models readiness through incomplete definitions and dependencies", async () => {
     const cache: CodeCache = new Map();
     const parsed = parse(sheet);
