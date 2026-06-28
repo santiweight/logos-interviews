@@ -76,40 +76,25 @@ textarea:disabled {
 
 .brand-mark {
   display: inline-flex;
-  width: 76px;
+  width: auto;
   height: 30px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: flex-start;
-  border: 1px solid #fe9c6c;
-  border-radius: 5px;
-  background: var(--accent-soft);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
   cursor: pointer;
-  padding: 0 4px;
-}
-
-.floating-logo {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 30;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.76),
-    0 8px 18px rgba(14, 21, 37, 0.1);
-}
-
-.floating-logo:hover {
-  border-color: var(--accent);
-  background: #feccb3;
+  padding: 0;
+  text-decoration: none;
 }
 
 .logos-wordmark {
   display: block;
-  width: 72px;
-  height: auto;
-  max-height: 24px;
-  object-fit: contain;
-  object-position: left center;
+  font-size: 1.34rem;
+  font-weight: 540;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 .sample-menu,
@@ -332,29 +317,18 @@ textarea:disabled {
   padding: 0;
 }
 
-.assistant-mark {
+.lambda-mark {
   display: block;
-  width: 17px;
-  height: 17px;
   flex: 0 0 auto;
-  fill: currentColor;
+  color: currentColor;
+  font-size: 1.34rem;
+  font-weight: 540;
+  line-height: 1;
 }
 
 .agent-toggle-button .logos-wordmark {
   width: 72px;
   max-height: 24px;
-}
-
-.toggle-chevron {
-  color: var(--muted);
-  font-size: 1.05rem;
-  font-weight: 500;
-  line-height: 1;
-}
-
-.agent-collapsed .toggle-chevron {
-  margin-left: 0;
-  transform: translateY(8px);
 }
 
 .agent-content {
@@ -963,10 +937,7 @@ h2 {
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background:
-    linear-gradient(rgba(14, 21, 37, 0.035) 1px, transparent 1px),
-    var(--paper);
-  background-size: 100% 24px;
+  background: var(--paper);
   overflow: auto;
   padding: 7px;
 }
@@ -1050,29 +1021,23 @@ h2 {
 }
 
 .monaco-editor .incomplete-snippet-line {
-  background: rgba(245, 158, 11, 0.08);
   cursor: pointer;
 }
 
 .monaco-editor .incomplete-snippet-line-selected {
-  background: rgba(236, 78, 2, 0.1);
-  box-shadow: inset 3px 0 0 var(--accent);
+  cursor: pointer;
 }
 
 .monaco-editor .natural-snippet-inline {
-  border-radius: 3px;
-  background: rgba(245, 158, 11, 0.16);
   cursor: pointer;
 }
 
 .monaco-editor .natural-snippet-inline-selected {
-  background: rgba(236, 78, 2, 0.18);
-  outline: 1px solid rgba(236, 78, 2, 0.42);
+  cursor: pointer;
 }
 
 .monaco-editor .definition-implementation-line-selected {
-  background: rgba(236, 78, 2, 0.1);
-  box-shadow: inset 3px 0 0 var(--accent);
+  cursor: pointer;
 }
 
 .monaco-editor .not-ready-glyph-dot::before {
@@ -1125,10 +1090,6 @@ h2 {
     flex-direction: row;
   }
 
-  .agent-collapsed .toggle-chevron {
-    margin-left: 6px;
-    transform: none;
-  }
 }
 
 @media (max-width: 620px) {

@@ -100,11 +100,7 @@ let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
 
 const app = requiredQuery<HTMLDivElement>("#app");
-const assistantMark = `
-  <svg class="assistant-mark" viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M16 3.8l2.9 8.5 8.9 3.7-8.9 3.7L16 28.2l-2.9-8.5L4.2 16l8.9-3.7z" />
-  </svg>
-`;
+const lambdaMark = `<span class="lambda-mark" aria-hidden="true">λ</span>`;
 const sendIcon = `
   <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true">
     <path d="M10 3.4 5.4 8l1.1 1.1 2.7-2.7v10.2h1.6V6.4l2.7 2.7L14.6 8z" />
@@ -122,7 +118,7 @@ const workspaceMenuIcon = `
     <circle cx="12" cy="12.5" r="1.4" />
   </svg>
 `;
-const logosWordmark = `<img class="logos-wordmark" src="/logos-wordmark.png" alt="" />`;
+const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
 
 function renderSampleGroup(group: SampleGroup): string {
   return `
@@ -145,26 +141,15 @@ function renderSampleGroup(group: SampleGroup): string {
 
 app.innerHTML = `
   <section class="app-frame" aria-label="Spreadsheet interview workspace">
-    <button id="agent-logo-toggle" class="brand-mark floating-logo" type="button" aria-label="Open assistant" title="Open assistant">
-      ${logosWordmark}
-    </button>
-
     <section id="shell" class="shell agent-collapsed">
       <aside id="agent-sidebar" class="agent-sidebar">
-        <button id="agent-toggle" class="agent-toggle-button" type="button" aria-label="Open assistant" aria-expanded="false" aria-controls="agent-content">
-          ${assistantMark}
-          <span class="toggle-chevron" aria-hidden="true">›</span>
+        <button id="agent-toggle" class="agent-toggle-button" type="button" aria-label="Open edit panel" aria-expanded="false" aria-controls="agent-content">
+          ${lambdaMark}
         </button>
         <div id="agent-content" class="agent-content">
-          <header class="agent-header">
-            <div>
-              <p class="eyebrow">Sheet Agent</p>
-              <h2>Assistant</h2>
-            </div>
-          </header>
           <div id="agent-log" class="agent-log" aria-live="polite"></div>
           <form id="agent-form" class="agent-form">
-            <textarea id="agent-input" class="agent-input" rows="3" placeholder="Ask the agent to change or explain this sheet"></textarea>
+            <textarea id="agent-input" class="agent-input" rows="3" placeholder="Describe a change"></textarea>
             <button id="agent-send" class="send-button" type="submit" aria-label="Send message" title="Send">
               ${sendIcon}
             </button>
@@ -207,10 +192,7 @@ app.innerHTML = `
             aria-label="Resize incomplete implementation panel"
             tabindex="0"
           ></div>
-          <header class="snippet-panel-header">
-            <h2>Agent Code</h2>
-          </header>
-          <pre id="snippet-preview" class="output snippet-preview">Click a function, class, or incomplete snippet in the worksheet.</pre>
+          <pre id="snippet-preview" class="output snippet-preview"></pre>
         </section>
       </section>
 
@@ -255,7 +237,6 @@ const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
-const agentLogoToggle = requiredQuery<HTMLButtonElement>("#agent-logo-toggle");
 const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
 const agentLog = requiredQuery<HTMLDivElement>("#agent-log");
 const agentForm = requiredQuery<HTMLFormElement>("#agent-form");
@@ -450,10 +431,6 @@ agentToggle.addEventListener("click", () => {
   const expanded = !agentExpanded;
   setAgentExpanded(expanded);
   sessionCapture.track("agent_toggle", { expanded }, true);
-});
-agentLogoToggle.addEventListener("click", () => {
-  setAgentExpanded(true);
-  sessionCapture.track("agent_logo_opened", undefined, true);
 });
 agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1351,7 +1328,7 @@ function renderSnippetPanel(): void {
     : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
 
   if (!target) {
-    snippetPreview.textContent = "Click a function, class, or incomplete snippet in the worksheet.";
+    snippetPreview.textContent = "";
     return;
   }
 
@@ -1580,27 +1557,14 @@ function updateToolbarRunState(runnablesState: Array<RunnableState & { line: num
 }
 
 function updateTypeCheckMarkers(diagnostics: TypeCheckDiagnostic[]): void {
+  void diagnostics;
+
   const model = editor.getModel();
   if (!model) {
     return;
   }
 
-  monaco.editor.setModelMarkers(
-    model,
-    "logos-typecheck",
-    diagnostics.map((diagnostic) => ({
-      startLineNumber: diagnostic.line,
-      startColumn: diagnostic.column,
-      endLineNumber: diagnostic.endLine,
-      endColumn: diagnostic.endColumn,
-      severity:
-        diagnostic.severity === "warning"
-          ? monaco.MarkerSeverity.Warning
-          : monaco.MarkerSeverity.Error,
-      message: diagnostic.message,
-      source: "Logos type check",
-    })),
-  );
+  monaco.editor.setModelMarkers(model, "logos-typecheck", []);
 }
 
 function firstRunnable(source: string): Runnable | null {
@@ -2159,7 +2123,7 @@ async function runAgentTurn(): Promise<void> {
     editor.setValue(result.sheet);
     agentMessages = [
       ...agentMessages,
-      { role: "assistant", content: "Applied the updated sheet to the editor." },
+      { role: "assistant", content: "Applied the updated sheet." },
     ];
   }
 
@@ -2207,10 +2171,10 @@ async function askAgent(
   });
 
   if (!response.ok || typeof payload.reply !== "string") {
-    throw new Error(payload.error ?? "Agent request failed");
+    throw new Error(payload.error ?? "Request failed");
   }
   if (payload.sheet !== null && typeof payload.sheet !== "string") {
-    throw new Error("Agent returned an invalid sheet");
+    throw new Error("Response returned an invalid sheet");
   }
 
   return { reply: payload.reply, sheet: payload.sheet };
@@ -2218,7 +2182,7 @@ async function askAgent(
 
 function renderAgentLog(status?: string): void {
   if (agentMessages.length === 0 && !status) {
-    agentLog.innerHTML = `<div class="agent-empty">No agent messages yet.</div>`;
+    agentLog.innerHTML = "";
     return;
   }
 
@@ -2226,7 +2190,6 @@ function renderAgentLog(status?: string): void {
     ...agentMessages.map((message) => {
       const roleClass = message.role === "user" ? "agent-message-user" : "agent-message-assistant";
       return `<div class="agent-message ${roleClass}">
-        <div class="agent-message-role">${escapeHtml(message.role)}</div>
         <div class="agent-message-content">${escapeHtml(message.content)}</div>
       </div>`;
     }),
@@ -2239,8 +2202,8 @@ function setAgentExpanded(expanded: boolean): void {
   agentExpanded = expanded;
   shell.classList.toggle("agent-collapsed", !expanded);
   agentToggle.setAttribute("aria-expanded", String(expanded));
-  agentToggle.setAttribute("aria-label", expanded ? "Close assistant" : "Open assistant");
-  agentToggle.innerHTML = `${expanded ? logosWordmark : assistantMark}<span class="toggle-chevron" aria-hidden="true">${expanded ? "‹" : "›"}</span>`;
+  agentToggle.setAttribute("aria-label", expanded ? "Close edit panel" : "Open edit panel");
+  agentToggle.innerHTML = expanded ? logosWordmark : lambdaMark;
 }
 
 function escapeHtml(source: string): string {
