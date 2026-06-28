@@ -13,6 +13,13 @@ import {
   type SnippetHash,
 } from "./codeSheet";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
+import {
+  defaultProjectIds,
+  sampleGroups,
+  samples,
+  type SampleGroup,
+  type SampleProgram,
+} from "./samples";
 import type { AgentChatMessage } from "./sheetAgent";
 import type { TypeCheckDiagnostic } from "./typeCheck";
 
@@ -20,12 +27,6 @@ globalThis.MonacoEnvironment = {
   getWorker() {
     return new editorWorker();
   },
-};
-
-type SampleProgram = {
-  id: string;
-  label: string;
-  code: string;
 };
 
 type SourceTab = {
@@ -44,305 +45,6 @@ const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
-const defaultProjectIds = ["multi", "natural-language", "spreadsheet"];
-
-const samples: SampleProgram[] = [
-  {
-    id: "add",
-    label: "Incomplete add",
-    code: `def add(x: int, y: int) -> int
-
-def test():
-  print(add(1,2))`,
-  },
-  {
-    id: "multi",
-    label: "Add and multiply",
-    code: `def add(x: int, y: int) -> int
-
-def mul(x: int, y: int) -> int
-
-def test():
-  print(add(1,2))
-  print(mul(2,3))`,
-  },
-  {
-    id: "natural-language",
-    label: "Natural language",
-    code: `def test():
-  subtotal = \`add 19 and 23\`
-  tax = \`calculate 8 percent of subtotal\`
-  print(subtotal)
-  print(round(tax, 2))
-  print(round(subtotal + tax, 2))`,
-  },
-  {
-    id: "spreadsheet",
-    label: "Spreadsheet class",
-    code: `class Spreadsheet:
-  cells: [[int]]
-
-  def get(self, col: str, row: int) -> int | None
-  def set(self, col: str, row: int, val: int) -> None
-
-def test():
-  sheet = Spreadsheet()
-  print(sheet.get("A", 1))
-  sheet.set("A", 1, 7)
-  print(sheet.get("A", 1))`,
-  },
-  {
-    id: "sum-types",
-    label: "Dataclass sum types",
-    code: `type Op = Mul | Div | Add | Sub
-type Expr = Val(int) | BinOp(Op, Expr, Expr)
-
-def test():
-  print(Val(7))`,
-  },
-  {
-    id: "calculated-spreadsheet",
-    label: "Calculated spreadsheet",
-    code: `# Spreadsheet cell storage uses A1-style addressing.
-# Treat [[T]] as a nested mapping keyed by column then row:
-# cells["A"][1] is A1, cells["B"][2] is B2.
-# Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
-# If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
-
-type Operator = Mul | Div | Add | Sub
-type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
-type EvalError = RecursiveError(list) | DivByZero
-
-class Spreadsheet:
-  cells: [[Expr]]
-
-  def __init__(self) -> None
-  def get(self, col: str, row: int) -> Expr | None
-  def set(self, col: str, row: int, expr: Expr) -> None
-  def eval(self) -> SpreadsheetResult
-
-class SpreadsheetResult:
-  sheet: Spreadsheet
-  cache: [[int]]
-
-  def __init__(self, sheet: Spreadsheet) -> None
-  def eval(self, col: str, row: int) -> int | EvalError | None
-  def eval_inner(self, stack: list, col: str, row: int) -> int | EvalError | None
-
-def test():
-  sheet = Spreadsheet()
-  print(sheet.get("A", 1))
-  sheet.set("A", 1, Val(7))
-  print(sheet.get("A", 1))
-  sheet.set("B", 1, BinOp(Add(), Val(2), Val(3)))
-  print(sheet.eval().eval("B", 1))
-  sheet.set("C", 1, BinOp(Mul(), BinOp(Add(), Cell("B", 1), Cell("A", 1)), Val(4)))
-  print(sheet.eval().eval("C", 1))`,
-  },
-  {
-    id: "parsed-spreadsheet",
-    label: "Parsed spreadsheet",
-    code: `# Spreadsheet cell storage uses A1-style addressing.
-# Treat [[T]] as a nested mapping keyed by column then row:
-# cells["A"][1] is A1, cells["B"][2] is B2.
-# Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
-# If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
-# c("A1") returns ("A", 1).
-
-type Operator = Mul | Div | Add | Sub
-type Expr = Val(int) | BinOp(Operator, Expr, Expr) | Cell(str, int)
-type EvalError = RecursiveError(list) | DivByZero
-type CellAddress = (str, int)
-
-def parse_expr(str) -> Expr | None
-def c(str) -> CellAddress
-
-class Spreadsheet:
-  cells: [[Expr]]
-
-  def __init__(self) -> None
-  def get(self, cell: CellAddress) -> Expr | None
-  def set(self, cell: CellAddress, expr: str) -> None
-  def eval(self) -> SpreadsheetResult
-
-class SpreadsheetResult:
-  sheet: Spreadsheet
-  cache: [[int]]
-
-  def __init__(self, sheet: Spreadsheet) -> None
-  def eval(self, cell: CellAddress) -> int | EvalError | None
-  def eval_inner(self, stack: list, cell: CellAddress) -> int | EvalError | None
-
-def test():
-  sheet = Spreadsheet()
-  print(sheet.get(c("A1")))
-  sheet.set(c("A1"), "7")
-  print(sheet.get(c("A1")))
-  sheet.set(c("B1"), "2 + 3")
-  print(sheet.eval().eval(c("B1")))
-  sheet.set(c("C1"), "(B1 + A1) * 4)")
-  print(sheet.eval().eval(c("C1")))`,
-  },
-  {
-    id: "parking-lot",
-    label: "Parking lot",
-    code: `# Parking lot spots and vehicles have sizes: small < medium < large.
-# A vehicle must be assigned the smallest available spot that fits it.
-# Vehicle types: motorcycle fits small, car fits medium, truck fits large.
-# park returns an opaque ticket id or None when no spot fits.
-# unpark returns the vehicle id for a valid active ticket, otherwise None.
-# active_vehicle_ids returns sorted active vehicle ids.
-
-class ParkingLot:
-  layout: dict
-  occupied: dict
-  tickets: dict
-  next_ticket_id: int
-
-  def __init__(self, layout: dict) -> None
-  def park(self, vehicle_id: str, vehicle_type: str) -> str | None
-  def unpark(self, ticket_id: str) -> str | None
-  def available(self, spot_size: str) -> int
-  def active_vehicle_ids(self) -> list
-
-def test():
-  lot = ParkingLot({"small": 1, "medium": 1, "large": 1})
-  print(lot.available("medium"))
-  motorcycle_ticket = lot.park("m1", "motorcycle")
-  car_ticket = lot.park("c1", "car")
-  truck_ticket = lot.park("t1", "truck")
-  print(motorcycle_ticket is not None, car_ticket is not None, truck_ticket is not None)
-  print(lot.available("small"), lot.available("medium"), lot.available("large"))
-  print(lot.park("c2", "car"))
-  print(lot.unpark(car_ticket))
-  print(lot.available("medium"))
-  replacement_ticket = lot.park("c2", "car")
-  print(replacement_ticket is not None and replacement_ticket != car_ticket)
-  print(lot.active_vehicle_ids())`,
-  },
-  {
-    id: "email-dispatcher",
-    label: "Email dispatcher",
-    code: `# Structured events are dicts with id, type, email, and payload fields.
-# templates maps event type to subject/body format strings.
-# handle_event returns "sent", "duplicate", "ignored", or "dead_letter".
-# Duplicate event ids are never sent twice.
-# Unknown event types are ignored.
-# TransientEmailError should be retried up to max_attempts.
-# PermanentEmailError should go directly to dead letters.
-# sent and dead_letters return event ids in the order they reach that state.
-
-class TransientEmailError(Exception):
-  pass
-
-class PermanentEmailError(Exception):
-  pass
-
-class FakeSender:
-  def __init__(self):
-    self.attempts = {}
-
-  def send(self, to: str, subject: str, body: str) -> None:
-    key = (to, subject)
-    self.attempts[key] = self.attempts.get(key, 0) + 1
-    if to == "retry@example.com" and self.attempts[key] == 1:
-      raise TransientEmailError("try again")
-    if to == "bad@example.com":
-      raise PermanentEmailError("blocked")
-
-  def attempts_for(self, to: str, subject: str) -> int:
-    return self.attempts.get((to, subject), 0)
-
-class EmailDispatcher:
-  sender: FakeSender
-  templates: dict
-  max_attempts: int
-  seen_event_ids: set
-  sent_event_ids: list
-  dead_letter_event_ids: list
-
-  def __init__(self, sender: FakeSender, templates: dict, max_attempts: int) -> None
-  def handle_event(self, event: dict) -> str
-  def sent(self) -> list
-  def dead_letters(self) -> list
-
-def test():
-  templates = {
-    "signup": {"subject": "Welcome {name}", "body": "Hi {name}"},
-    "reset": {"subject": "Reset {name}", "body": "Code {code}"},
-  }
-  sender = FakeSender()
-  dispatcher = EmailDispatcher(sender, templates, 2)
-  print(dispatcher.handle_event({
-    "id": "e1", "type": "signup", "email": "ada@example.com", "payload": {"name": "Ada"}
-  }))
-  print(dispatcher.handle_event({
-    "id": "e1", "type": "signup", "email": "ada@example.com", "payload": {"name": "Ada"}
-  }))
-  print(dispatcher.handle_event({
-    "id": "e2", "type": "reset", "email": "retry@example.com", "payload": {"name": "Ada", "code": "123"}
-  }))
-  print(dispatcher.handle_event({
-    "id": "e3", "type": "invoice", "email": "ada@example.com", "payload": {}
-  }))
-  print(dispatcher.handle_event({
-    "id": "e4", "type": "signup", "email": "bad@example.com", "payload": {"name": "Bad"}
-  }))
-  print(dispatcher.sent())
-  print(dispatcher.dead_letters())
-  print(sender.attempts_for("retry@example.com", "Reset Ada"))`,
-  },
-  {
-    id: "kv-store",
-    label: "KV store",
-    code: `# In-memory key/value store with an injectable clock.
-# clock.now is an integer timestamp.
-# set stores string values. ttl is optional seconds from the current time.
-# A key expires when clock.now is greater than or equal to its expiration time.
-# begin starts a transaction; reads inside the transaction see staged writes/deletes.
-# rollback discards staged changes; commit applies them.
-# items returns sorted live (key, value) pairs.
-
-class Clock:
-  def __init__(self):
-    self.now = 0
-
-class KVStore:
-  clock: Clock
-  data: dict
-  transaction: dict
-
-  def __init__(self, clock: Clock) -> None
-  def set(self, key: str, value: str, ttl: int | None = None) -> None
-  def get(self, key: str) -> str | None
-  def delete(self, key: str) -> None
-  def begin(self) -> None
-  def rollback(self) -> None
-  def commit(self) -> None
-  def items(self) -> list
-
-def test():
-  clock = Clock()
-  store = KVStore(clock)
-  store.set("a", "1", ttl=10)
-  print(store.get("a"))
-  clock.now = 10
-  print(store.get("a"))
-  store.set("a", "1")
-  store.begin()
-  store.set("a", "2")
-  store.set("b", "3", ttl=5)
-  print(store.get("a"), store.get("b"))
-  store.rollback()
-  print(store.get("a"), store.get("b"))
-  store.begin()
-  store.delete("a")
-  store.set("c", "4")
-  store.commit()
-  print(store.get("a"), store.get("c"))
-  print(store.items())`,
-  },
-];
 
 const initialSourceTabState = defaultSourceTabState();
 let sourceTabs = initialSourceTabState.tabs;
@@ -371,6 +73,22 @@ const menuIcon = `
   </svg>
 `;
 
+function renderSampleGroup(group: SampleGroup): string {
+  return `
+    <div class="sample-menu-group">
+      <div class="sample-menu-group-title">${group.label}</div>
+      <div class="sample-menu-list">
+        ${group.samples
+          .map(
+            (sample) =>
+              `<button class="menu-item sample-menu-item" type="button" role="menuitem" data-sample-id="${sample.id}">${sample.label}</button>`,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
 app.innerHTML = `
   <section class="app-frame" aria-label="Spreadsheet interview workspace">
     <header class="app-header">
@@ -385,14 +103,7 @@ app.innerHTML = `
           <div class="menu-popover" role="menu">
             <div class="menu-section">
               <div class="menu-section-title">Samples</div>
-              <div class="sample-menu-list">
-                ${samples
-                  .map(
-                    (sample) =>
-                      `<button class="menu-item sample-menu-item" type="button" role="menuitem" data-sample-id="${sample.id}">${sample.label}</button>`,
-                  )
-                  .join("")}
-              </div>
+              ${sampleGroups.map(renderSampleGroup).join("")}
             </div>
             <div class="menu-separator" aria-hidden="true"></div>
             <button id="clear-cache-button" class="menu-item" type="button" role="menuitem">

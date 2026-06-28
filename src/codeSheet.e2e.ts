@@ -7,6 +7,7 @@ import {
   type Runnable,
 } from "./codeSheet";
 import { runCodeSheet, type RunResult } from "./codeSheetRunner";
+import { sampleEvalCases } from "./samples";
 
 type E2ECase = {
   name: string;
@@ -388,6 +389,8 @@ def test():
   },
 ];
 
+const allCases: E2ECase[] = [...cases, ...sampleEvalCases];
+
 const describeIfAnthropicKey = process.env.ANTHROPIC_API_KEY
   ? describe
   : describe.skip;
@@ -396,7 +399,7 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
   it(
     "detects runnables for every LLM case",
     () => {
-      for (const testCase of cases) {
+      for (const testCase of allCases) {
         expect(runnables(testCase.sheet), testCase.name).toEqual([
           { line: expect.any(Number), name: testCase.runnable },
         ]);
@@ -409,7 +412,7 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
     "succeeds in every repeated full-pipeline run",
     async () => {
       const summaries = await Promise.all(
-        cases.map(async (testCase) => {
+        allCases.map(async (testCase) => {
           const results = await Promise.all(
             Array.from({ length: attempts }, async (_, index) => {
               const result = await runCodeSheet(testCase.sheet, testCase.runnable, {

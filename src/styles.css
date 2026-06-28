@@ -154,6 +154,17 @@ textarea:disabled {
   gap: 1px;
 }
 
+.sample-menu-group + .sample-menu-group {
+  margin-top: 5px;
+}
+
+.sample-menu-group-title {
+  padding: 4px 8px 2px;
+  color: #7a8290;
+  font-size: 0.72rem;
+  font-weight: 720;
+}
+
 .menu-item {
   display: flex;
   align-items: center;
