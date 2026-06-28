@@ -679,6 +679,10 @@ h2 {
   background: #fff7df;
 }
 
+.status:empty {
+  display: none;
+}
+
 .editor {
   flex: 1;
   min-height: 0;

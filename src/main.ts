@@ -226,14 +226,11 @@ app.innerHTML = `
       <section id="output-pane" class="output-pane" aria-label="Program output panel">
         <div class="tool-tabs">
           <div id="tool-tabs-list" class="tabs" role="tablist" aria-label="Run output views">
-            <button id="implementation-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="implementation">
-              Implementation
-            </button>
           </div>
-          <span id="run-status" class="status">Not run</span>
+          <span id="run-status" class="status"></span>
         </div>
         <div id="tool-panels" class="tool-panels">
-          <pre id="implementation" class="output tab-panel active" role="tabpanel" aria-labelledby="implementation-tab"></pre>
+          <pre id="run-placeholder" class="output tab-panel active" aria-live="polite">Run output will appear here.</pre>
         </div>
       </section>
     </section>
@@ -245,10 +242,9 @@ const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const codePane = requiredQuery<HTMLElement>("#code-pane");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
 const codeRunResizeHandle = requiredQuery<HTMLDivElement>("#code-run-resize-handle");
-const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
-const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
+const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
 const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
@@ -259,7 +255,6 @@ const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
-const implementationTab = requiredQuery<HTMLButtonElement>("#implementation-tab");
 const agentLogoToggle = requiredQuery<HTMLButtonElement>("#agent-logo-toggle");
 const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
 const agentLog = requiredQuery<HTMLDivElement>("#agent-log");
@@ -267,7 +262,7 @@ const agentForm = requiredQuery<HTMLFormElement>("#agent-form");
 const agentInput = requiredQuery<HTMLTextAreaElement>("#agent-input");
 const agentSend = requiredQuery<HTMLButtonElement>("#agent-send");
 let lastRunLabel = "never";
-let lastRunStatusText = "Not run";
+let lastRunStatusText = "";
 let lastRunDefinitionHash: string | null = null;
 let agentMessages: AgentChatMessage[] = [];
 let agentExpanded = false;
@@ -288,7 +283,7 @@ let selectedDefinitionTarget: ImplementationTarget | null = null;
 let selectedWholeFileImplementation = false;
 let latestImplementationSource = seedCode;
 let runTabs: RunTab[] = [];
-let activeToolTabId: ToolTabId = "implementation";
+let activeToolTabId: ToolTabId = null;
 
 type RunnableState = {
   name: Runnable;
@@ -296,7 +291,7 @@ type RunnableState = {
   blockingDependencies: string[];
 };
 
-type ToolTabId = "implementation" | string;
+type ToolTabId = string | null;
 
 type RunTab = {
   id: string;
@@ -447,14 +442,8 @@ toolTabsList.addEventListener("click", (event) => {
 
   const runTabButton = target.closest<HTMLButtonElement>("[data-run-tab-id]");
   if (runTabButton) {
-    setActiveTab(runTabButton.dataset.runTabId ?? "implementation");
+    setActiveTab(runTabButton.dataset.runTabId ?? null);
     sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
-    return;
-  }
-
-  if (target.closest("#implementation-tab")) {
-    setActiveTab("implementation");
-    sessionCapture.track("tab_changed", { tab: "implementation" }, true);
   }
 });
 agentToggle.addEventListener("click", () => {
@@ -587,7 +576,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
-  implementationEl.textContent = result.implementation;
   appendTerminalChunks(currentTab, result.chunks);
 
   if (result.status.state === "running") {
@@ -665,7 +653,6 @@ function scheduleCompilation(delayMs: number): void {
   compileController?.abort();
   compileController = null;
   latestImplementationSource = source;
-  setHighlightedPythonCode(implementationEl, source);
   refreshIncompleteSnippets(source);
   updateTypeCheckMarkers([]);
   updateReadinessDecorations(localReadiness(source));
@@ -740,13 +727,13 @@ function applyActiveSourceTab(): void {
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
-  lastRunStatusText = active ? "Not run" : "No open project";
+  lastRunStatusText = active ? "" : "No open project";
   lastRunDefinitionHash = null;
-  runStatus.textContent = active ? "Not run" : "No open project";
+  runStatus.textContent = lastRunStatusText;
   runStatus.dataset.state = active ? "" : "error";
   updateRunStaleness(active?.source ?? "");
   scheduleCompilation(0);
-  setActiveTab("implementation");
+  setActiveTab(null);
   updateEditorAvailability();
   updateActiveProjectMenuItem();
 }
@@ -1012,7 +999,6 @@ async function streamImplementation(source: string, version: number): Promise<vo
         typeof event.implementation === "string"
       ) {
         latestImplementationSource = event.implementation;
-        setHighlightedPythonCode(implementationEl, event.implementation);
         renderSnippetPanel();
       }
 
@@ -1032,7 +1018,8 @@ async function streamImplementation(source: string, version: number): Promise<vo
       return;
     }
 
-    setHighlightedPythonCode(implementationEl, source);
+    latestImplementationSource = source;
+    renderSnippetPanel();
     console.error(error);
     sessionCapture.track(
       "compile_stream_failed",
@@ -1635,7 +1622,7 @@ function createRunTab(runnable: Runnable, sourceHash: string): RunTab {
     sessionId: null,
     sourceHash,
     terminalText: "",
-    implementation: implementationEl.textContent ?? "",
+    implementation: latestImplementationSource,
     status: { state: "running" },
     pollTimer: null,
   };
@@ -1671,11 +1658,8 @@ function renderRunTabs(): void {
     close.textContent = "×";
 
     shell.append(button, close);
-    toolTabsList.insertBefore(shell, implementationTab);
+    toolTabsList.append(shell);
   }
-
-  implementationTab.classList.toggle("active", activeToolTabId === "implementation");
-  implementationTab.setAttribute("aria-selected", String(activeToolTabId === "implementation"));
 
   const activeIds = new Set(runTabs.map((tab) => tab.id));
   for (const panel of Array.from(toolPanels.querySelectorAll<HTMLElement>("[data-run-panel-id]"))) {
@@ -1688,6 +1672,8 @@ function renderRunTabs(): void {
     ensureRunPanel(tab);
     renderRunTab(tab);
   }
+
+  runPlaceholder.classList.toggle("active", activeToolTabId === null);
 }
 
 function ensureRunPanel(tab: RunTab): void {
@@ -1721,7 +1707,7 @@ function ensureRunPanel(tab: RunTab): void {
 
   form.append(input);
   panel.append(output, form);
-  toolPanels.insertBefore(panel, implementationEl);
+  toolPanels.append(panel);
 }
 
 function renderRunTab(tab: RunTab): void {
@@ -1806,7 +1792,8 @@ async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
   }
 
   tab.implementation = result.implementation;
-  implementationEl.textContent = result.implementation;
+  latestImplementationSource = result.implementation;
+  renderSnippetPanel();
   appendTerminalChunks(tab, result.chunks);
   if (result.status.state === "running") {
     return true;
@@ -1864,7 +1851,8 @@ async function pollRunTab(runTabId: string): Promise<void> {
   }
 
   currentTab.implementation = result.implementation;
-  implementationEl.textContent = result.implementation;
+  latestImplementationSource = result.implementation;
+  renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
 
   if (result.status.state === "running") {
@@ -1879,7 +1867,8 @@ async function pollRunTab(runTabId: string): Promise<void> {
 function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: string): void {
   tab.status = status;
   tab.implementation = implementation;
-  implementationEl.textContent = implementation;
+  latestImplementationSource = implementation;
+  renderSnippetPanel();
   lastRunLabel = formatRunTime(new Date());
   lastRunDefinitionHash = tab.sourceHash;
 
@@ -1926,7 +1915,7 @@ function closeRunTab(runTabId: string): void {
   runTabs = runTabs.filter((item) => item.id !== runTabId);
 
   if (activeToolTabId === runTabId) {
-    activeToolTabId = runTabs[index]?.id ?? runTabs[index - 1]?.id ?? "implementation";
+    activeToolTabId = runTabs[index]?.id ?? runTabs[index - 1]?.id ?? null;
   }
   renderRunTabs();
   setActiveTab(activeToolTabId);
@@ -1946,11 +1935,11 @@ function closeAllRunTabs(): void {
     }
   }
   runTabs = [];
-  activeToolTabId = "implementation";
+  activeToolTabId = null;
   renderRunTabs();
 }
 
-function runTabById(runTabId: string): RunTab | undefined {
+function runTabById(runTabId: string | null): RunTab | undefined {
   return runTabs.find((tab) => tab.id === runTabId);
 }
 
@@ -2341,12 +2330,7 @@ async function* compileViaDevApi(
 }
 
 function setActiveTab(tab: ToolTabId): void {
-  activeToolTabId = tab === "implementation" || runTabById(tab) ? tab : "implementation";
-  const implementationActive = activeToolTabId === "implementation";
-  implementationTab.classList.toggle("active", implementationActive);
-  implementationTab.setAttribute("aria-selected", String(implementationActive));
-  implementationEl.classList.toggle("active", implementationActive);
-  outputPane.classList.toggle("snippet-open", implementationActive);
+  activeToolTabId = tab && runTabById(tab) ? tab : null;
   renderRunTabs();
 }
 
@@ -2389,16 +2373,14 @@ function appSnapshot(): JsonObject {
         state: runStatus.dataset.state ?? "",
       },
       runStale: lastRunDefinitionHash !== null && definitionHash(editor.getValue()) !== lastRunDefinitionHash,
-      output: activeToolTabId === "implementation"
-        ? ""
-        : runTabById(activeToolTabId)?.terminalText ?? "",
+      output: runTabById(activeToolTabId)?.terminalText ?? "",
       runTabs: runTabs.map((tab) => ({
         id: tab.id,
         runnable: tab.runnable,
         status: tab.status,
         output: tab.terminalText,
       })),
-      implementation: implementationEl.textContent ?? "",
+      implementation: latestImplementationSource,
       selectedSnippet: selectedSnippetHash === null
         ? null
         : {
