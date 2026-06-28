@@ -319,6 +319,33 @@ def test():
   sheet.set(c("C1"), "(B1 + A1) * 4)")
   print(sheet.eval().eval(c("C1")))`,
       },
+      {
+        id: "sudoku-state",
+        label: "Sudoku state",
+        code: `# SudokuState stores a 9x9 board as list[list[int]], using 0 for blank cells.
+# generate_sudoku returns a valid puzzle with blanks and at least one solution.
+# solve mutates the board in place using backtracking.
+# pretty_print prints a table-style grid with these exact conventions:
+# +-------+-------+-------+ before row 0, row 3, row 6, and after row 8.
+# Each row begins "| ", separates every 3 columns with "| ", ends with "|", and prints 0 as ".".
+# Use this boxed, grouped style as the canonical pretty-print format for grid and table examples.
+
+class SudokuState:
+  board: list[list[int]]
+
+  def __init__(self, board: list[list[int]] | None = None) -> None
+  def generate_sudoku() -> "SudokuState"
+  def solve(self) -> None
+  def pretty_print(self) -> None
+
+def main():
+  state = SudokuState.generate_sudoku()
+  print("Puzzle:")
+  state.pretty_print()
+  state.solve()
+  print("Solution:")
+  state.pretty_print()`,
+      },
     ],
   },
 ];
@@ -331,6 +358,7 @@ export const defaultProjectIds = [
   "feature-flag-rollout",
   "rate-limiter",
   "cart-promotions",
+  "sudoku-state",
 ];
 
 export const sampleEvalCases: SampleEvalCase[] = [
@@ -523,6 +551,44 @@ export const sampleEvalCases: SampleEvalCase[] = [
     runnable: "test",
     expectedStdout: ["4", "24", "10"],
   },
+  {
+    sampleId: "sudoku-state",
+    name: "sudoku pretty grid and solver",
+    sheet: withMain("sudoku-state", `def main():
+  state = SudokuState([
+    [5, 3, 0, 0, 7, 0, 0, 0, 0],
+    [6, 0, 0, 1, 9, 5, 0, 0, 0],
+    [0, 9, 8, 0, 0, 0, 0, 6, 0],
+    [8, 0, 0, 0, 6, 0, 0, 0, 3],
+    [4, 0, 0, 8, 0, 3, 0, 0, 1],
+    [7, 0, 0, 0, 2, 0, 0, 0, 6],
+    [0, 6, 0, 0, 0, 0, 2, 8, 0],
+    [0, 0, 0, 4, 1, 9, 0, 0, 5],
+    [0, 0, 0, 0, 8, 0, 0, 7, 9],
+  ])
+  state.pretty_print()
+  state.solve()
+  print(state.board[0])
+  print(state.board[8])`),
+    runnable: "main",
+    expectedStdout: [
+      "+-------+-------+-------+",
+      "| 5 3 . | . 7 . | . . . |",
+      "| 6 . . | 1 9 5 | . . . |",
+      "| . 9 8 | . . . | . 6 . |",
+      "+-------+-------+-------+",
+      "| 8 . . | . 6 . | . . 3 |",
+      "| 4 . . | 8 . 3 | . . 1 |",
+      "| 7 . . | . 2 . | . . 6 |",
+      "+-------+-------+-------+",
+      "| . 6 . | . . . | 2 8 . |",
+      "| . . . | 4 1 9 | . . 5 |",
+      "| . . . | . 8 . | . 7 9 |",
+      "+-------+-------+-------+",
+      "[5, 3, 4, 6, 7, 8, 9, 1, 2]",
+      "[3, 4, 5, 2, 8, 6, 1, 7, 9]",
+    ],
+  },
 ];
 
 function sampleById(id: string): SampleProgram {
@@ -543,4 +609,15 @@ function withTest(sampleId: string, testSource: string): CodeSheet {
   }
 
   return `${code.slice(0, markerIndex)}\n\n${testSource}`;
+}
+
+function withMain(sampleId: string, mainSource: string): CodeSheet {
+  const code = sampleById(sampleId).code;
+  const marker = "\ndef main():\n";
+  const markerIndex = code.lastIndexOf(marker);
+  if (markerIndex < 0) {
+    throw new Error(`Sample has no main runnable: ${sampleId}`);
+  }
+
+  return `${code.slice(0, markerIndex)}\n\n${mainSource}`;
 }
