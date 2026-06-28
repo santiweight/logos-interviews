@@ -336,11 +336,6 @@ let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
 
 const app = requiredQuery<HTMLDivElement>("#app");
-const logosMark = `
-  <svg class="logos-mark" viewBox="0 0 32 32" aria-hidden="true">
-    <path d="M6.5 26.5 Q9.2 10.8 14.4 5.4 Q15.8 4.1 17.1 5.4 L22.4 16 L27.7 5.4" />
-  </svg>
-`;
 const assistantMark = `
   <svg class="assistant-mark" viewBox="0 0 32 32" aria-hidden="true">
     <path d="M16 3.8l2.9 8.5 8.9 3.7-8.9 3.7L16 28.2l-2.9-8.5L4.2 16l8.9-3.7z" />
@@ -362,7 +357,7 @@ app.innerHTML = `
     <header class="app-header">
       <div class="app-header-left">
         <a class="brand-mark" href="/" aria-label="Logos">
-          ${logosMark}
+          <img class="logos-wordmark" src="/logos-wordmark.png" alt="" />
         </a>
         <details id="project-menu" class="project-menu">
           <summary class="menu-trigger" aria-label="Open project menu">
