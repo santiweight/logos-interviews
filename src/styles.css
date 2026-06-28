@@ -154,6 +154,7 @@ textarea:disabled {
   top: 32px;
   right: 0;
   left: auto;
+  width: 276px;
 }
 
 .menu-section-title {
@@ -171,14 +172,48 @@ textarea:disabled {
 }
 
 .sample-menu-group + .sample-menu-group {
-  margin-top: 5px;
+  margin-top: 2px;
 }
 
 .sample-menu-group-title {
-  padding: 4px 8px 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  border-radius: 5px;
+  color: #252b36;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 760;
+  list-style: none;
+  padding: 0 8px;
+}
+
+.sample-menu-group-title::-webkit-details-marker {
+  display: none;
+}
+
+.sample-menu-group-title:hover,
+.sample-menu-group[open] > .sample-menu-group-title {
+  background: #f2f5f9;
+  color: #1f4faf;
+}
+
+.sample-menu-group-chevron {
+  flex: 0 0 auto;
   color: #7a8290;
-  font-size: 0.72rem;
-  font-weight: 720;
+  font-size: 1.05rem;
+  line-height: 1;
+  transform: rotate(0deg);
+}
+
+.sample-menu-group[open] .sample-menu-group-chevron {
+  transform: rotate(90deg);
+}
+
+.sample-menu-group .sample-menu-list {
+  margin: 2px 0 4px;
+  padding-left: 10px;
 }
 
 .menu-item {
@@ -891,10 +926,8 @@ h2 {
 .snippet-panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex: 0 0 auto;
   min-width: 0;
-  gap: 8px;
   border-bottom: 1px solid #263142;
   background: #151d29;
   padding: 8px 10px;
@@ -904,32 +937,10 @@ h2 {
   overflow: hidden;
   color: #f4f7fb;
   font-size: 0.86rem;
+  font-weight: 820;
+  margin: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.snippet-status {
-  flex: 0 0 auto;
-  border: 1px solid #4f6076;
-  border-radius: 999px;
-  color: #b9c6d7;
-  font-size: 0.66rem;
-  font-weight: 850;
-  line-height: 1;
-  padding: 4px 7px;
-}
-
-.snippet-status[data-state="generating"] {
-  border-color: #6d91d4;
-  color: #b8d0ff;
-  background: rgba(68, 103, 170, 0.22);
-}
-
-.snippet-status[data-state="complete"],
-.snippet-status[data-state="cached"] {
-  border-color: #6fa889;
-  color: #bde8cc;
-  background: rgba(64, 128, 91, 0.2);
 }
 
 .snippet-preview {
@@ -1019,6 +1030,7 @@ h2 {
 .agent-toggle-button:focus-visible,
 .menu-trigger:focus-visible,
 .source-add-tab:focus-visible,
+.sample-menu-group-title:focus-visible,
 .menu-item:focus-visible,
 .snippet-resize-handle:focus-visible {
   outline: 2px solid #9cbcff;

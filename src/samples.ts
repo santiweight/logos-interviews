@@ -108,7 +108,7 @@ def test():
     ],
   },
   {
-    label: "Operational systems",
+    label: "Operation systems",
     samples: [
       {
         id: "notification-retries",
@@ -276,6 +276,66 @@ def test():
     label: "Advanced modeling",
     samples: [
       {
+        id: "starter-arithmetic",
+        label: "Basic",
+        code: `# In Logos, LLMs will complete partial code for you.
+# Click \`add\` in the code view to see its implementation.
+def add(x: int, y: int) -> int
+
+def mul(x: int, y: int) -> int
+
+# Click the run button to run this class (once it's been compiled).
+# Click \`test\` in the code view to see its implementation.
+def test_basic():
+  # In Logos, you can use regular python...
+  print(mul(add(1, 2), 3))
+
+  # Or use a snippet to have the LLM write it for you...
+  \`print mul of (add one and two) and 3\`
+  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+
+  added = \`add 1 and 2\`
+  product = \`mul 3 and 4\`
+  print(added)
+  print(product)`,
+      },
+      {
+        id: "beyond-basics",
+        label: "Beyond the Basics",
+        code: `# You may also define classes, even if they're not complete!
+# Notice how the agent internally generates a field for tracking the grid.
+class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str
+
+def gen_magic_square():
+  # Logos also support multi-line snippets.
+  \`\`\`
+  generate a magic square
+  pretty print it
+  check the magic square is valid, and show the work
+  \`\`\``,
+      },
+      {
+        id: "ascii-fractal",
+        label: "ASCII fractal",
+        code: `# Return a random ASCII fractal garden.
+# The result must be exactly 24 strings, each 64 characters wide.
+# Use Python's random module so every call can produce a different composition.
+# Blend at least two recursive-looking motifs, such as ferns, lightning forks,
+# spirals, nebula clusters, branching trees, or coastline noise.
+# Use only these density characters, from empty to bright: " .:-=+*#%@".
+# Keep the background mostly empty, but make the final image feel detailed and alive.
+
+def random_fractal() -> list
+
+def test():
+  for line in random_fractal():
+    print(line)`,
+      },
+      {
         id: "formula-spreadsheet",
         label: "Formula spreadsheet",
         code: `# Spreadsheet cell storage uses A1-style addressing.
@@ -353,12 +413,10 @@ def main():
 export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.samples);
 
 export const defaultProjectIds = [
-  "interactive-reverse",
-  "notification-retries",
-  "feature-flag-rollout",
-  "rate-limiter",
-  "cart-promotions",
-  "sudoku-state",
+  "starter-arithmetic",
+  "beyond-basics",
+  "ascii-fractal",
+  "formula-spreadsheet",
 ];
 
 export const sampleEvalCases: SampleEvalCase[] = [
@@ -529,6 +587,138 @@ export const sampleEvalCases: SampleEvalCase[] = [
   print(queue.reserve("w2"))`),
     runnable: "test",
     expectedStdout: ["None", "False False", "['job-1']", "job-1", "True", "['job-1']", "None"],
+  },
+  {
+    sampleId: "starter-arithmetic",
+    name: "simple add and multiply",
+    sheet: `def add(x: int, y: int) -> int
+
+def multiply(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))
+  print(multiply(2, 3))`,
+    runnable: "test",
+    expectedStdout: ["3", "6"],
+  },
+  {
+    sampleId: "starter-arithmetic",
+    name: "natural language arithmetic snippets",
+    sheet: `def test():
+  total = \`add 1 and 2\`
+  product = \`multiply 3 and 4\`
+  print(total)
+  print(product)`,
+    runnable: "test",
+    expectedStdout: ["3", "12"],
+  },
+  {
+    sampleId: "starter-arithmetic",
+    name: "starter arithmetic definitions and natural snippets",
+    sheet: `def add(x: int, y: int) -> int
+
+def multiply(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))
+  print(multiply(2, 3))
+  total = \`add 1 and 2\`
+  product = \`multiply 3 and 4\`
+  print(total)
+  print(product)`,
+    runnable: "test",
+    expectedStdout: ["3", "6", "3", "12"],
+  },
+  {
+    sampleId: "starter-arithmetic",
+    name: "logos intro test_basic arithmetic and snippets",
+    sheet: `def add(x: int, y: int) -> int
+
+def mul(x: int, y: int) -> int
+
+def test_basic():
+  print(mul(add(1, 2), 3))
+  \`print mul of (add one and two) and 3\`
+  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+  added = \`add 1 and 2\`
+  product = \`mul 3 and 4\`
+  print(added)
+  print(product)`,
+    runnable: "test_basic",
+    expectedStdout: ["9", "9", "9", "12"],
+  },
+  {
+    sampleId: "beyond-basics",
+    name: "completed magic square pretty print",
+    sheet: `class MagicSquare:
+  def __init__(self, grid: list):
+    self.grid = grid
+    self.size = len(grid)
+
+  def gen() -> MagicSquare:
+    return MagicSquare([
+      [8, 1, 6],
+      [3, 5, 7],
+      [4, 9, 2],
+    ])
+
+  def pretty(self) -> str:
+    return "\\n".join(" ".join(str(value) for value in row) for row in self.grid)
+
+def test():
+  square = MagicSquare.gen()
+  print(square.size)
+  print(square.pretty())`,
+    runnable: "test",
+    expectedStdout: ["3", "8 1 6", "3 5 7", "4 9 2"],
+  },
+  {
+    sampleId: "ascii-fractal",
+    name: "sierpinski ascii fractal",
+    sheet: `# Return a deterministic Sierpinski-style ASCII triangle.
+# The triangle has 8 rows and 15 columns.
+# Use "#" for filled cells and spaces for empty cells.
+# The exact rows are:
+# "       #       "
+# "      # #      "
+# "     #   #     "
+# "    # # # #    "
+# "   #       #   "
+# "  # #     # #  "
+# " #   #   #   # "
+# "# # # # # # # #"
+
+def fractal() -> list
+
+def test():
+  for line in fractal():
+    print(line)`,
+    runnable: "test",
+    expectedStdout: [
+      "       #       ",
+      "      # #      ",
+      "     #   #     ",
+      "    # # # #    ",
+      "   #       #   ",
+      "  # #     # #  ",
+      " #   #   #   # ",
+      "# # # # # # # #",
+    ],
+  },
+  {
+    sampleId: "ascii-fractal",
+    name: "random ascii fractal garden contract",
+    sheet: withTest("ascii-fractal", `def test():
+  import random
+  random.seed(7)
+  rows = random_fractal()
+  palette = set(" .:-=+*#%@")
+  print(len(rows), len(rows[0]) if rows else 0)
+  print(all(len(row) == 64 for row in rows))
+  print(all(char in palette for row in rows for char in row))
+  print(any(char != " " for row in rows for char in row))`),
+    runnable: "test",
+    expectedStdout: ["24 64", "True", "True", "True"],
   },
   {
     sampleId: "formula-spreadsheet",

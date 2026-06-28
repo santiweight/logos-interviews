@@ -74,6 +74,25 @@ const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
+const staleDefaultProjectIdSets = [
+  [
+    "notification-retries",
+    "feature-flag-rollout",
+    "rate-limiter",
+    "cart-promotions",
+  ],
+  [
+    "add-multiply",
+    "natural-snippet",
+    "ascii-fractal",
+    "formula-spreadsheet",
+  ],
+  [
+    "starter-arithmetic",
+    "ascii-fractal",
+    "formula-spreadsheet",
+  ],
+];
 
 const initialSourceTabState = defaultSourceTabState();
 let sourceTabs = initialSourceTabState.tabs;
@@ -105,8 +124,11 @@ const plusIcon = `
 
 function renderSampleGroup(group: SampleGroup): string {
   return `
-    <div class="sample-menu-group">
-      <div class="sample-menu-group-title">${group.label}</div>
+    <details class="sample-menu-group">
+      <summary class="sample-menu-group-title">
+        <span>${group.label}</span>
+        <span class="sample-menu-group-chevron" aria-hidden="true">›</span>
+      </summary>
       <div class="sample-menu-list">
         ${group.samples
           .map(
@@ -115,7 +137,7 @@ function renderSampleGroup(group: SampleGroup): string {
           )
           .join("")}
       </div>
-    </div>
+    </details>
   `;
 }
 
@@ -181,6 +203,20 @@ app.innerHTML = `
           </details>
         </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
+        <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
+          <div
+            id="snippet-resize-handle"
+            class="snippet-resize-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize incomplete implementation panel"
+            tabindex="0"
+          ></div>
+          <header class="snippet-panel-header">
+            <h2>Agent Code</h2>
+          </header>
+          <pre id="snippet-preview" class="output snippet-preview">Click a function, class, or incomplete snippet in the worksheet.</pre>
+        </section>
       </section>
 
       <div
@@ -204,21 +240,6 @@ app.innerHTML = `
         <div id="tool-panels" class="tool-panels">
           <pre id="implementation" class="output tab-panel active" role="tabpanel" aria-labelledby="implementation-tab"></pre>
         </div>
-        <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
-          <div
-            id="snippet-resize-handle"
-            class="snippet-resize-handle"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize incomplete implementation panel"
-            tabindex="0"
-          ></div>
-          <header class="snippet-panel-header">
-            <h2 id="snippet-title">No snippet selected</h2>
-            <span id="snippet-status" class="snippet-status">Idle</span>
-          </header>
-          <pre id="snippet-preview" class="output snippet-preview">Click a function, class, or incomplete snippet in the worksheet.</pre>
-        </section>
       </section>
     </section>
   </section>
@@ -235,8 +256,6 @@ const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
-const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
-const snippetStatus = requiredQuery<HTMLSpanElement>("#snippet-status");
 const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
 const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
@@ -819,6 +838,10 @@ function defaultSourceTabState(): SourceTabState {
 }
 
 function normalizeSourceTabState(state: SourceTabState): SourceTabState {
+  if (isStaleDefaultSourceTabState(state)) {
+    return defaultSourceTabState();
+  }
+
   const activeTabId = state.tabs.some((tab) => tab.id === state.activeTabId)
     ? state.activeTabId
     : state.tabs[0]?.id ?? null;
@@ -827,6 +850,26 @@ function normalizeSourceTabState(state: SourceTabState): SourceTabState {
     tabs: state.tabs,
     activeTabId,
   };
+}
+
+function isStaleDefaultSourceTabState(state: SourceTabState): boolean {
+  const projectIds = state.tabs.map((tab) => tab.projectId);
+  if (!staleDefaultProjectIdSets.some((staleProjectIds) => sameStringList(projectIds, staleProjectIds))) {
+    return false;
+  }
+
+  if (projectIds.some((projectId) => samples.every((sample) => sample.id !== projectId))) {
+    return true;
+  }
+
+  return state.tabs.every((tab) => {
+    const sample = samples.find((item) => item.id === tab.projectId);
+    return sample !== undefined && tab.title === sample.label && tab.source === sample.code;
+  });
+}
+
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function isSourceTabState(value: unknown): value is SourceTabState {
@@ -1228,9 +1271,6 @@ function renderSnippetPanel(): void {
       implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
       selectedDefinitionTarget.source;
 
-    snippetTitle.textContent = selectedDefinitionTarget.name;
-    snippetStatus.textContent = "Implementation";
-    snippetStatus.dataset.state = "complete";
     setHighlightedPythonCode(snippetPreview, text);
     return;
   }
@@ -1240,24 +1280,17 @@ function renderSnippetPanel(): void {
     : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
 
   if (!target) {
-    snippetTitle.textContent = "No snippet selected";
-    snippetStatus.textContent = "Idle";
-    snippetStatus.dataset.state = "";
     snippetPreview.textContent = "Click a function, class, or incomplete snippet in the worksheet.";
     return;
   }
 
   const preview = snippetPreviewByHash.get(target.hash);
-  const status = preview?.status ?? "stub";
   const text =
     preview?.implementation ??
     (preview?.streamed.length ? preview.streamed : null) ??
     preview?.snippet ??
     target.snippet;
 
-  snippetTitle.textContent = target.label;
-  snippetStatus.textContent = snippetStatusLabel(status);
-  snippetStatus.dataset.state = status;
   setHighlightedPythonCode(snippetPreview, text);
 }
 
@@ -1334,19 +1367,6 @@ function truncateLabel(label: string): string {
   return label.length <= 44 ? label : `${label.slice(0, 41)}...`;
 }
 
-function snippetStatusLabel(status: SnippetPreviewState["status"]): string {
-  switch (status) {
-    case "generating":
-      return "Generating";
-    case "cached":
-      return "Cached";
-    case "complete":
-      return "Complete";
-    case "stub":
-      return "Stub";
-  }
-}
-
 function beginCodeRunResize(event: PointerEvent): void {
   event.preventDefault();
   codeRunResizeHandle.setPointerCapture(event.pointerId);
@@ -1407,9 +1427,9 @@ function beginSnippetPanelResize(event: PointerEvent): void {
 }
 
 function setSnippetPanelHeight(height: number): void {
-  const outputHeight = outputPane.getBoundingClientRect().height;
+  const codePaneHeight = codePane.getBoundingClientRect().height;
   const minHeight = 132;
-  const maxHeight = Math.max(minHeight, Math.floor(outputHeight * 0.72));
+  const maxHeight = Math.max(minHeight, Math.floor(codePaneHeight * 0.72));
   const nextHeight = Math.min(maxHeight, Math.max(minHeight, height));
   snippetPanel.style.flexBasis = `${nextHeight}px`;
 }
@@ -2337,7 +2357,6 @@ function appSnapshot(): JsonObject {
             hash: selectedSnippetHash,
             label: incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
             preview: snippetPreview.textContent ?? "",
-            status: snippetStatus.textContent ?? "",
           },
     },
     agent: {
