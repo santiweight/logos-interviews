@@ -24,6 +24,12 @@ export const sampleGroups: SampleGroup[] = [
     label: "Product workflows",
     samples: [
       {
+        id: "interactive-reverse",
+        label: "Reverse CLI",
+        code: `def main():
+  \`an interactive cli loop, where user types a word, and the program prints back the reverse of the word\``,
+      },
+      {
         id: "cart-promotions",
         label: "Cart promotions",
         code: `# Items are dicts with sku, category, quantity, and price_cents.
@@ -320,6 +326,7 @@ def test():
 export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.samples);
 
 export const defaultProjectIds = [
+  "interactive-reverse",
   "notification-retries",
   "feature-flag-rollout",
   "rate-limiter",

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   completeSheet,
   type CodeCache,
@@ -17,6 +17,20 @@ export type RunOptions = {
   cache?: CodeCache;
   python?: string;
   onStdoutLine?: (line: string) => void;
+};
+
+export type RunChunk = {
+  stream: "stdout" | "stderr";
+  text: string;
+};
+
+export type InteractiveRunStatus =
+  | { state: "running" }
+  | { state: "exited"; code: number | null; signal: NodeJS.Signals | null; error?: string };
+
+export type InteractiveRunStart = {
+  session: InteractivePythonRun;
+  completed: CompletedCodeSheet;
 };
 
 export async function runCodeSheet(
@@ -46,12 +60,90 @@ export async function runCodeSheet(
   };
 }
 
+export async function startInteractiveCodeSheet(
+  codeSheet: CodeSheet,
+  runnable: Runnable,
+  options: RunOptions = {},
+): Promise<InteractiveRunStart> {
+  const cache = options.cache ?? new Map();
+  const completed = await completeSheet(cache, codeSheet, options.complete);
+  const source = buildPythonProgram(completed.source, runnable);
+  return {
+    session: new InteractivePythonRun(source, options.python ?? "python3"),
+    completed,
+  };
+}
+
 function buildPythonProgram(source: string, runnable: Runnable): string {
   return `${source}
 
 if __name__ == "__main__":
   ${runnable}()
 `;
+}
+
+export class InteractivePythonRun {
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly chunks: RunChunk[] = [];
+  private exitStatus: InteractiveRunStatus | null = null;
+
+  constructor(source: string, command: string) {
+    this.child = spawn(command, ["-u", "-c", source], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    this.child.stdout.on("data", (chunk: Buffer) => {
+      this.chunks.push({ stream: "stdout", text: chunk.toString("utf8") });
+    });
+    this.child.stderr.on("data", (chunk: Buffer) => {
+      this.chunks.push({ stream: "stderr", text: chunk.toString("utf8") });
+    });
+    this.child.on("error", (error) => {
+      this.chunks.push({ stream: "stderr", text: error.message });
+      this.exitStatus = {
+        state: "exited",
+        code: null,
+        signal: null,
+        error: error.message,
+      };
+    });
+    this.child.on("close", (code, signal) => {
+      this.exitStatus = {
+        state: "exited",
+        code,
+        signal,
+        error: this.exitStatus?.state === "exited" ? this.exitStatus.error : undefined,
+      };
+    });
+  }
+
+  writeInput(input: string): boolean {
+    if (this.exitStatus?.state === "exited" || this.child.stdin.destroyed) {
+      return false;
+    }
+
+    try {
+      return this.child.stdin.write(input);
+    } catch {
+      return false;
+    }
+  }
+
+  drainOutput(): RunChunk[] {
+    return this.chunks.splice(0, this.chunks.length);
+  }
+
+  status(): InteractiveRunStatus {
+    return this.exitStatus ?? { state: "running" };
+  }
+
+  stop(): void {
+    if (this.exitStatus?.state === "exited") {
+      return;
+    }
+
+    this.child.kill("SIGTERM");
+  }
 }
 
 function runPython(

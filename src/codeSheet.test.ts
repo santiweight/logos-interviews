@@ -14,7 +14,12 @@ import {
   type CodeCache,
   type CompilationEvent,
 } from "./codeSheet";
-import { runCodeSheet, type RunResult } from "./codeSheetRunner";
+import {
+  runCodeSheet,
+  startInteractiveCodeSheet,
+  type InteractivePythonRun,
+  type RunResult,
+} from "./codeSheetRunner";
 import { typeCheck } from "./typeCheck";
 
 const sheet = `def add(x: int, y: int) -> int
@@ -245,6 +250,29 @@ def test():
         },
       }
     `);
+  });
+
+  it("supports interactive stdin while a run is active", async () => {
+    const run = await startInteractiveCodeSheet(
+      `def main():
+  while True:
+    try:
+      word = input("> ")
+    except EOFError:
+      break
+    if word == "quit":
+      break
+    print(word[::-1])`,
+      "main",
+      { cache: new Map() },
+    );
+
+    expect(await waitForInteractiveOutput(run.session, "> ")).toContain("> ");
+    expect(run.session.writeInput("logos\n")).toBe(true);
+    expect(await waitForInteractiveOutput(run.session, "sogol")).toContain("sogol");
+    expect(run.session.writeInput("quit\n")).toBe(true);
+    await waitForInteractiveExit(run.session);
+    expect(run.session.status()).toMatchObject({ state: "exited", code: 0 });
   });
 
   it("lowers sum types to dataclasses before completion", async () => {
@@ -1573,4 +1601,37 @@ function simplifyRunResult(result: RunResult): { ok: true; stdout: string[] } | 
   }
 
   return { ok: false, error: result.error, stdout: result.stdout };
+}
+
+async function waitForInteractiveOutput(
+  session: InteractivePythonRun,
+  expected: string,
+): Promise<string> {
+  let output = "";
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    output += session.drainOutput().map((chunk) => chunk.text).join("");
+    if (output.includes(expected)) {
+      return output;
+    }
+    await delay(20);
+  }
+
+  session.stop();
+  throw new Error(`Timed out waiting for ${expected}. Output: ${output}`);
+}
+
+async function waitForInteractiveExit(session: InteractivePythonRun): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (session.status().state === "exited") {
+      return;
+    }
+    await delay(20);
+  }
+
+  session.stop();
+  throw new Error("Timed out waiting for interactive run to exit");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

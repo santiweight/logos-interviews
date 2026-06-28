@@ -7,6 +7,7 @@ import { completeWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
 import { handleSessionEvents } from "./src/sessionCapture";
+import { createInteractiveRunApi } from "./src/interactiveRunApi";
 
 const devHost = "127.0.0.1";
 
@@ -49,10 +50,50 @@ function availablePort(host: string): Promise<number> {
 function anthropicCompletionPlugin() {
   const codeCache: CodeCache = new Map();
   const complete = completeWithAnthropic;
+  const interactiveRunApi = createInteractiveRunApi({
+    cache: codeCache,
+    complete,
+  });
 
   return {
     name: "anthropic-completion-api",
     configureServer(server) {
+      server.middlewares.use("/api/run/start", async (req, res) => {
+        try {
+          await interactiveRunApi.handleStart(req, res);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message });
+        }
+      });
+
+      server.middlewares.use("/api/run/input", async (req, res) => {
+        try {
+          await interactiveRunApi.handleInput(req, res);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message });
+        }
+      });
+
+      server.middlewares.use("/api/run/poll", async (req, res) => {
+        try {
+          await interactiveRunApi.handlePoll(req, res);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message, chunks: [] });
+        }
+      });
+
+      server.middlewares.use("/api/run/stop", async (req, res) => {
+        try {
+          await interactiveRunApi.handleStop(req, res);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message });
+        }
+      });
+
       server.middlewares.use("/api/run", async (req, res) => {
         if (req.method !== "POST") {
           sendJson(res, 405, { error: "Method not allowed", stdout: [] });

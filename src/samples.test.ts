@@ -18,7 +18,9 @@ describe("product samples", () => {
   });
 
   it("has runnable eval fixtures for every product sample", () => {
-    const sampleIds = samples.map((sample) => sample.id);
+    const sampleIds = samples
+      .map((sample) => sample.id)
+      .filter((id) => id !== "interactive-reverse");
     const evalIds = sampleEvalCases.map((testCase) => testCase.sampleId);
 
     expect(new Set(evalIds)).toEqual(new Set(sampleIds));

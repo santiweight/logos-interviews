@@ -44,6 +44,32 @@ type SourceTabState = {
   activeTabId: string | null;
 };
 
+type RunChunk = {
+  stream: "stdout" | "stderr";
+  text: string;
+};
+
+type RunStatus =
+  | { state: "running" }
+  | { state: "exited"; code: number | null; signal: string | null; error?: string };
+
+type InteractiveRunStartResponse = {
+  ok: true;
+  sessionId: string;
+  runnable: Runnable;
+  implementation: string;
+  chunks: RunChunk[];
+  status: RunStatus;
+};
+
+type InteractiveRunPollResponse = {
+  ok: true;
+  runnable: Runnable;
+  implementation: string;
+  chunks: RunChunk[];
+  status: RunStatus;
+};
+
 const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
@@ -159,24 +185,16 @@ app.innerHTML = `
 
       <section id="output-pane" class="output-pane" aria-label="Program output panel">
         <div class="tool-tabs">
-          <div class="tabs" role="tablist" aria-label="Run output views">
-            <button id="run-view-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="run-view-panel">
-              Run View
-            </button>
-            <button id="implementation-tab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="implementation">
+          <div id="tool-tabs-list" class="tabs" role="tablist" aria-label="Run output views">
+            <button id="implementation-tab" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="implementation">
               Implementation
             </button>
           </div>
           <span id="run-status" class="status">Not run</span>
         </div>
-        <div id="run-view-panel" class="run-view tab-panel active" role="tabpanel" aria-labelledby="run-view-tab">
-          <pre id="output" class="output" aria-live="polite"></pre>
-          <footer id="run-stale-footer" class="run-stale-footer" hidden>
-            <span class="run-stale-pill">Changes since last run</span>
-            <span class="run-stale-copy">Run a function to refresh this output.</span>
-          </footer>
+        <div id="tool-panels" class="tool-panels">
+          <pre id="implementation" class="output tab-panel active" role="tabpanel" aria-labelledby="implementation-tab"></pre>
         </div>
-        <pre id="implementation" class="output tab-panel" role="tabpanel" aria-labelledby="implementation-tab"></pre>
         <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
           <div
             id="snippet-resize-handle"
@@ -204,15 +222,14 @@ const shell = requiredQuery<HTMLElement>("#shell");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
 const outputPane = requiredQuery<HTMLElement>("#output-pane");
-const runViewPanel = requiredQuery<HTMLDivElement>("#run-view-panel");
-const outputEl = requiredQuery<HTMLPreElement>("#output");
+const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
+const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
 const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
 const snippetStatus = requiredQuery<HTMLSpanElement>("#snippet-status");
 const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
-const runStaleFooter = requiredQuery<HTMLElement>("#run-stale-footer");
 const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
@@ -220,7 +237,6 @@ const settingsMenu = requiredQuery<HTMLDetailsElement>("#settings-menu");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
-const runViewTab = requiredQuery<HTMLButtonElement>("#run-view-tab");
 const implementationTab = requiredQuery<HTMLButtonElement>("#implementation-tab");
 const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
 const agentLog = requiredQuery<HTMLDivElement>("#agent-log");
@@ -247,11 +263,26 @@ let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
 let selectedSnippetHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
 let latestImplementationSource = seedCode;
+let runTabs: RunTab[] = [];
+let activeToolTabId: ToolTabId = "implementation";
 
 type RunnableState = {
   name: Runnable;
   ready: boolean;
   blockingDependencies: string[];
+};
+
+type ToolTabId = "implementation" | string;
+
+type RunTab = {
+  id: string;
+  runnable: Runnable;
+  sessionId: string | null;
+  sourceHash: string;
+  terminalText: string;
+  implementation: string;
+  status: RunStatus | null;
+  pollTimer: ReturnType<typeof setTimeout> | null;
 };
 
 type IncompleteSnippetTarget = {
@@ -369,13 +400,29 @@ clearCacheButton.addEventListener("click", () => {
   sessionCapture.track("clear_cache_requested", undefined, true);
   clearCache();
 });
-runViewTab.addEventListener("click", () => {
-  setActiveTab("run");
-  sessionCapture.track("tab_changed", { tab: "run" }, true);
-});
-implementationTab.addEventListener("click", () => {
-  setActiveTab("implementation");
-  sessionCapture.track("tab_changed", { tab: "implementation" }, true);
+toolTabsList.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  const closeButton = target.closest<HTMLButtonElement>("[data-close-run-tab-id]");
+  if (closeButton) {
+    closeRunTab(closeButton.dataset.closeRunTabId ?? "");
+    return;
+  }
+
+  const runTabButton = target.closest<HTMLButtonElement>("[data-run-tab-id]");
+  if (runTabButton) {
+    setActiveTab(runTabButton.dataset.runTabId ?? "implementation");
+    sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
+    return;
+  }
+
+  if (target.closest("#implementation-tab")) {
+    setActiveTab("implementation");
+    sessionCapture.track("tab_changed", { tab: "implementation" }, true);
+  }
 });
 agentToggle.addEventListener("click", () => {
   const expanded = !agentExpanded;
@@ -386,6 +433,15 @@ agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
   sessionCapture.track("agent_submit", { input: agentInput.value }, true);
   runAgentTurn();
+});
+toolPanels.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+
+  sendTerminalInput(form.dataset.runInputFormId ?? "");
 });
 snippetResizeHandle.addEventListener("pointerdown", (event) => {
   beginSnippetPanelResize(event);
@@ -445,59 +501,53 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     sessionCapture.track("run_blocked", { reason: "no_runnable" }, true);
     runStatus.textContent = `No runnable · last run ${lastRunLabel}`;
     runStatus.dataset.state = "error";
-    outputEl.textContent = "No zero-argument function found.";
     return;
   }
 
+  const runTab = createRunTab(runnable, definitionHash(source));
   sessionCapture.track("run_requested", { runnable, source }, true);
   runStatus.textContent = `Running ${runnable} · last run ${lastRunLabel}`;
   runStatus.dataset.state = "";
-  outputEl.textContent = "";
+  setActiveTab(runTab.id);
+  renderRunTabs();
 
-  const result = await runViaDevApi(source, runnable).catch((error: unknown) => ({
+  const result = await startInteractiveRunViaDevApi(source, runnable).catch((error: unknown) => ({
     ok: false as const,
     error: error instanceof Error ? error.message : String(error),
-    stdout: [],
-    implementation: "",
   }));
+  const currentTab = runTabById(runTab.id);
+  if (!currentTab) {
+    return;
+  }
 
-  if (result.ok) {
+  if (!result.ok) {
     lastRunLabel = formatRunTime(new Date());
     lastRunDefinitionHash = definitionHash(source);
-    lastRunStatusText = `Ran ${runnable} · last run ${lastRunLabel}`;
+    lastRunStatusText = `Error · last run ${lastRunLabel}`;
     runStatus.textContent = lastRunStatusText;
-    runStatus.dataset.state = "ok";
-    outputEl.textContent = result.stdout.length > 0 ? result.stdout.join("\n") : "(no output)";
-    latestImplementationSource = result.implementation;
-    renderSnippetPanel();
-    sessionCapture.track(
-      "run_completed",
-      { runnable, stdout: result.stdout, implementation: result.implementation },
-      true,
-    );
+    runStatus.dataset.state = "error";
+    currentTab.terminalText = result.error;
+    currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
+    renderRunTab(currentTab);
     updateRunStaleness();
     return;
   }
 
-  lastRunLabel = formatRunTime(new Date());
-  lastRunDefinitionHash = definitionHash(source);
-  lastRunStatusText = `Error · last run ${lastRunLabel}`;
-  runStatus.textContent = lastRunStatusText;
-  runStatus.dataset.state = "error";
-  outputEl.textContent = result.error;
   latestImplementationSource = result.implementation;
   renderSnippetPanel();
-  sessionCapture.track(
-    "run_failed",
-    {
-      runnable,
-      error: result.error,
-      stdout: result.stdout,
-      implementation: result.implementation,
-    },
-    true,
-  );
-  updateRunStaleness();
+  currentTab.sessionId = result.sessionId;
+  currentTab.implementation = result.implementation;
+  currentTab.status = result.status;
+  implementationEl.textContent = result.implementation;
+  appendTerminalChunks(currentTab, result.chunks);
+
+  if (result.status.state === "running") {
+    scheduleRunPoll(currentTab.id, 80);
+    focusRunInput(currentTab.id);
+    return;
+  }
+
+  finishInteractiveRun(currentTab, result.status, result.implementation);
 }
 
 async function clearCache(): Promise<void> {
@@ -514,7 +564,6 @@ async function clearCache(): Promise<void> {
   } catch (error) {
     runStatus.textContent = "Cache clear failed";
     runStatus.dataset.state = "error";
-    outputEl.textContent = error instanceof Error ? error.message : String(error);
     sessionCapture.track(
       "clear_cache_failed",
       { error: error instanceof Error ? error.message : String(error) },
@@ -617,9 +666,9 @@ function closeSourceTab(tabId: string): void {
 }
 
 function applyActiveSourceTab(): void {
+  closeAllRunTabs();
   const active = activeSourceTab();
   editor.setValue(active?.source ?? "");
-  outputEl.textContent = "";
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
@@ -629,7 +678,7 @@ function applyActiveSourceTab(): void {
   runStatus.dataset.state = active ? "" : "error";
   updateRunStaleness(active?.source ?? "");
   scheduleCompilation(0);
-  setActiveTab("run");
+  setActiveTab("implementation");
   updateEditorAvailability();
   updateActiveProjectMenuItem();
 }
@@ -943,8 +992,6 @@ function hashString(source: string): string {
 
 function updateRunStaleness(source = editor.getValue()): void {
   const stale = lastRunDefinitionHash !== null && definitionHash(source) !== lastRunDefinitionHash;
-  runStaleFooter.hidden = !stale;
-  runViewPanel.classList.toggle("run-view-stale", stale);
 
   if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error")) {
     runStatus.textContent = `Stale · last run ${lastRunLabel}`;
@@ -1419,19 +1466,369 @@ function formatRunTime(date: Date): string {
   });
 }
 
-async function runViaDevApi(
+function createRunTab(runnable: Runnable, sourceHash: string): RunTab {
+  const tab: RunTab = {
+    id: createRunTabId(runnable),
+    runnable,
+    sessionId: null,
+    sourceHash,
+    terminalText: "",
+    implementation: implementationEl.textContent ?? "",
+    status: { state: "running" },
+    pollTimer: null,
+  };
+  runTabs = [...runTabs, tab];
+  return tab;
+}
+
+function renderRunTabs(): void {
+  for (const shell of Array.from(toolTabsList.querySelectorAll("[data-run-tab-shell-id]"))) {
+    shell.remove();
+  }
+
+  for (const tab of runTabs) {
+    const shell = document.createElement("div");
+    shell.className = "tool-tab-shell";
+    shell.dataset.runTabShellId = tab.id;
+
+    const button = document.createElement("button");
+    button.id = runTabButtonId(tab.id);
+    button.className = `tab${activeToolTabId === tab.id ? " active" : ""}`;
+    button.type = "button";
+    button.role = "tab";
+    button.dataset.runTabId = tab.id;
+    button.setAttribute("aria-selected", String(activeToolTabId === tab.id));
+    button.setAttribute("aria-controls", runPanelId(tab.id));
+    button.textContent = `Run \`${tab.runnable}\``;
+
+    const close = document.createElement("button");
+    close.className = "tool-tab-close";
+    close.type = "button";
+    close.dataset.closeRunTabId = tab.id;
+    close.setAttribute("aria-label", `Close run ${tab.runnable}`);
+    close.textContent = "×";
+
+    shell.append(button, close);
+    toolTabsList.insertBefore(shell, implementationTab);
+  }
+
+  implementationTab.classList.toggle("active", activeToolTabId === "implementation");
+  implementationTab.setAttribute("aria-selected", String(activeToolTabId === "implementation"));
+
+  const activeIds = new Set(runTabs.map((tab) => tab.id));
+  for (const panel of Array.from(toolPanels.querySelectorAll<HTMLElement>("[data-run-panel-id]"))) {
+    if (!activeIds.has(panel.dataset.runPanelId ?? "")) {
+      panel.remove();
+    }
+  }
+
+  for (const tab of runTabs) {
+    ensureRunPanel(tab);
+    renderRunTab(tab);
+  }
+}
+
+function ensureRunPanel(tab: RunTab): void {
+  if (document.getElementById(runPanelId(tab.id))) {
+    return;
+  }
+
+  const panel = document.createElement("div");
+  panel.id = runPanelId(tab.id);
+  panel.className = "output terminal-output tab-panel";
+  panel.role = "tabpanel";
+  panel.dataset.runPanelId = tab.id;
+  panel.setAttribute("aria-labelledby", runTabButtonId(tab.id));
+  panel.setAttribute("aria-live", "polite");
+
+  const output = document.createElement("span");
+  output.className = "terminal-output-text";
+  output.dataset.runOutputId = tab.id;
+
+  const form = document.createElement("form");
+  form.className = "terminal-form";
+  form.dataset.runInputFormId = tab.id;
+
+  const input = document.createElement("input");
+  input.className = "terminal-input";
+  input.dataset.runInputId = tab.id;
+  input.type = "text";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.setAttribute("aria-label", `stdin for ${tab.runnable}`);
+
+  form.append(input);
+  panel.append(output, form);
+  toolPanels.insertBefore(panel, implementationEl);
+}
+
+function renderRunTab(tab: RunTab): void {
+  const panel = document.getElementById(runPanelId(tab.id));
+  if (!(panel instanceof HTMLElement)) {
+    return;
+  }
+
+  const output = panel.querySelector<HTMLElement>("[data-run-output-id]");
+  const form = panel.querySelector<HTMLFormElement>("[data-run-input-form-id]");
+  const input = panel.querySelector<HTMLInputElement>("[data-run-input-id]");
+  const running = tab.status?.state === "running";
+
+  panel.classList.toggle("active", activeToolTabId === tab.id);
+  panel.classList.toggle("terminal-running", running);
+  if (output) {
+    output.textContent = tab.terminalText;
+  }
+  if (form) {
+    form.hidden = !running;
+  }
+  if (input) {
+    input.disabled = !running;
+  }
+
+  panel.scrollTop = panel.scrollHeight;
+}
+
+function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {
+  if (chunks.length === 0) {
+    return;
+  }
+
+  tab.terminalText += chunks.map((chunk) => chunk.text).join("");
+  renderRunTab(tab);
+}
+
+async function sendTerminalInput(runTabId: string): Promise<void> {
+  const tab = runTabById(runTabId);
+  if (!tab?.sessionId || tab.status?.state !== "running") {
+    return;
+  }
+
+  const inputEl = document.querySelector<HTMLInputElement>(
+    `[data-run-input-id="${cssEscape(runTabId)}"]`,
+  );
+  if (!inputEl) {
+    return;
+  }
+
+  const input = `${inputEl.value}\n`;
+  inputEl.value = "";
+  const canSend = await drainRunOutputBeforeInput(tab);
+  if (!canSend || !runTabById(runTabId)) {
+    return;
+  }
+
+  tab.terminalText += input;
+  renderRunTab(tab);
+  sessionCapture.track("run_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
+
+  try {
+    await sendInteractiveRunInputViaDevApi(tab.sessionId, input);
+    focusRunInput(tab.id);
+  } catch (error) {
+    appendTerminalChunks(tab, [{
+      stream: "stderr",
+      text: `\n${error instanceof Error ? error.message : String(error)}\n`,
+    }]);
+    tab.status = { state: "exited", code: null, signal: null };
+    renderRunTab(tab);
+  }
+}
+
+async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
+  if (!tab.sessionId) {
+    return false;
+  }
+
+  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(() => null);
+  if (!result || !runTabById(tab.id)) {
+    return runTabById(tab.id) !== undefined;
+  }
+
+  tab.implementation = result.implementation;
+  implementationEl.textContent = result.implementation;
+  appendTerminalChunks(tab, result.chunks);
+  if (result.status.state === "running") {
+    return true;
+  }
+
+  finishInteractiveRun(tab, result.status, result.implementation);
+  return false;
+}
+
+function scheduleRunPoll(runTabId: string, delayMs: number): void {
+  const tab = runTabById(runTabId);
+  if (!tab) {
+    return;
+  }
+
+  if (tab.pollTimer) {
+    clearTimeout(tab.pollTimer);
+  }
+
+  tab.pollTimer = setTimeout(() => {
+    const currentTab = runTabById(runTabId);
+    if (currentTab) {
+      currentTab.pollTimer = null;
+    }
+    void pollRunTab(runTabId);
+  }, delayMs);
+}
+
+async function pollRunTab(runTabId: string): Promise<void> {
+  const tab = runTabById(runTabId);
+  if (!tab?.sessionId) {
+    return;
+  }
+
+  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch((error: unknown) => ({
+    ok: false as const,
+    error: error instanceof Error ? error.message : String(error),
+  }));
+  const currentTab = runTabById(runTabId);
+  if (!currentTab) {
+    return;
+  }
+
+  if (!result.ok) {
+    currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
+    lastRunLabel = formatRunTime(new Date());
+    lastRunDefinitionHash = currentTab.sourceHash;
+    lastRunStatusText = `Error · last run ${lastRunLabel}`;
+    runStatus.textContent = lastRunStatusText;
+    runStatus.dataset.state = "error";
+    appendTerminalChunks(currentTab, [{ stream: "stderr", text: `\n${result.error}\n` }]);
+    updateRunStaleness();
+    renderRunTabs();
+    return;
+  }
+
+  currentTab.implementation = result.implementation;
+  implementationEl.textContent = result.implementation;
+  appendTerminalChunks(currentTab, result.chunks);
+
+  if (result.status.state === "running") {
+    currentTab.status = result.status;
+    scheduleRunPoll(currentTab.id, 120);
+    return;
+  }
+
+  finishInteractiveRun(currentTab, result.status, result.implementation);
+}
+
+function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: string): void {
+  tab.status = status;
+  tab.implementation = implementation;
+  implementationEl.textContent = implementation;
+  lastRunLabel = formatRunTime(new Date());
+  lastRunDefinitionHash = tab.sourceHash;
+
+  if (status.state === "exited" && status.code === 0) {
+    lastRunStatusText = `Ran ${tab.runnable} · last run ${lastRunLabel}`;
+    runStatus.textContent = lastRunStatusText;
+    runStatus.dataset.state = "ok";
+    sessionCapture.track(
+      "run_completed",
+      { runnable: tab.runnable, output: tab.terminalText, implementation },
+      true,
+    );
+  } else {
+    const stopped = status.state === "exited" && status.signal === "SIGTERM";
+    lastRunStatusText = `${stopped ? "Stopped" : "Error"} · last run ${lastRunLabel}`;
+    runStatus.textContent = lastRunStatusText;
+    runStatus.dataset.state = "error";
+    if (status.state === "exited" && status.error) {
+      appendTerminalChunks(tab, [{ stream: "stderr", text: `\n${status.error}\n` }]);
+    }
+    sessionCapture.track(
+      "run_failed",
+      { runnable: tab.runnable, output: tab.terminalText, implementation, status },
+      true,
+    );
+  }
+
+  renderRunTabs();
+  updateRunStaleness();
+}
+
+function closeRunTab(runTabId: string): void {
+  const tab = runTabById(runTabId);
+  if (!tab) {
+    return;
+  }
+
+  if (tab.pollTimer) {
+    clearTimeout(tab.pollTimer);
+  }
+  const sessionId = tab.sessionId;
+  const running = tab.status?.state === "running";
+  const index = runTabs.findIndex((item) => item.id === runTabId);
+  runTabs = runTabs.filter((item) => item.id !== runTabId);
+
+  if (activeToolTabId === runTabId) {
+    activeToolTabId = runTabs[index]?.id ?? runTabs[index - 1]?.id ?? "implementation";
+  }
+  renderRunTabs();
+  setActiveTab(activeToolTabId);
+
+  if (sessionId && running) {
+    void stopInteractiveRunViaDevApi(sessionId).catch(() => undefined);
+  }
+}
+
+function closeAllRunTabs(): void {
+  for (const tab of runTabs) {
+    if (tab.pollTimer) {
+      clearTimeout(tab.pollTimer);
+    }
+    if (tab.sessionId && tab.status?.state === "running") {
+      void stopInteractiveRunViaDevApi(tab.sessionId).catch(() => undefined);
+    }
+  }
+  runTabs = [];
+  activeToolTabId = "implementation";
+  renderRunTabs();
+}
+
+function focusRunInput(runTabId: string): void {
+  if (activeToolTabId !== runTabId) {
+    return;
+  }
+
+  document.querySelector<HTMLInputElement>(`[data-run-input-id="${cssEscape(runTabId)}"]`)?.focus();
+}
+
+function runTabById(runTabId: string): RunTab | undefined {
+  return runTabs.find((tab) => tab.id === runTabId);
+}
+
+function runTabButtonId(runTabId: string): string {
+  return `${runTabId}-tab`;
+}
+
+function runPanelId(runTabId: string): string {
+  return `${runTabId}-panel`;
+}
+
+function createRunTabId(runnable: Runnable): string {
+  return `run-${runnable.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : value.replaceAll(/["\\]/g, "\\$&");
+}
+
+async function startInteractiveRunViaDevApi(
   sheet: string,
   runnable: Runnable,
-): Promise<
-  | { ok: true; stdout: string[]; implementation: string }
-  | { ok: false; error: string; stdout: string[]; implementation: string }
-> {
+): Promise<InteractiveRunStartResponse> {
   sessionCapture.track("api_request", {
     method: "POST",
-    path: "/api/run",
+    path: "/api/run/start",
     body: { sheet, runnable },
   });
-  const response = await fetch("/api/run", {
+  const response = await fetch("/api/run/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sheet, runnable }),
@@ -1439,37 +1836,152 @@ async function runViaDevApi(
 
   const payload = (await response.json()) as {
     ok?: boolean;
-    stdout?: string[];
+    sessionId?: string;
+    runnable?: string;
+    chunks?: RunChunk[];
+    status?: RunStatus;
     error?: string;
     implementation?: string;
   };
 
   sessionCapture.track("api_response", {
     method: "POST",
-    path: "/api/run",
+    path: "/api/run/start",
     status: response.status,
     body: payload,
   });
 
   if (
     !response.ok ||
-    typeof payload.ok !== "boolean" ||
-    !Array.isArray(payload.stdout) ||
+    payload.ok !== true ||
+    typeof payload.sessionId !== "string" ||
+    typeof payload.runnable !== "string" ||
+    !Array.isArray(payload.chunks) ||
+    !isRunStatus(payload.status) ||
     typeof payload.implementation !== "string"
   ) {
     throw new Error(payload.error ?? "Run request failed");
   }
 
-  if (payload.ok) {
-    return { ok: true, stdout: payload.stdout, implementation: payload.implementation };
+  return {
+    ok: true,
+    sessionId: payload.sessionId,
+    runnable: payload.runnable,
+    chunks: payload.chunks,
+    status: payload.status,
+    implementation: payload.implementation,
+  };
+}
+
+async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string): Promise<void> {
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/run/input",
+    body: { sessionId, input },
+  });
+  const response = await fetch("/api/run/input", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, input }),
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string };
+  sessionCapture.track("api_response", {
+    method: "POST",
+    path: "/api/run/input",
+    status: response.status,
+    body: payload,
+  });
+
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(payload.error ?? "Input was not accepted");
+  }
+}
+
+async function pollInteractiveRunViaDevApi(
+  sessionId: string,
+): Promise<InteractiveRunPollResponse> {
+  const response = await fetch("/api/run/poll", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    runnable?: string;
+    chunks?: RunChunk[];
+    status?: RunStatus;
+    error?: string;
+    implementation?: string;
+  };
+
+  if (
+    !response.ok ||
+    payload.ok !== true ||
+    typeof payload.runnable !== "string" ||
+    !Array.isArray(payload.chunks) ||
+    !isRunStatus(payload.status) ||
+    typeof payload.implementation !== "string"
+  ) {
+    throw new Error(payload.error ?? "Run poll failed");
   }
 
   return {
-    ok: false,
-    error: payload.error ?? "Run failed",
-    stdout: payload.stdout,
+    ok: true,
+    runnable: payload.runnable,
+    chunks: payload.chunks,
+    status: payload.status,
     implementation: payload.implementation,
   };
+}
+
+async function stopInteractiveRunViaDevApi(
+  sessionId: string,
+): Promise<{ ok: true; chunks: RunChunk[]; status: RunStatus }> {
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/run/stop",
+    body: { sessionId },
+  });
+  const response = await fetch("/api/run/stop", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    chunks?: RunChunk[];
+    status?: RunStatus;
+    error?: string;
+  };
+  sessionCapture.track("api_response", {
+    method: "POST",
+    path: "/api/run/stop",
+    status: response.status,
+    body: payload,
+  });
+
+  if (!response.ok || payload.ok !== true || !Array.isArray(payload.chunks)) {
+    throw new Error(payload.error ?? "Stop request failed");
+  }
+
+  return {
+    ok: true,
+    chunks: payload.chunks,
+    status: isRunStatus(payload.status) ? payload.status : { state: "running" },
+  };
+}
+
+function isRunStatus(value: unknown): value is RunStatus {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const status = value as RunStatus;
+  return status.state === "running" || (
+    status.state === "exited" &&
+    (typeof status.code === "number" || status.code === null) &&
+    (typeof status.signal === "string" || status.signal === null)
+  );
 }
 
 async function runAgentTurn(): Promise<void> {
@@ -1501,8 +2013,8 @@ async function runAgentTurn(): Promise<void> {
   ];
 
   if (!("error" in result) && result.sheet !== null && result.sheet !== editor.getValue()) {
+    closeAllRunTabs();
     editor.setValue(result.sheet);
-    outputEl.textContent = "";
     agentMessages = [
       ...agentMessages,
       { role: "assistant", content: "Applied the updated sheet to the editor." },
@@ -1698,15 +2210,17 @@ async function* compileViaDevApi(
   }
 }
 
-function setActiveTab(tab: "run" | "implementation"): void {
-  const runActive = tab === "run";
-  const implementationActive = tab === "implementation";
-  runViewTab.classList.toggle("active", runActive);
+function setActiveTab(tab: ToolTabId): void {
+  activeToolTabId = tab === "implementation" || runTabById(tab) ? tab : "implementation";
+  const implementationActive = activeToolTabId === "implementation";
   implementationTab.classList.toggle("active", implementationActive);
-  runViewTab.setAttribute("aria-selected", String(runActive));
   implementationTab.setAttribute("aria-selected", String(implementationActive));
-  runViewPanel.classList.toggle("active", runActive);
   implementationEl.classList.toggle("active", implementationActive);
+  outputPane.classList.toggle("snippet-open", implementationActive);
+  renderRunTabs();
+  if (activeToolTabId !== "implementation") {
+    focusRunInput(activeToolTabId);
+  }
 }
 
 function appSnapshot(): JsonObject {
@@ -1742,14 +2256,22 @@ function appSnapshot(): JsonObject {
       selectedSampleLabel: activeSampleItem()?.textContent ?? null,
       sampleMenuOpen: sampleMenu.open,
       settingsMenuOpen: settingsMenu.open,
-      activeTab: runViewPanel.classList.contains("active") ? "run" : "implementation",
+      activeTab: activeToolTabId,
       lastRunLabel,
       runStatus: {
         text: runStatus.textContent ?? "",
         state: runStatus.dataset.state ?? "",
       },
-      runStale: !runStaleFooter.hidden,
-      output: outputEl.textContent ?? "",
+      runStale: lastRunDefinitionHash !== null && definitionHash(editor.getValue()) !== lastRunDefinitionHash,
+      output: activeToolTabId === "implementation"
+        ? ""
+        : runTabById(activeToolTabId)?.terminalText ?? "",
+      runTabs: runTabs.map((tab) => ({
+        id: tab.id,
+        runnable: tab.runnable,
+        status: tab.status,
+        output: tab.terminalText,
+      })),
       implementation: implementationEl.textContent ?? "",
       selectedSnippet: selectedSnippetHash === null
         ? null

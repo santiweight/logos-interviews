@@ -4,12 +4,17 @@ import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWithAnthropic } from "./anthropicComplete";
 import { handleCompileStream } from "./compileStream";
+import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
 import { runCodeSheet } from "./codeSheetRunner";
 import { handleSessionEvents } from "./sessionCapture";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 const codeCache: CodeCache = new Map();
+const interactiveRunApi = createInteractiveRunApi({
+  cache: codeCache,
+  complete: completeWithAnthropic,
+});
 const port = Number(process.env.PORT ?? 8080);
 const distDir = resolve(fileURLToPath(new URL("../dist", import.meta.url)));
 
@@ -24,6 +29,26 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/healthz") {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (url.pathname === "/api/run/start") {
+      await interactiveRunApi.handleStart(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/run/input") {
+      await interactiveRunApi.handleInput(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/run/poll") {
+      await interactiveRunApi.handlePoll(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/run/stop") {
+      await interactiveRunApi.handleStop(req, res);
       return;
     }
 
