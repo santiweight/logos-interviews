@@ -718,6 +718,8 @@ function dependencyContext(parsed: ParsedSheet, snippet: string): string {
   const typeAliases = new Map(parsed.typeAliases.map((decl) => [decl.name, decl]));
   const classDecls = new Map(parsed.classDecls.map((decl) => [decl.name, decl]));
   const needed = new Set<string>();
+  // TODO: Parse explicit dependency markers like {MagicSquare} instead of relying
+  // on the generic capitalized-identifier scan below.
   const queue = referencedIdentifiers(snippet);
 
   while (queue.length > 0) {

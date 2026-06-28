@@ -996,6 +996,63 @@ class SpreadsheetResult:
     `);
   });
 
+  it("reuses an explicitly referenced class when a natural snippet specifies size", async () => {
+    const cache: CodeCache = new Map();
+    const completionTargets: string[] = [];
+    const sheetWithRequest = (request: string): string => `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str
+
+def gen_magic_square():
+  \`\`\`
+  ${request} using {MagicSquare}
+  pretty print it
+  check the magic square is valid, and show the work
+  \`\`\``;
+
+    const complete = (prompt: string): string => {
+      const isNatural = prompt.includes("Your job is to replace this natural-language Python fragment");
+      completionTargets.push(isNatural ? "natural" : "class");
+
+      if (!isNatural) {
+        return `class MagicSquare:
+  size: int
+
+  def __init__(self, size: int = 7):
+    self.size = size
+    self.grid = []
+  def gen(self) -> MagicSquare:
+    return self
+  def pretty(self) -> str:
+    return ""`;
+      }
+
+      return `square = MagicSquare(${prompt.includes("size 7") ? 7 : 3}).gen()
+print(square.pretty())`;
+    };
+
+    const baseParsed = parse(sheetWithRequest("generate a magic square"));
+    const sizeParsed = parse(sheetWithRequest("generate a magic square of size 7"));
+    const magicSquareSnippet = baseParsed.classDecls.find((decl) => decl.name === "MagicSquare")?.snippet ?? "";
+    const naturalSnippet = baseParsed.incompleteSnippets.find((snippet) => snippet.kind === "natural")?.snippet ?? "";
+    const changedClassParsed = parse(
+      sheetWithRequest("generate a magic square").replace("size: int", "size: int\n  cells: list"),
+    );
+    expect(hashCompletionInput(baseParsed, magicSquareSnippet)).toBe(
+      hashCompletionInput(sizeParsed, magicSquareSnippet),
+    );
+    expect(hashCompletionInput(baseParsed, naturalSnippet)).not.toBe(
+      hashCompletionInput(changedClassParsed, naturalSnippet),
+    );
+
+    await completeSheet(cache, sheetWithRequest("generate a magic square"), complete);
+    await completeSheet(cache, sheetWithRequest("generate a magic square of size 7"), complete);
+
+    expect(completionTargets).toEqual(["class", "natural", "natural"]);
+  });
+
   it("streams compilation events and renders partial and completed IR", async () => {
     const cache: CodeCache = new Map();
     const events: CompilationEvent[] = [];
