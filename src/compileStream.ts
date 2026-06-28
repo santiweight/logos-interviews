@@ -60,6 +60,8 @@ function toWireEvent(event: CompilationEvent): Record<string, unknown> {
   switch (event.kind) {
     case "parsed":
       return { kind: "parsed", parsed: event.parsed };
+    case "typecheck":
+      return { kind: "typecheck", diagnostics: event.diagnostics };
     case "readiness":
       return { kind: "readiness", definitions: event.definitions };
     case "cache-hit":

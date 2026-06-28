@@ -1,3 +1,6 @@
+import { typeCheck } from "./typeCheck";
+import type { TypeCheckDiagnostic } from "./typeCheck";
+
 export type CodeSheet = string;
 export type Runnable = string;
 export type SnippetHash = string;
@@ -49,6 +52,7 @@ export type CompletionState =
 
 export type CompilationEvent =
   | { kind: "parsed"; parsed: ParsedSheet }
+  | { kind: "typecheck"; diagnostics: TypeCheckDiagnostic[] }
   | { kind: "readiness"; definitions: DefinitionReadiness[] }
   | { kind: "cache-hit"; hash: SnippetHash; snippet: string }
   | { kind: "llm-start"; hash: SnippetHash; snippet: string }
@@ -122,6 +126,7 @@ type FunctionDecl = {
 
 type DataclassShorthand = {
   indent: string;
+  keyword?: "class" | "record";
   name: string;
   fields: DataclassField[];
   hasBlock: boolean;
@@ -284,6 +289,7 @@ export async function* compile(
   }
 
   yield { kind: "parsed", parsed };
+  yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
   yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
   yield {
     kind: "implementation",
@@ -1083,6 +1089,14 @@ function lowerSurfaceSyntax(source: string): {
 
     const dataclass = parseDataclassShorthand(line);
     if (dataclass) {
+      const isImplicitTopLevelDefinition =
+        dataclass.keyword === undefined && dataclass.indent.length === 0;
+      const isKeywordDefinition = dataclass.keyword !== undefined;
+      if (!isImplicitTopLevelDefinition && !isKeywordDefinition) {
+        output.push(recordBlockIndent === null ? line : lowerDataclassFieldLine(line));
+        continue;
+      }
+
       needsDataclass = true;
       recordBlockIndent = dataclass.hasBlock ? indentWidth(line) : null;
       output.push(
@@ -1114,7 +1128,7 @@ function parseDataclassShorthand(line: string): DataclassShorthand | null {
     return null;
   }
 
-  const keyword = match[2];
+  const keyword = match[2] as "class" | "record" | undefined;
   const args = match[4];
   const hasBlock = match[5] === ":";
   if (keyword === "class" && args === undefined) {
@@ -1132,6 +1146,7 @@ function parseDataclassShorthand(line: string): DataclassShorthand | null {
 
   return {
     indent: match[1],
+    ...(keyword === undefined ? {} : { keyword }),
     name: match[3],
     fields,
     hasBlock,
