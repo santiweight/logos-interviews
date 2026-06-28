@@ -48,6 +48,15 @@ def test():
     expectedStdout: ["2"],
   },
   {
+    name: "natural-language backtick expressions",
+    sheet: `def test():
+  foo = \`add 1 and 2\`
+  bar = \`multiply 3 and 4\`
+  print(foo + bar)`,
+    runnable: "test",
+    expectedStdout: ["15"],
+  },
+  {
     name: "incomplete spreadsheet class",
     sheet: `class Spreadsheet:
   cells: [[int]]

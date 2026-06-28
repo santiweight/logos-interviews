@@ -81,7 +81,13 @@ export type CompilationIR = {
 
 export type CompilationNode =
   | { kind: "source"; source: string }
-  | { kind: "incomplete"; line: number; snippetKind: IncompleteSnippet["kind"]; state: CompletionState };
+  | {
+      kind: "incomplete";
+      line: number;
+      snippetKind: IncompleteSnippet["kind"];
+      indent: string;
+      state: CompletionState;
+    };
 
 export type Declaration =
   | { kind: "sum-type"; name: string; line: number; source: string }
@@ -138,15 +144,22 @@ type FunctionHeader = {
 };
 
 export type IncompleteSnippet = {
-  kind: "function" | "class";
+  kind: "function" | "class" | "natural";
   line: number;
+  column?: number;
   snippet: string;
+  range?: SourceRange;
 };
 
 export type ClassDecl = {
   name: string;
   line: number;
   snippet: string;
+};
+
+type SourceRange = {
+  start: number;
+  end: number;
 };
 
 export function parse(codeSheet: CodeSheet): ParsedSheet {
@@ -195,17 +208,17 @@ export function runnables(codeSheet: CodeSheet): RunnableInfo[] {
 
 export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
   const lowered = lower(parsed);
-  const lines = lowered.source.split("\n");
   const incomplete = discoverIncompleteSnippets(lowered.source);
   const nodes: CompilationNode[] = [];
   let cursor = 0;
 
   for (const item of incomplete) {
-    const start = item.line - 1;
+    const range = item.range ?? rangeForLineSnippet(lowered.source, item.line, item.snippet);
+    const start = range.start;
     if (start > cursor) {
       nodes.push({
         kind: "source",
-        source: lines.slice(cursor, start).join("\n") + "\n",
+        source: lowered.source.slice(cursor, start),
       });
     }
 
@@ -213,6 +226,7 @@ export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
       kind: "incomplete",
       line: item.line,
       snippetKind: item.kind,
+      indent: indentationAt(lowered.source, start),
       state: {
         kind: "partial",
         snippet: item.snippet,
@@ -220,14 +234,11 @@ export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
       },
     });
 
-    cursor = start + item.snippet.split("\n").length;
-    if (cursor < lines.length) {
-      nodes.push({ kind: "source", source: "\n" });
-    }
+    cursor = range.end;
   }
 
-  if (cursor < lines.length) {
-    nodes.push({ kind: "source", source: lines.slice(cursor).join("\n") });
+  if (cursor < lowered.source.length) {
+    nodes.push({ kind: "source", source: lowered.source.slice(cursor) });
   }
 
   if (nodes.length === 0) {
@@ -312,7 +323,7 @@ export async function* compile(
     }
 
     yield { kind: "llm-start", hash, snippet };
-    const prompt = buildCompletionPrompt(renderImplementation(ir), snippet);
+    const prompt = buildCompletionPrompt(renderImplementation(ir), snippet, node.snippetKind);
     let replacement = "";
     const result = complete(
       prompt,
@@ -361,15 +372,39 @@ export async function* compile(
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {
-  return ir.nodes
+  const imports: string[] = [];
+  const seenImports = new Set<string>();
+  const source = ir.nodes
     .map((node) => {
       if (node.kind === "source") {
         return node.source;
       }
 
-      return node.state.kind === "complete" ? node.state.implementation : node.state.snippet;
+      if (node.state.kind !== "complete") {
+        return node.state.snippet;
+      }
+
+      if (node.snippetKind !== "natural") {
+        return node.state.implementation;
+      }
+
+      const replacement = splitNaturalReplacement(node.state.implementation);
+      for (const importLine of replacement.imports) {
+        if (!seenImports.has(importLine)) {
+          seenImports.add(importLine);
+          imports.push(importLine);
+        }
+      }
+
+      return indentNaturalReplacement(replacement.body, node.indent);
     })
     .join("");
+
+  if (imports.length === 0) {
+    return source;
+  }
+
+  return `${imports.join("\n")}\n\n${source}`;
 }
 
 export function definitionReadiness(
@@ -383,6 +418,7 @@ export function definitionReadiness(
   const topLevelSources = new Map(
     discoverTopLevelFunctionBlocks(parsed.source).map((decl) => [decl.name, decl.source]),
   );
+  const classSources = new Map(parsed.classDecls.map((decl) => [decl.name, decl.snippet]));
   const dependencies = new Map<string, string[]>();
 
   for (const name of topLevelNames) {
@@ -392,10 +428,14 @@ export function definitionReadiness(
 
   return functionDecls.map((decl) => {
     const symbol = decl.className ?? decl.name;
+    const source = decl.className
+      ? classSources.get(decl.className) ?? ""
+      : topLevelSources.get(decl.name) ?? "";
     const directImplementationMissing =
-      decl.className !== undefined
+      (decl.className !== undefined
         ? incomplete.has(decl.className)
-        : incomplete.has(decl.name);
+        : incomplete.has(decl.name)) ||
+      hasUncachedNaturalSnippet(parsed, codeCache, source);
     const deps = decl.className ? [] : dependencies.get(decl.name) ?? [];
     const blockingDependencies = directImplementationMissing
       ? []
@@ -505,6 +545,20 @@ function incompleteSymbols(parsed: ParsedSheet, codeCache: CodeCache): Set<strin
   }
 
   return result;
+}
+
+function hasUncachedNaturalSnippet(
+  parsed: ParsedSheet,
+  codeCache: CodeCache,
+  source: string,
+): boolean {
+  return parsed.incompleteSnippets.some((snippet) => {
+    return (
+      snippet.kind === "natural" &&
+      source.includes(snippet.snippet) &&
+      !codeCache.has(hashCompletionInput(parsed, snippet.snippet))
+    );
+  });
 }
 
 function blockingSymbols(
@@ -911,9 +965,12 @@ function toPythonType(source: string): string {
 }
 
 function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
-  const lines = normalizeNewlines(codeSheet).split("\n");
+  const source = normalizeNewlines(codeSheet);
+  const lines = source.split("\n");
+  const lineStarts = lineStartOffsets(source);
   const snippets: IncompleteSnippet[] = [];
   const coveredLines = new Set<number>();
+  const coveredRanges: SourceRange[] = [];
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -943,11 +1000,19 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
     });
 
     if (hasIncompleteMethod) {
-      snippets.push({
+      const snippetLines = trimTrailingBlankLines(classLines);
+      const snippet = snippetLines.join("\n");
+      const range = {
+        start: lineStarts[index],
+        end: lineStarts[index] + snippet.length,
+      };
+
+      snippets.push(snippetWithRange({
         kind: "class",
         line: index + 1,
-        snippet: trimTrailingBlankLines(classLines).join("\n"),
-      });
+        snippet,
+      }, range));
+      coveredRanges.push(range);
 
       for (let lineNumber = index + 1; lineNumber <= end; lineNumber += 1) {
         coveredLines.add(lineNumber);
@@ -970,15 +1035,32 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
       end += 1;
     }
 
-    snippets.push({
+    const snippet = lines.slice(start, end).map((line) => line.trimEnd()).join("\n");
+    const range = {
+      start: lineStarts[start],
+      end: lineStarts[start] + snippet.length,
+    };
+
+    snippets.push(snippetWithRange({
       kind: "function",
       line: start + 1,
-      snippet: lines.slice(start, end).map((line) => line.trimEnd()).join("\n"),
-    });
+      snippet,
+    }, range));
+    coveredRanges.push(range);
     index = end - 1;
   }
 
-  return snippets.sort((left, right) => left.line - right.line);
+  for (const snippet of discoverNaturalSnippets(source)) {
+    if (!coveredRanges.some((range) => rangesOverlap(range, snippet.range))) {
+      snippets.push(snippet);
+    }
+  }
+
+  return snippets.sort((left, right) => {
+    const leftStart = left.range?.start ?? lineStarts[left.line - 1] ?? 0;
+    const rightStart = right.range?.start ?? lineStarts[right.line - 1] ?? 0;
+    return leftStart - rightStart;
+  });
 }
 
 function isIncompleteTopLevelFunction(line: string): boolean {
@@ -1186,7 +1268,140 @@ function indentWidth(line: string): number {
   return line.match(/^\s*/)?.[0].length ?? 0;
 }
 
-function buildCompletionPrompt(sheet: CodeSheet, snippet: string): string {
+function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
+  const snippets: IncompleteSnippet[] = [];
+  const lineStarts = lineStartOffsets(source);
+  let index = 0;
+
+  while (index < source.length) {
+    const start = source.indexOf("`", index);
+    if (start < 0) {
+      break;
+    }
+
+    const end = source.indexOf("`", start + 1);
+    if (end < 0) {
+      break;
+    }
+
+    const inner = source.slice(start + 1, end).trim();
+    if (inner.length > 0) {
+      const line = lineForOffset(lineStarts, start);
+      const lineStart = lineStarts[line - 1] ?? 0;
+      snippets.push(snippetWithRange({
+        kind: "natural",
+        line,
+        column: start - lineStart + 1,
+        snippet: source.slice(start, end + 1),
+      }, { start, end: end + 1 }));
+    }
+
+    index = end + 1;
+  }
+
+  return snippets;
+}
+
+function snippetWithRange(snippet: IncompleteSnippet, range: SourceRange): IncompleteSnippet {
+  return Object.defineProperty(snippet, "range", {
+    value: range,
+    enumerable: false,
+  });
+}
+
+function rangeForLineSnippet(source: string, line: number, snippet: string): SourceRange {
+  const lineStarts = lineStartOffsets(source);
+  const start = lineStarts[line - 1] ?? 0;
+  return { start, end: start + snippet.length };
+}
+
+function lineStartOffsets(source: string): number[] {
+  const starts = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\n") {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function lineForOffset(lineStarts: number[], offset: number): number {
+  let line = 1;
+  for (let index = 0; index < lineStarts.length; index += 1) {
+    if (lineStarts[index] > offset) {
+      break;
+    }
+    line = index + 1;
+  }
+  return line;
+}
+
+function indentationAt(source: string, offset: number): string {
+  const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
+  const prefix = source.slice(lineStart, offset);
+  return prefix.match(/^\s*/)?.[0] ?? "";
+}
+
+function rangesOverlap(left: SourceRange, right: SourceRange | undefined): boolean {
+  return right !== undefined && left.start < right.end && right.start < left.end;
+}
+
+function indentNaturalReplacement(source: string, indent: string): string {
+  const lines = source.split("\n");
+  return lines
+    .map((line, index) => {
+      if (index === 0 || line.trim().length === 0) {
+        return line;
+      }
+
+      return `${indent}${line}`;
+    })
+    .join("\n");
+}
+
+function splitNaturalReplacement(source: string): { imports: string[]; body: string } {
+  const imports: string[] = [];
+  const body: string[] = [];
+
+  for (const line of source.split("\n")) {
+    const trimmed = line.trim();
+    if (/^(?:import\s+|from\s+\S+\s+import\s+)/.test(trimmed)) {
+      imports.push(trimmed);
+      continue;
+    }
+
+    body.push(line);
+  }
+
+  return {
+    imports,
+    body: trimOuterBlankLines(body).join("\n"),
+  };
+}
+
+function buildCompletionPrompt(
+  sheet: CodeSheet,
+  snippet: string,
+  kind: IncompleteSnippet["kind"],
+): string {
+  if (kind === "natural") {
+    return `You are an expert software engineer building programs.
+
+You are tasked with assisting on the following Python code sheet:
+
+${sheet}
+
+Your job is to replace this natural-language Python fragment with valid Python code:
+
+${snippet}
+
+Return only the replacement code for the fragment, without backticks or fences.
+If the fragment appears inside an expression, return a Python expression.
+If the fragment appears as a statement, return one or more Python statements.
+If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
+  }
+
   return `You are an expert software engineer building programs.
 
 You are tasked with assisting on the following Python code sheet:
@@ -1208,6 +1423,10 @@ function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): stri
   const fence = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   const unfenced = fence?.[1] ?? trimmed;
   const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
+
+  if (kind === "natural") {
+    return lines.join("\n").trim();
+  }
 
   if (kind === "class") {
     const classIndex = lines.findIndex((line) => /^class\s+/.test(line.trimStart()));
@@ -1314,6 +1533,14 @@ function trimTrailingBlankLines(lines: string[]): string[] {
   const copy = [...lines];
   while (copy.length > 0 && copy.at(-1)?.trim().length === 0) {
     copy.pop();
+  }
+  return copy;
+}
+
+function trimOuterBlankLines(lines: string[]): string[] {
+  const copy = trimTrailingBlankLines(lines);
+  while (copy.length > 0 && copy[0].trim().length === 0) {
+    copy.shift();
   }
   return copy;
 }
