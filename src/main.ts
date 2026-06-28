@@ -11,6 +11,7 @@ import {
 } from "./codeSheet";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import type { AgentChatMessage } from "./sheetAgent";
+import type { TypeCheckDiagnostic } from "./typeCheck";
 
 globalThis.MonacoEnvironment = {
   getWorker() {
@@ -700,6 +701,7 @@ function scheduleCompilation(delayMs: number): void {
   compileController?.abort();
   compileController = null;
   implementationEl.textContent = source;
+  updateTypeCheckMarkers([]);
   updateReadinessDecorations(localReadiness(source));
   updateRunStaleness(source);
 
@@ -734,6 +736,10 @@ async function streamImplementation(source: string, version: number): Promise<vo
 
       if (event.kind === "readiness" && Array.isArray(event.definitions)) {
         updateReadinessDecorations(event.definitions);
+      }
+
+      if (event.kind === "typecheck" && Array.isArray(event.diagnostics)) {
+        updateTypeCheckMarkers(event.diagnostics);
       }
     }
     sessionCapture.track("compile_stream_completed", { version }, true);
@@ -899,6 +905,30 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
 
 function updateToolbarRunState(runnablesState: Array<RunnableState & { line: number }>): void {
   void runnablesState;
+}
+
+function updateTypeCheckMarkers(diagnostics: TypeCheckDiagnostic[]): void {
+  const model = editor.getModel();
+  if (!model) {
+    return;
+  }
+
+  monaco.editor.setModelMarkers(
+    model,
+    "logos-typecheck",
+    diagnostics.map((diagnostic) => ({
+      startLineNumber: diagnostic.line,
+      startColumn: diagnostic.column,
+      endLineNumber: diagnostic.endLine,
+      endColumn: diagnostic.endColumn,
+      severity:
+        diagnostic.severity === "warning"
+          ? monaco.MarkerSeverity.Warning
+          : monaco.MarkerSeverity.Error,
+      message: diagnostic.message,
+      source: "Logos type check",
+    })),
+  );
 }
 
 function firstRunnable(source: string): Runnable | null {
@@ -1121,6 +1151,7 @@ type CompileWireEvent =
       implementation?: string;
       error?: string;
       definitions?: DefinitionReadiness[];
+      diagnostics?: TypeCheckDiagnostic[];
     };
 
 async function* compileViaDevApi(
