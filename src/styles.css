@@ -1021,23 +1021,44 @@ h2 {
 }
 
 .monaco-editor .incomplete-snippet-line {
+  background-color: rgba(245, 158, 11, 0.08) !important;
   cursor: pointer;
 }
 
 .monaco-editor .incomplete-snippet-line-selected {
   cursor: pointer;
+  background-color: rgba(50, 103, 214, 0.13) !important;
+  box-shadow: inset 3px 0 0 #3267d6;
+}
+
+.monaco-editor .snippet-source-inline-selected {
+  background-color: rgba(50, 103, 214, 0.18) !important;
 }
 
 .monaco-editor .natural-snippet-inline {
+  border-radius: 3px;
+  background-color: rgba(245, 158, 11, 0.16) !important;
   cursor: pointer;
 }
 
 .monaco-editor .natural-snippet-inline-selected {
   cursor: pointer;
+  background-color: rgba(50, 103, 214, 0.24) !important;
+  outline: 1px solid rgba(50, 103, 214, 0.45);
+}
+
+.monaco-editor .natural-snippet-plain,
+.monaco-editor .natural-snippet-plain * {
+  color: #334155 !important;
+  font-style: normal !important;
+  font-weight: 400 !important;
+  text-decoration: none !important;
 }
 
 .monaco-editor .definition-implementation-line-selected {
   cursor: pointer;
+  background-color: rgba(50, 103, 214, 0.1) !important;
+  box-shadow: inset 3px 0 0 #3267d6;
 }
 
 .monaco-editor .not-ready-glyph-dot::before {

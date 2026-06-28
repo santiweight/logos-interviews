@@ -265,6 +265,7 @@ let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
 let selectedSnippetHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
 let selectedWholeFileImplementation = false;
+let naturalSnippetEditorMode: "python" | "natural" = "python";
 let latestImplementationSource = seedCode;
 let runTabs: RunTab[] = [];
 let activeToolTabId: ToolTabId = null;
@@ -290,9 +291,9 @@ type RunTab = {
 
 type IncompleteSnippetTarget = {
   hash: SnippetHash;
-  line: number;
-  endLine: number;
+  startLine: number;
   startColumn: number;
+  endLine: number;
   endColumn: number;
   kind: IncompleteSnippet["kind"];
   snippet: string;
@@ -358,6 +359,10 @@ editor.onDidChangeModelContent(() => {
 
   scheduleCompilation(250);
   scheduleEditorCapture();
+});
+
+editor.onDidChangeCursorPosition(() => {
+  updateNaturalSnippetEditorMode();
 });
 
 editor.onMouseDown((event) => {
@@ -1094,18 +1099,19 @@ function refreshIncompleteSnippets(source: string): void {
 
   try {
     const parsed = parse(source);
-    targets = parsed.incompleteSnippets.map((snippet) => ({
-      hash: hashCompletionInput(parsed, snippet.snippet),
-      line: snippet.line,
-      endLine: snippet.line + snippet.snippet.split("\n").length - 1,
-      startColumn: snippet.column ?? 1,
-      endColumn: snippet.column === undefined
-        ? Number.MAX_SAFE_INTEGER
-        : snippet.column + firstLineLength(snippet.snippet),
-      kind: snippet.kind,
-      snippet: snippet.snippet,
-      label: incompleteSnippetLabel(snippet),
-    }));
+    targets = parsed.incompleteSnippets.map((snippet) => {
+      const range = snippetRange(source, snippet);
+      return {
+        hash: hashCompletionInput(parsed, snippet.snippet),
+        startLine: range.startLine,
+        startColumn: range.startColumn,
+        endLine: range.endLine,
+        endColumn: range.endColumn,
+        kind: snippet.kind,
+        snippet: snippet.snippet,
+        label: incompleteSnippetLabel(snippet),
+      };
+    });
   } catch {
     targets = [];
   }
@@ -1122,11 +1128,11 @@ function refreshIncompleteSnippets(source: string): void {
   }
 
   incompleteSnippetsByLine = targets.reduce((byLine, target) => {
-    const targetEndLine = target.kind === "natural" ? target.line : target.endLine;
-    for (let line = target.line; line <= targetEndLine; line += 1) {
+    for (let line = target.startLine; line <= target.endLine; line += 1) {
       const existing = byLine.get(line) ?? [];
       byLine.set(line, [...existing, target]);
     }
+
     return byLine;
   }, new Map<number, IncompleteSnippetTarget[]>());
   incompleteSnippetByHash = new Map(targets.map((target) => [target.hash, target]));
@@ -1146,6 +1152,7 @@ function refreshIncompleteSnippets(source: string): void {
 
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
+  updateNaturalSnippetEditorMode();
   renderSnippetPanel();
 }
 
@@ -1258,23 +1265,26 @@ function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
 function updateIncompleteSnippetDecorations(): void {
   const decorations = Array.from(incompleteSnippetByHash.values()).map((target) => ({
     range: new monaco.Range(
-      target.line,
+      target.startLine,
       target.startColumn,
-      target.kind === "natural" ? target.line : target.endLine,
+      target.endLine,
       target.endColumn,
     ),
     options: {
       isWholeLine: target.kind !== "natural",
+      stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
       className: target.kind === "natural"
         ? undefined
         : target.hash === selectedSnippetHash
           ? "incomplete-snippet-line incomplete-snippet-line-selected"
           : "incomplete-snippet-line",
       inlineClassName: target.kind !== "natural"
-        ? undefined
+        ? target.hash === selectedSnippetHash
+          ? "snippet-source-inline-selected"
+          : undefined
         : target.hash === selectedSnippetHash
-          ? "natural-snippet-inline natural-snippet-inline-selected"
-          : "natural-snippet-inline",
+          ? "natural-snippet-inline natural-snippet-plain natural-snippet-inline-selected"
+          : "natural-snippet-inline natural-snippet-plain",
       hoverMessage: {
         value: `Show generated implementation for ${target.label}.`,
       },
@@ -1298,6 +1308,7 @@ function updateSelectedDefinitionDecorations(): void {
           options: {
             isWholeLine: true,
             className: "definition-implementation-line-selected",
+            inlineClassName: "snippet-source-inline-selected",
             hoverMessage: {
               value: "Showing generated implementation for the whole file.",
             },
@@ -1310,6 +1321,7 @@ function updateSelectedDefinitionDecorations(): void {
           options: {
             isWholeLine: true,
             className: "definition-implementation-line-selected",
+            inlineClassName: "snippet-source-inline-selected",
             hoverMessage: {
               value: `Showing generated implementation for ${target.name}.`,
             },
@@ -1387,9 +1399,11 @@ function registerLogosPythonLanguage(): void {
     tokenizer: {
       ...pythonLanguage.tokenizer,
       root: [
+        pythonLanguage.tokenizer.root[0],
+        [/#.*$/, "comment"],
         [/```/, "naturalSnippet.delimiter", "@logosTripleNaturalSnippet"],
         [/`/, "naturalSnippet.delimiter", "@logosInlineNaturalSnippet"],
-        ...pythonLanguage.tokenizer.root,
+        ...pythonLanguage.tokenizer.root.slice(1),
       ],
       logosInlineNaturalSnippet: [
         [/[^`]+/, "naturalSnippet"],
@@ -1429,11 +1443,42 @@ function incompleteSnippetForPosition(
   column: number,
 ): IncompleteSnippetTarget | null {
   const snippets = incompleteSnippetsByLine.get(lineNumber) ?? [];
-  const exact = snippets.find((snippet) => {
-    return column >= snippet.startColumn && column <= snippet.endColumn;
-  });
+  const exact = snippets.find((snippet) => targetContainsPosition(snippet, lineNumber, column));
 
   return exact ?? snippets[0] ?? null;
+}
+
+function targetContainsPosition(
+  target: IncompleteSnippetTarget,
+  lineNumber: number,
+  column: number,
+): boolean {
+  if (lineNumber < target.startLine || lineNumber > target.endLine) {
+    return false;
+  }
+
+  if (lineNumber === target.startLine && column < target.startColumn) {
+    return false;
+  }
+
+  return lineNumber !== target.endLine || column <= target.endColumn;
+}
+
+function updateNaturalSnippetEditorMode(): void {
+  const position = editor.getPosition();
+  const inNaturalSnippet = position !== null && Array.from(incompleteSnippetByHash.values()).some((target) => {
+    return target.kind === "natural" && targetContainsPosition(target, position.lineNumber, position.column);
+  });
+  const mode = inNaturalSnippet ? "natural" : "python";
+
+  if (mode === naturalSnippetEditorMode) {
+    return;
+  }
+
+  naturalSnippetEditorMode = mode;
+  editor.updateOptions({
+    matchBrackets: inNaturalSnippet ? "never" : "always",
+  });
 }
 
 function implementationTargetForLine(
@@ -1449,6 +1494,77 @@ function implementationTargetForLine(
 
 function firstLineLength(source: string): number {
   return source.split("\n")[0]?.length ?? source.length;
+}
+
+function snippetRange(source: string, snippet: IncompleteSnippet): {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+} {
+  if (snippet.range) {
+    return offsetRangeToEditorRange(source, snippet.range.start, snippet.range.end);
+  }
+
+  const lines = snippet.snippet.split("\n");
+  const startLine = snippet.line;
+  const startColumn = snippet.column ?? 1;
+  const endLine = startLine + lines.length - 1;
+  const endColumn = lines.length === 1
+    ? startColumn + firstLineLength(snippet.snippet)
+    : (lines.at(-1)?.length ?? 0) + 1;
+
+  return { startLine, startColumn, endLine, endColumn };
+}
+
+function offsetRangeToEditorRange(source: string, start: number, end: number): {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+} {
+  const lineStarts = sourceLineStartOffsets(source);
+  const startPosition = offsetToEditorPosition(lineStarts, start);
+  const endPosition = offsetToEditorPosition(lineStarts, end);
+
+  return {
+    startLine: startPosition.line,
+    startColumn: startPosition.column,
+    endLine: endPosition.line,
+    endColumn: endPosition.column,
+  };
+}
+
+function sourceLineStartOffsets(source: string): number[] {
+  const starts = [0];
+
+  for (let index = 0; index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 10) {
+      starts.push(index + 1);
+    }
+  }
+
+  return starts;
+}
+
+function offsetToEditorPosition(lineStarts: number[], offset: number): { line: number; column: number } {
+  let low = 0;
+  let high = lineStarts.length - 1;
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const lineStart = lineStarts[middle] ?? 0;
+
+    if (lineStart <= offset) {
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  const lineIndex = Math.max(0, high);
+  const lineStart = lineStarts[lineIndex] ?? 0;
+  return { line: lineIndex + 1, column: offset - lineStart + 1 };
 }
 
 function truncateLabel(label: string): string {

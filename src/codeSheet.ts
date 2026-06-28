@@ -1393,6 +1393,12 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
       break;
     }
 
+    if (isInPythonLineComment(source, start)) {
+      const lineEnd = source.indexOf("\n", start);
+      index = lineEnd < 0 ? source.length : lineEnd + 1;
+      continue;
+    }
+
     if (source.startsWith("```", start)) {
       const end = source.indexOf("```", start + 3);
       if (end < 0) {
@@ -1436,6 +1442,38 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
   }
 
   return snippets;
+}
+
+function isInPythonLineComment(source: string, offset: number): boolean {
+  const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
+  let quote: "'" | "\"" | null = null;
+
+  for (let index = lineStart; index < offset; index += 1) {
+    const char = source[index];
+
+    if (quote !== null) {
+      if (char === "\\") {
+        index += 1;
+        continue;
+      }
+
+      if (char === quote) {
+        quote = null;
+      }
+
+      continue;
+    }
+
+    if (char === "#") {
+      return true;
+    }
+
+    if (char === "'" || char === "\"") {
+      quote = char;
+    }
+  }
+
+  return false;
 }
 
 function fencedBacktickCount(line: string): number {

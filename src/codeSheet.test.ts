@@ -1240,6 +1240,19 @@ def main():
     `);
   });
 
+  it("ignores natural-language backticks in comments", () => {
+    const parsed = parse(`# Click the run button to run this class once it is compiled.
+# Click \`test\` in the code view to see its implementation.
+def test():
+  value = \`add 1 and 2\`
+  # Ignore \`this comment fragment\` too.
+  return value`);
+
+    expect(parsed.incompleteSnippets.map((snippet) => snippet.snippet)).toEqual([
+      "`add 1 and 2`",
+    ]);
+  });
+
   it("hoists imports returned for natural-language expressions", async () => {
     const completed = await runCodeSheet(
       `def add(x: int, y: int) -> int
