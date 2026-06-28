@@ -469,12 +469,20 @@ export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
 }
 
 export function hashCompletionInput(parsed: ParsedSheet, incompleteCodeSnippet: string): SnippetHash {
+  const naturalPolicy = naturalSnippetPolicy(incompleteCodeSnippet);
   return hashText(
     "completion",
     [
       "--- incomplete snippet ---",
       incompleteCodeSnippet.trim(),
       "",
+      ...(naturalPolicy === null
+        ? []
+        : [
+            "--- natural-language policy ---",
+            naturalPolicy.cacheKey,
+            "",
+          ]),
       "--- dependencies ---",
       dependencyContext(parsed, incompleteCodeSnippet),
     ].join("\n"),
@@ -1455,6 +1463,7 @@ function buildCompletionPrompt(
   kind: IncompleteSnippet["kind"],
 ): string {
   if (kind === "natural") {
+    const naturalPolicy = naturalSnippetPolicy(snippet)?.promptGuidance ?? "";
     return `You are an expert software engineer building programs.
 
 You are tasked with assisting on the following Python code sheet:
@@ -1466,8 +1475,7 @@ Your job is to replace this natural-language Python fragment with valid Python c
 ${snippet}
 
 Return only the replacement code for the fragment, without backticks or fences.
-If the fragment appears inside an expression, return a Python expression.
-If the fragment appears as a statement, return one or more Python statements.
+${naturalPolicy}
 If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
 Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
   }
@@ -1486,6 +1494,27 @@ Return just the function or class snippet, including any standard-library import
 Use normal Python. Prefer dataclasses and match statements for sum types.
 Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 If helper functions are needed, include them in the returned snippet or define them inside the requested function.`;
+}
+
+function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidance: string } | null {
+  const trimmed = snippet.trim();
+  if (!trimmed.startsWith("`")) {
+    return null;
+  }
+
+  if (trimmed.startsWith("```")) {
+    return {
+      cacheKey: "natural-fenced-statement-v2",
+      promptGuidance:
+        "This is a triple-backtick natural-language block. Treat it as an imperative Python statement block and return one or more Python statements.",
+    };
+  }
+
+  return {
+    cacheKey: "natural-single-expression-default-v2",
+    promptGuidance:
+      "This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, or looping. Do not wrap expression results in print unless the fragment explicitly asks to print.",
+  };
 }
 
 function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): string {

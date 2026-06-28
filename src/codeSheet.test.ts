@@ -1115,11 +1115,11 @@ def main():
       {
         "cache": [
           [
-            "completion:2fbec6c6",
+            "completion:033aad88",
             "1 + 2",
           ],
           [
-            "completion:664f3ac5",
+            "completion:be955919",
             "3 * 4",
           ],
         ],
@@ -1127,15 +1127,13 @@ def main():
           "\`add 1 and 2\`
 
       Return only the replacement code for the fragment, without backticks or fences.
-      If the fragment appears inside an expression, return a Python expression.
-      If the fragment appears as a statement, return one or more Python statements.
+      This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, or looping. Do not wrap expression results in print unless the fragment explicitly asks to print.
       If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
           "\`multiply 3 and 4\`
 
       Return only the replacement code for the fragment, without backticks or fences.
-      If the fragment appears inside an expression, return a Python expression.
-      If the fragment appears as a statement, return one or more Python statements.
+      This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, or looping. Do not wrap expression results in print unless the fragment explicitly asks to print.
       If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
         ],
@@ -1203,6 +1201,41 @@ math.sqrt(5)`;
 
       def test():
         print(math.sqrt(5))",
+      }
+    `);
+  });
+
+  it("asks single-backtick calculations to produce expressions by default", async () => {
+    const calls: string[] = [];
+    const completed = await runCodeSheet(
+      `def main():
+  print(\`calculate the sum of all primes less than 50\`)`,
+      "main",
+      {
+        complete(prompt) {
+          calls.push(prompt);
+          expect(prompt).toContain("This is a single-backtick natural-language fragment.");
+          expect(prompt).toContain("Return a Python expression by default");
+          expect(prompt).toContain("Do not wrap expression results in print");
+          return "sum(candidate for candidate in range(2, 50) if all(candidate % divisor != 0 for divisor in range(2, candidate)))";
+        },
+      },
+    );
+
+    expect(calls).toHaveLength(1);
+    expect({
+      source: completed.completed.source,
+      run: simplifyRunResult(completed),
+    }).toMatchInlineSnapshot(`
+      {
+        "run": {
+          "ok": true,
+          "stdout": [
+            "328",
+          ],
+        },
+        "source": "def main():
+        print(sum(candidate for candidate in range(2, 50) if all(candidate % divisor != 0 for divisor in range(2, candidate))))",
       }
     `);
   });
