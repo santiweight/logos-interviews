@@ -301,7 +301,7 @@ def test_basic():
       },
       {
         id: "beyond-basics",
-        label: "Beyond the Basics",
+        label: "Beyond Basics",
         code: `# You may also define classes, even if they're not complete!
 # Notice how the agent internally generates a field for tracking the grid.
 
@@ -314,9 +314,9 @@ class MagicSquare:
 def gen_magic_square():
   # Logos also support multi-line snippets.
   \`\`\`
-  generate a magic square
+  generate a {MagicSquare}
   pretty print it
-  check the magic square is valid, and show the work
+  check the {MagicSquare} is valid, and show the work
   \`\`\``,
       },
       {
