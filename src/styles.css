@@ -112,7 +112,8 @@ textarea:disabled {
   object-position: left center;
 }
 
-.sample-menu {
+.sample-menu,
+.workspace-menu {
   position: relative;
   z-index: 10;
 }
@@ -134,6 +135,12 @@ textarea:disabled {
   right: 0;
   left: auto;
   width: 276px;
+}
+
+.workspace-popover {
+  top: 32px;
+  right: 0;
+  left: auto;
 }
 
 .menu-section-title {
@@ -214,6 +221,15 @@ textarea:disabled {
 .menu-item.active {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.menu-item-danger {
+  color: #9f1d24;
+}
+
+.menu-item-danger:hover {
+  background: #fff1f2;
+  color: #8a1720;
 }
 
 .menu-separator {
@@ -495,7 +511,7 @@ h2 {
   flex: 0 1 auto;
   gap: 2px;
   width: auto;
-  max-width: calc(100% - 38px);
+  max-width: calc(100% - 76px);
   height: 100%;
   min-width: 0;
   overflow-x: auto;
@@ -588,6 +604,7 @@ h2 {
 }
 
 .sample-menu[open] .source-add-tab,
+.workspace-menu[open] .source-add-tab,
 .source-add-tab:hover {
   border-bottom-color: #ffffff;
   background: var(--paper);
@@ -602,6 +619,16 @@ h2 {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-width: 2;
+}
+
+.workspace-menu-icon {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: var(--paper-soft);
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.7;
 }
 
 .source-tabs-empty {

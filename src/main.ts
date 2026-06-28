@@ -115,6 +115,13 @@ const plusIcon = `
     <path d="M10 4.5v11M4.5 10h11" />
   </svg>
 `;
+const workspaceMenuIcon = `
+  <svg class="workspace-menu-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M5 7.5h10M5 12.5h10" />
+    <circle cx="8" cy="7.5" r="1.4" />
+    <circle cx="12" cy="12.5" r="1.4" />
+  </svg>
+`;
 const logosWordmark = `<img class="logos-wordmark" src="/logos-wordmark.png" alt="" />`;
 
 function renderSampleGroup(group: SampleGroup): string {
@@ -179,6 +186,16 @@ app.innerHTML = `
               </div>
             </div>
           </details>
+          <details id="workspace-menu" class="workspace-menu">
+            <summary class="source-add-tab" aria-label="Open workspace menu" title="Workspace">
+              ${workspaceMenuIcon}
+            </summary>
+            <div class="menu-popover workspace-popover" role="menu">
+              <button id="reset-workspace-button" class="menu-item menu-item-danger" type="button" role="menuitem">
+                Reset workspace
+              </button>
+            </div>
+          </details>
         </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
         <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
@@ -237,6 +254,8 @@ const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handl
 const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
+const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
+const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
@@ -404,6 +423,16 @@ editor.onMouseDown((event) => {
   runCurrentProgram(runnable.name);
 });
 
+resetWorkspaceButton.addEventListener("click", () => {
+  workspaceMenu.open = false;
+  if (!window.confirm("Reset workspace? This removes your open projects and restores the default samples.")) {
+    sessionCapture.track("reset_workspace_cancelled", undefined, true);
+    return;
+  }
+
+  sessionCapture.track("reset_workspace_requested", undefined, true);
+  void resetWorkspace();
+});
 toolTabsList.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) {
@@ -567,6 +596,50 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   finishInteractiveRun(currentTab, result.status, result.implementation);
+}
+
+async function resetWorkspace(): Promise<void> {
+  resetWorkspaceButton.disabled = true;
+  runStatus.textContent = "Resetting workspace";
+  runStatus.dataset.state = "";
+
+  try {
+    if (sourceTabSaveTimer) {
+      clearTimeout(sourceTabSaveTimer);
+      sourceTabSaveTimer = null;
+    }
+    compileController?.abort();
+    compileController = null;
+    if (compileTimer) {
+      clearTimeout(compileTimer);
+      compileTimer = null;
+    }
+
+    await clearUserState();
+    const defaultState = defaultSourceTabState();
+    sourceTabs = defaultState.tabs;
+    activeSourceTabId = defaultState.activeTabId;
+    applyActiveSourceTab();
+    renderSourceTabs();
+    scheduleSaveSourceTabs();
+
+    runStatus.textContent = "Workspace reset";
+    runStatus.dataset.state = "ok";
+    sessionCapture.track("reset_workspace_completed", {
+      openProjects: sourceTabs.map((tab) => tab.projectId),
+      activeProjectId: activeSourceTab()?.projectId ?? null,
+    }, true);
+  } catch (error) {
+    runStatus.textContent = "Workspace reset failed";
+    runStatus.dataset.state = "error";
+    sessionCapture.track(
+      "reset_workspace_failed",
+      { error: error instanceof Error ? error.message : String(error) },
+      true,
+    );
+  } finally {
+    resetWorkspaceButton.disabled = false;
+  }
 }
 
 function scheduleEditorCapture(): void {
@@ -886,6 +959,24 @@ async function writeUserState(state: SourceTabState): Promise<void> {
     transaction.onerror = () => {
       db.close();
       reject(transaction.error ?? new Error("Could not save source tab state"));
+    };
+  });
+}
+
+async function clearUserState(): Promise<void> {
+  const db = await openUserDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(sourceTabStoreName, "readwrite");
+    const store = transaction.objectStore(sourceTabStoreName);
+    const request = store.delete(sourceTabStateKey);
+    request.onerror = () => reject(request.error ?? new Error("Could not reset source tab state"));
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Could not reset source tab state"));
     };
   });
 }
