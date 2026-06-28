@@ -802,6 +802,178 @@ class Greeter:
     });
   });
 
+  it("supports natural-language backtick expressions anywhere", async () => {
+    const cache: CodeCache = new Map();
+    const calls: string[] = [];
+    const expressionSheet = `def test():
+  foo = \`add 1 and 2\`
+  bar = \`multiply 3 and 4\`
+  return foo + bar
+
+def main():
+  print(test())`;
+    const complete = (prompt: string): string => {
+      calls.push(prompt);
+      if (prompt.includes("`add 1 and 2`")) {
+        return "1 + 2";
+      }
+
+      if (prompt.includes("`multiply 3 and 4`")) {
+        return "3 * 4";
+      }
+
+      throw new Error(`unexpected prompt: ${prompt}`);
+    };
+
+    const first = await runCodeSheet(expressionSheet, "main", { complete, cache });
+    const second = await runCodeSheet(expressionSheet, "main", {
+      cache,
+      complete: () => {
+        throw new Error("should not complete cached snippet");
+      },
+    });
+
+    expect({
+      calls: calls.map((prompt) => prompt.split("Your job is to replace this natural-language Python fragment with valid Python code:").at(-1)?.trim()),
+      first: simplifyRunResult(first),
+      second: simplifyRunResult(second),
+      cache: Array.from(cache.entries()),
+    }).toMatchInlineSnapshot(`
+      {
+        "cache": [
+          [
+            "completion:2fbec6c6",
+            "1 + 2",
+          ],
+          [
+            "completion:664f3ac5",
+            "3 * 4",
+          ],
+        ],
+        "calls": [
+          "\`add 1 and 2\`
+
+      Return only the replacement code for the fragment, without backticks or fences.
+      If the fragment appears inside an expression, return a Python expression.
+      If the fragment appears as a statement, return one or more Python statements.
+      If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
+          "\`multiply 3 and 4\`
+
+      Return only the replacement code for the fragment, without backticks or fences.
+      If the fragment appears inside an expression, return a Python expression.
+      If the fragment appears as a statement, return one or more Python statements.
+      If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
+        ],
+        "first": {
+          "ok": true,
+          "stdout": [
+            "15",
+          ],
+        },
+        "second": {
+          "ok": true,
+          "stdout": [
+            "15",
+          ],
+        },
+      }
+    `);
+  });
+
+  it("hoists imports returned for natural-language expressions", async () => {
+    const completed = await runCodeSheet(
+      `def add(x: int, y: int) -> int
+
+def test():
+  print(\`the square root of 5\`)`,
+      "test",
+      {
+        complete: (prompt) => {
+          if (
+            prompt.includes("Your job is to replace this natural-language Python fragment") &&
+            prompt.includes("`the square root of 5`")
+          ) {
+            return `import math
+math.sqrt(5)`;
+          }
+
+          if (
+            prompt.includes("Your job is to finish the implementation of:") &&
+            prompt.includes("def add(x: int, y: int) -> int")
+          ) {
+            return `def add(x: int, y: int) -> int:
+  return x + y`;
+          }
+
+          throw new Error(`unexpected prompt: ${prompt}`);
+        },
+      },
+    );
+
+    expect({
+      source: completed.completed.source,
+      run: simplifyRunResult(completed),
+    }).toMatchInlineSnapshot(`
+      {
+        "run": {
+          "ok": true,
+          "stdout": [
+            "2.23606797749979",
+          ],
+        },
+        "source": "import math
+
+      def add(x: int, y: int) -> int:
+        return x + y
+
+      def test():
+        print(math.sqrt(5))",
+      }
+    `);
+  });
+
+  it("supports natural-language backtick statements anywhere", async () => {
+    const statementSheet = `def test():
+  \`print all primes smaller than 50\``;
+    const completed = await completeSheet(new Map(), statementSheet, () => `for candidate in range(2, 50):
+  if all(candidate % divisor != 0 for divisor in range(2, candidate)):
+    print(candidate)`);
+
+    expect({
+      source: completed.source,
+      run: simplifyRunResult(await runCodeSheet(completed.source, "test")),
+    }).toMatchInlineSnapshot(`
+      {
+        "run": {
+          "ok": true,
+          "stdout": [
+            "2",
+            "3",
+            "5",
+            "7",
+            "11",
+            "13",
+            "17",
+            "19",
+            "23",
+            "29",
+            "31",
+            "37",
+            "41",
+            "43",
+            "47",
+          ],
+        },
+        "source": "def test():
+        for candidate in range(2, 50):
+          if all(candidate % divisor != 0 for divisor in range(2, candidate)):
+            print(candidate)",
+      }
+    `);
+  });
+
   it("models readiness through incomplete definitions and dependencies", async () => {
     const cache: CodeCache = new Map();
     const parsed = parse(sheet);
