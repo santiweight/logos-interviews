@@ -16,6 +16,7 @@ export type RunOptions = {
   complete?: CompleteFunction;
   cache?: CodeCache;
   python?: string;
+  onStdoutLine?: (line: string) => void;
 };
 
 export async function runCodeSheet(
@@ -26,7 +27,7 @@ export async function runCodeSheet(
   const cache = options.cache ?? new Map();
   const completed = await completeSheet(cache, codeSheet, options.complete);
   const source = buildPythonProgram(completed.source, runnable);
-  const executed = await runPython(source, options.python ?? "python3");
+  const executed = await runPython(source, options.python ?? "python3", options.onStdoutLine);
 
   if (executed.ok) {
     return {
@@ -56,18 +57,32 @@ if __name__ == "__main__":
 function runPython(
   source: string,
   command: string,
+  onStdoutLine?: (line: string) => void,
 ): Promise<
   | { ok: true; stdout: string; stderr: string }
   | { ok: false; code: number | null; stdout: string; stderr: string }
 > {
   return new Promise((resolve) => {
-    const child = spawn(command, ["-c", source], {
+    const child = spawn(command, ["-u", "-c", source], {
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let pendingStdout = "";
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout.push(chunk);
+      if (!onStdoutLine) {
+        return;
+      }
+
+      const text = pendingStdout + chunk.toString("utf8");
+      const lines = text.split("\n");
+      pendingStdout = lines.pop() ?? "";
+      for (const line of lines) {
+        onStdoutLine(line.endsWith("\r") ? line.slice(0, -1) : line);
+      }
+    });
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error) => {
       resolve({
@@ -78,6 +93,10 @@ function runPython(
       });
     });
     child.on("close", (code) => {
+      if (onStdoutLine && pendingStdout.length > 0) {
+        onStdoutLine(pendingStdout.endsWith("\r") ? pendingStdout.slice(0, -1) : pendingStdout);
+      }
+
       const out = Buffer.concat(stdout).toString("utf8");
       const err = Buffer.concat(stderr).toString("utf8");
       if (code === 0) {
