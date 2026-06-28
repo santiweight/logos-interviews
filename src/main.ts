@@ -158,6 +158,19 @@ app.innerHTML = `
             </button>
           </form>
         </div>
+        <div class="agent-sidebar-footer">
+          <details id="workspace-menu" class="workspace-menu">
+            <summary class="sidebar-menu-trigger" aria-label="Open settings menu" title="Settings">
+              ${workspaceMenuIcon}
+              <span class="sidebar-menu-label">Settings</span>
+            </summary>
+            <div class="menu-popover workspace-popover" role="menu">
+              <button id="reset-workspace-button" class="menu-item menu-item-danger" type="button" role="menuitem">
+                Reset workspace
+              </button>
+            </div>
+          </details>
+        </div>
       </aside>
 
       <section id="code-pane" class="code-pane" aria-label="Code editor panel">
@@ -172,16 +185,6 @@ app.innerHTML = `
                 <div class="menu-section-title">Samples</div>
                 ${sampleGroups.map(renderSampleGroup).join("")}
               </div>
-            </div>
-          </details>
-          <details id="workspace-menu" class="workspace-menu">
-            <summary class="source-add-tab" aria-label="Open workspace menu" title="Workspace">
-              ${workspaceMenuIcon}
-            </summary>
-            <div class="menu-popover workspace-popover" role="menu">
-              <button id="reset-workspace-button" class="menu-item menu-item-danger" type="button" role="menuitem">
-                Reset workspace
-              </button>
             </div>
           </details>
         </div>
@@ -223,6 +226,7 @@ app.innerHTML = `
 `;
 
 const shell = requiredQuery<HTMLElement>("#shell");
+const agentSidebar = requiredQuery<HTMLElement>("#agent-sidebar");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const codePane = requiredQuery<HTMLElement>("#code-pane");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
@@ -442,10 +446,24 @@ toolTabsList.addEventListener("click", (event) => {
     sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
   }
 });
-agentToggle.addEventListener("click", () => {
+agentToggle.addEventListener("click", (event) => {
+  event.stopPropagation();
   const expanded = !agentExpanded;
   setAgentExpanded(expanded);
   sessionCapture.track("agent_toggle", { expanded }, true);
+});
+agentSidebar.addEventListener("click", (event) => {
+  if (agentExpanded) {
+    return;
+  }
+
+  const target = event.target;
+  if (target instanceof Element && target.closest("#workspace-menu")) {
+    return;
+  }
+
+  setAgentExpanded(true);
+  sessionCapture.track("agent_sidebar_expand", undefined, true);
 });
 agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
