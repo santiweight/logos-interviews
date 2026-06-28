@@ -190,6 +190,193 @@ def test():
     runnable: "test",
     expectedStdout: ["None", "Val(value=7)", "5", "48"],
   },
+  {
+    name: "parking lot allocation service",
+    sheet: `# Parking lot spots and vehicles have sizes: small < medium < large.
+# A vehicle must be assigned the smallest available spot that fits it.
+# Vehicle types: motorcycle fits small, car fits medium, truck fits large.
+# park returns an opaque ticket id or None when no spot fits.
+# unpark returns the vehicle id for a valid active ticket, otherwise None.
+# active_vehicle_ids returns sorted active vehicle ids.
+
+class ParkingLot:
+  layout: dict
+  occupied: dict
+  tickets: dict
+  next_ticket_id: int
+
+  def __init__(self, layout: dict) -> None
+  def park(self, vehicle_id: str, vehicle_type: str) -> str | None
+  def unpark(self, ticket_id: str) -> str | None
+  def available(self, spot_size: str) -> int
+  def active_vehicle_ids(self) -> list
+
+def test():
+  lot = ParkingLot({"small": 1, "medium": 1, "large": 1})
+  print(lot.available("medium"))
+  motorcycle_ticket = lot.park("m1", "motorcycle")
+  car_ticket = lot.park("c1", "car")
+  truck_ticket = lot.park("t1", "truck")
+  print(motorcycle_ticket is not None, car_ticket is not None, truck_ticket is not None)
+  print(lot.available("small"), lot.available("medium"), lot.available("large"))
+  print(lot.park("c2", "car"))
+  print(lot.unpark(car_ticket))
+  print(lot.available("medium"))
+  replacement_ticket = lot.park("c2", "car")
+  print(replacement_ticket is not None and replacement_ticket != car_ticket)
+  print(lot.active_vehicle_ids())`,
+    runnable: "test",
+    expectedStdout: [
+      "1",
+      "True True True",
+      "0 0 0",
+      "None",
+      "c1",
+      "1",
+      "True",
+      "['c2', 'm1', 't1']",
+    ],
+  },
+  {
+    name: "event-driven email dispatcher",
+    sheet: `# Structured events are dicts with id, type, email, and payload fields.
+# templates maps event type to subject/body format strings.
+# handle_event returns "sent", "duplicate", "ignored", or "dead_letter".
+# Duplicate event ids are never sent twice.
+# Unknown event types are ignored.
+# TransientEmailError should be retried up to max_attempts.
+# PermanentEmailError should go directly to dead letters.
+# sent and dead_letters return event ids in the order they reach that state.
+
+class TransientEmailError(Exception):
+  pass
+
+class PermanentEmailError(Exception):
+  pass
+
+class FakeSender:
+  def __init__(self):
+    self.attempts = {}
+
+  def send(self, to: str, subject: str, body: str) -> None:
+    key = (to, subject)
+    self.attempts[key] = self.attempts.get(key, 0) + 1
+    if to == "retry@example.com" and self.attempts[key] == 1:
+      raise TransientEmailError("try again")
+    if to == "bad@example.com":
+      raise PermanentEmailError("blocked")
+
+  def attempts_for(self, to: str, subject: str) -> int:
+    return self.attempts.get((to, subject), 0)
+
+class EmailDispatcher:
+  sender: FakeSender
+  templates: dict
+  max_attempts: int
+  seen_event_ids: set
+  sent_event_ids: list
+  dead_letter_event_ids: list
+
+  def __init__(self, sender: FakeSender, templates: dict, max_attempts: int) -> None
+  def handle_event(self, event: dict) -> str
+  def sent(self) -> list
+  def dead_letters(self) -> list
+
+def test():
+  templates = {
+    "signup": {"subject": "Welcome {name}", "body": "Hi {name}"},
+    "reset": {"subject": "Reset {name}", "body": "Code {code}"},
+  }
+  sender = FakeSender()
+  dispatcher = EmailDispatcher(sender, templates, 2)
+  print(dispatcher.handle_event({
+    "id": "e1", "type": "signup", "email": "ada@example.com", "payload": {"name": "Ada"}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e1", "type": "signup", "email": "ada@example.com", "payload": {"name": "Ada"}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e2", "type": "reset", "email": "retry@example.com", "payload": {"name": "Ada", "code": "123"}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e3", "type": "invoice", "email": "ada@example.com", "payload": {}
+  }))
+  print(dispatcher.handle_event({
+    "id": "e4", "type": "signup", "email": "bad@example.com", "payload": {"name": "Bad"}
+  }))
+  print(dispatcher.sent())
+  print(dispatcher.dead_letters())
+  print(sender.attempts_for("retry@example.com", "Reset Ada"))`,
+    runnable: "test",
+    expectedStdout: [
+      "sent",
+      "duplicate",
+      "sent",
+      "ignored",
+      "dead_letter",
+      "['e1', 'e2']",
+      "['e4']",
+      "2",
+    ],
+  },
+  {
+    name: "in-memory kv store with ttl and transactions",
+    sheet: `# In-memory key/value store with an injectable clock.
+# clock.now is an integer timestamp.
+# set stores string values. ttl is optional seconds from the current time.
+# A key expires when clock.now is greater than or equal to its expiration time.
+# begin starts a transaction; reads inside the transaction see staged writes/deletes.
+# rollback discards staged changes; commit applies them.
+# items returns sorted live (key, value) pairs.
+
+class Clock:
+  def __init__(self):
+    self.now = 0
+
+class KVStore:
+  clock: Clock
+  data: dict
+  transaction: dict
+
+  def __init__(self, clock: Clock) -> None
+  def set(self, key: str, value: str, ttl: int | None = None) -> None
+  def get(self, key: str) -> str | None
+  def delete(self, key: str) -> None
+  def begin(self) -> None
+  def rollback(self) -> None
+  def commit(self) -> None
+  def items(self) -> list
+
+def test():
+  clock = Clock()
+  store = KVStore(clock)
+  store.set("a", "1", ttl=10)
+  print(store.get("a"))
+  clock.now = 10
+  print(store.get("a"))
+  store.set("a", "1")
+  store.begin()
+  store.set("a", "2")
+  store.set("b", "3", ttl=5)
+  print(store.get("a"), store.get("b"))
+  store.rollback()
+  print(store.get("a"), store.get("b"))
+  store.begin()
+  store.delete("a")
+  store.set("c", "4")
+  store.commit()
+  print(store.get("a"), store.get("c"))
+  print(store.items())`,
+    runnable: "test",
+    expectedStdout: [
+      "1",
+      "None",
+      "2 3",
+      "1 None",
+      "None 4",
+      "[('c', '4')]",
+    ],
+  },
 ];
 
 const describeIfAnthropicKey = process.env.ANTHROPIC_API_KEY
@@ -200,56 +387,11 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
   it(
     "detects runnables for every LLM case",
     () => {
-      expect(
-        Object.fromEntries(
-          cases.map((testCase) => [testCase.name, runnables(testCase.sheet)]),
-        ),
-      ).toMatchInlineSnapshot(`
-        {
-          "calculated spreadsheet with cell references": [
-            {
-              "line": 25,
-              "name": "test",
-            },
-          ],
-          "cell-address spreadsheet strings": [
-            {
-              "line": 32,
-              "name": "test",
-            },
-          ],
-          "incomplete spreadsheet class": [
-            {
-              "line": 7,
-              "name": "test",
-            },
-          ],
-          "multiple incomplete functions": [
-            {
-              "line": 5,
-              "name": "test",
-            },
-          ],
-          "parsed spreadsheet strings": [
-            {
-              "line": 31,
-              "name": "test",
-            },
-          ],
-          "single incomplete add": [
-            {
-              "line": 3,
-              "name": "test",
-            },
-          ],
-          "single incomplete add with untyped parameters": [
-            {
-              "line": 3,
-              "name": "test",
-            },
-          ],
-        }
-      `);
+      for (const testCase of cases) {
+        expect(runnables(testCase.sheet), testCase.name).toEqual([
+          { line: expect.any(Number), name: testCase.runnable },
+        ]);
+      }
     },
     120_000,
   );
@@ -261,17 +403,17 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
         cases.map(async (testCase) => {
           const results = await Promise.all(
             Array.from({ length: attempts }, async (_, index) => {
-          const result = await runCodeSheet(testCase.sheet, testCase.runnable, {
-            complete: completeWithAnthropic,
-          }).catch((error: unknown) => ({
-            ok: false as const,
-            error: error instanceof Error ? error.message : String(error),
-            stdout: [],
-          }));
+              const result = await runCodeSheet(testCase.sheet, testCase.runnable, {
+                complete: completeWithAnthropic,
+              }).catch((error: unknown) => ({
+                ok: false as const,
+                error: error instanceof Error ? error.message : String(error),
+                stdout: [],
+              }));
 
-          return { attempt: index + 1, result: simplifyRunResult(result) };
-        }),
-      );
+              return { attempt: index + 1, result: simplifyRunResult(result) };
+            }),
+          );
 
           const successes = results.filter(({ result }) => {
             return result.ok && arraysEqual(result.stdout, testCase.expectedStdout);
@@ -287,312 +429,8 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
         }),
       );
 
-      expect(summaries).toMatchInlineSnapshot(`
-        [
-          {
-            "attempts": 3,
-            "case": "single incomplete add",
-            "expectedStdout": [
-              "3",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "3",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "3",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "3",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-          {
-            "attempts": 3,
-            "case": "single incomplete add with untyped parameters",
-            "expectedStdout": [
-              "3",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "3",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "3",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "3",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-          {
-            "attempts": 3,
-            "case": "multiple incomplete functions",
-            "expectedStdout": [
-              "2",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "2",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "2",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "2",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-          {
-            "attempts": 3,
-            "case": "incomplete spreadsheet class",
-            "expectedStdout": [
-              "None",
-              "7",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "7",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "7",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "7",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-          {
-            "attempts": 3,
-            "case": "calculated spreadsheet with cell references",
-            "expectedStdout": [
-              "None",
-              "Val(value=7)",
-              "5",
-              "48",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-          {
-            "attempts": 3,
-            "case": "parsed spreadsheet strings",
-            "expectedStdout": [
-              "None",
-              "Val(value=7)",
-              "5",
-              "48",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-          {
-            "attempts": 3,
-            "case": "cell-address spreadsheet strings",
-            "expectedStdout": [
-              "None",
-              "Val(value=7)",
-              "5",
-              "48",
-            ],
-            "results": [
-              {
-                "attempt": 1,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-              {
-                "attempt": 2,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-              {
-                "attempt": 3,
-                "result": {
-                  "ok": true,
-                  "stdout": [
-                    "None",
-                    "Val(value=7)",
-                    "5",
-                    "48",
-                  ],
-                },
-              },
-            ],
-            "successes": 3,
-          },
-        ]
-      `);
-
       for (const summary of summaries) {
-        expect(summary.successes).toBe(attempts);
+        expect(summary.successes, JSON.stringify(summary, null, 2)).toBe(attempts);
       }
     },
     240_000,

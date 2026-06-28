@@ -984,6 +984,29 @@ class SpreadsheetResult:
     ]);
   });
 
+  it("preserves top-level helper constants returned with class completions", async () => {
+    const completed = await completeSheet(
+      new Map(),
+      `class Greeter:
+  def greet(self, name: str) -> str
+
+def test():
+  print(Greeter().greet("Ada"))`,
+      () => `PREFIX = "Hello"
+
+class Greeter:
+  def greet(self, name: str) -> str:
+    return f"{PREFIX}, {name}"`,
+    );
+
+    expect(completed.source).toContain(`PREFIX = "Hello"`);
+    expect(completed.source).toContain("class Greeter:");
+    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
+      ok: true,
+      stdout: ["Hello, Ada"],
+    });
+  });
+
   it("models readiness through incomplete definitions and dependencies", async () => {
     const cache: CodeCache = new Map();
     const parsed = parse(sheet);

@@ -1216,7 +1216,7 @@ function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): stri
     }
 
     const startIndex = lines.findIndex((line, index) => {
-      return index <= classIndex && /^(import\s+|from\s+|class\s+)/.test(line.trimStart());
+      return index <= classIndex && isTopLevelDefinitionLine(line.trimStart());
     });
 
     return extractTopLevelDefinitions(lines, startIndex >= 0 ? startIndex : classIndex);
@@ -1254,10 +1254,7 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
       continue;
     }
 
-    if (
-      /^\s+/.test(line) ||
-      /^(@|def\s+|async\s+def\s+|class\s+|import\s+|from\s+)/.test(trimmed)
-    ) {
+    if (/^\s+/.test(line) || isTopLevelDefinitionLine(trimmed)) {
       snippet.push(line.trimEnd());
       continue;
     }
@@ -1266,6 +1263,15 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
+function isTopLevelDefinitionLine(trimmed: string): boolean {
+  return (
+    /^(@|def\s+|async\s+def\s+|class\s+|import\s+|from\s+)/.test(trimmed) ||
+    trimmed.startsWith("#") ||
+    /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed) ||
+    /^[\]}),]+$/.test(trimmed)
+  );
 }
 
 function splitTopLevel(source: string, separator: string): string[] {
