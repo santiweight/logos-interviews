@@ -1179,6 +1179,57 @@ math.sqrt(5)`;
     `);
   });
 
+  it("can observe the first stdout line from a generated delayed loop before later sleeps finish", async () => {
+    const delayMs = 500;
+    const fractalSheet = `def add(x: int, y: int) -> int
+
+def test():
+  \`a for loop where a random fractal is printed every 10 seconds and printed in ascii of width 20 (no delay on the first print)\``;
+    const startedAt = Date.now();
+    let firstFractalLineMs: number | null = null;
+
+    const result = await runCodeSheet(fractalSheet, "test", {
+      complete(prompt) {
+        if (prompt.includes("Your job is to finish the implementation of:")) {
+          return `def add(x: int, y: int) -> int:
+  return x + y`;
+        }
+
+        return `import time
+
+for i in range(3):
+  if i != 0:
+    time.sleep(${delayMs / 1000})
+  print(f"fractal {i}")
+  for row in range(10):
+    print("#" * 20 if row in (0, 9) else "#" + "." * 18 + "#")`;
+      },
+      onStdoutLine(line) {
+        if (line === "fractal 0" && firstFractalLineMs === null) {
+          firstFractalLineMs = Date.now() - startedAt;
+        }
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(firstFractalLineMs).not.toBeNull();
+    expect(firstFractalLineMs ?? Number.POSITIVE_INFINITY).toBeLessThan(delayMs);
+    expect(result.stdout.slice(0, 11)).toEqual([
+      "fractal 0",
+      "####################",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "#..................#",
+      "####################",
+    ]);
+    expect(result.stdout).toHaveLength(33);
+  });
+
   it("models readiness through incomplete definitions and dependencies", async () => {
     const cache: CodeCache = new Map();
     const parsed = parse(sheet);
