@@ -29,7 +29,11 @@ describe("product samples", () => {
       expect(runnables(testCase.sheet), testCase.name).toEqual([
         { line: expect.any(Number), name: testCase.runnable },
       ]);
-      expect(testCase.expectedStdout.length, testCase.name).toBeGreaterThan(0);
+      if (testCase.expectedStdout) {
+        expect(testCase.expectedStdout.length, testCase.name).toBeGreaterThan(0);
+      } else {
+        expect(testCase.stdoutCheck.description.length, testCase.name).toBeGreaterThan(0);
+      }
     }
   });
 });

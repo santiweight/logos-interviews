@@ -7,14 +7,18 @@ import {
   type Runnable,
 } from "./codeSheet";
 import { runCodeSheet, type RunResult } from "./codeSheetRunner";
-import { sampleEvalCases } from "./samples";
+import { sampleEvalCases, type SampleStdoutCheck } from "./samples";
 
-type E2ECase = {
+type E2ECaseBase = {
   name: string;
   sheet: CodeSheet;
   runnable: Runnable;
-  expectedStdout: string[];
 };
+
+type E2ECase = E2ECaseBase & (
+  | { expectedStdout: string[]; stdoutCheck?: never }
+  | { expectedStdout?: never; stdoutCheck: SampleStdoutCheck }
+);
 
 const attempts = 3;
 
@@ -428,14 +432,14 @@ describeIfAnthropicKey("codeSheet Anthropic E2E reliability", () => {
           );
 
           const successes = results.filter(({ result }) => {
-            return result.ok && arraysEqual(result.stdout, testCase.expectedStdout);
+            return result.ok && stdoutMatches(result.stdout, testCase);
           });
 
           return {
             case: testCase.name,
             attempts,
             successes: successes.length,
-            expectedStdout: testCase.expectedStdout,
+            expectedStdout: stdoutExpectation(testCase),
             results,
           };
         }),
@@ -711,6 +715,18 @@ test():
 
 function arraysEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function stdoutMatches(stdout: string[], testCase: E2ECase): boolean {
+  if (testCase.expectedStdout) {
+    return arraysEqual(stdout, testCase.expectedStdout);
+  }
+
+  return testCase.stdoutCheck.matches(stdout);
+}
+
+function stdoutExpectation(testCase: E2ECase): string[] | string {
+  return testCase.expectedStdout ?? testCase.stdoutCheck.description;
 }
 
 function simplifyRunResult(

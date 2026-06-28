@@ -76,6 +76,96 @@ describe("codeSheet", () => {
     `);
   });
 
+  it("keeps indented comments with incomplete top-level functions", () => {
+    const parsed = parse(`# Fractal rendering file.
+
+class AsciiArt:
+  def render() -> str
+
+def mandelbrot() -> AsciiArt
+  # Return a deterministic ASCII mandelbrot fractal.
+
+def main():
+  \`generate and render the {mandelbrot} fractal\``);
+
+    expect(parsed.incompleteSnippets.map((snippet) => ({
+      kind: snippet.kind,
+      line: snippet.line,
+      snippet: snippet.snippet,
+    }))).toEqual([
+      {
+        kind: "class",
+        line: 3,
+        snippet: `class AsciiArt:
+  def render() -> str`,
+      },
+      {
+        kind: "function",
+        line: 6,
+        snippet: `def mandelbrot() -> AsciiArt
+  # Return a deterministic ASCII mandelbrot fractal.`,
+      },
+      {
+        kind: "natural",
+        line: 10,
+        snippet: "`generate and render the {mandelbrot} fractal`",
+      },
+    ]);
+  });
+
+  it("trims function and class completions to the requested symbol", async () => {
+    const fractalSheet = `class AsciiArt:
+  def render() -> str
+
+def mandelbrot() -> AsciiArt
+  # Return a deterministic ASCII mandelbrot fractal.
+
+def main():
+  \`generate and render the {mandelbrot} fractal\``;
+    const result = await runCodeSheet(fractalSheet, "main", {
+      complete(prompt) {
+        if (prompt.includes("Your job is to replace this natural-language Python fragment")) {
+          return "print(mandelbrot().render())";
+        }
+
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        if (target.includes("class AsciiArt:")) {
+          return `class AsciiArt:
+  def __init__(self, lines=None):
+    self.lines = lines or ["@"]
+  def render(self) -> str:
+    return "\\n".join(self.lines)
+
+def mandelbrot() -> AsciiArt:
+  return AsciiArt(["bad"])
+
+def main():
+  print("bad")`;
+        }
+
+        if (target.includes("def mandelbrot() -> AsciiArt")) {
+          return `def mandelbrot() -> AsciiArt:
+  return AsciiArt(["@"])
+
+def main():
+  print("bad")`;
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+    });
+
+    expect({
+      result: simplifyRunResult(result),
+      mandelbrotDefinitions: result.completed.source.match(/^def mandelbrot/gm)?.length,
+      mainDefinitions: result.completed.source.match(/^def main/gm)?.length,
+    }).toEqual({
+      result: { ok: true, stdout: ["@"] },
+      mandelbrotDefinitions: 1,
+      mainDefinitions: 1,
+    });
+  });
+
   it("captures run outputs", async () => {
     const prompts: string[] = [];
     const cache: CodeCache = new Map();
@@ -1202,11 +1292,11 @@ def main():
       {
         "cache": [
           [
-            "completion:033aad88",
+            "completion:8951e575",
             "1 + 2",
           ],
           [
-            "completion:be955919",
+            "completion:0547a7cc",
             "3 * 4",
           ],
         ],
@@ -1214,13 +1304,13 @@ def main():
           "\`add 1 and 2\`
 
       Return only the replacement code for the fragment, without backticks or fences.
-      This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, or looping. Do not wrap expression results in print unless the fragment explicitly asks to print.
+      This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.
       If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
           "\`multiply 3 and 4\`
 
       Return only the replacement code for the fragment, without backticks or fences.
-      This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, or looping. Do not wrap expression results in print unless the fragment explicitly asks to print.
+      This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.
       If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
         ],

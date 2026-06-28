@@ -16,7 +16,14 @@ export type SampleEvalCase = {
   name: string;
   sheet: CodeSheet;
   runnable: Runnable;
-  expectedStdout: string[];
+} & (
+  | { expectedStdout: string[]; stdoutCheck?: never }
+  | { expectedStdout?: never; stdoutCheck: SampleStdoutCheck }
+);
+
+export type SampleStdoutCheck = {
+  description: string;
+  matches: (stdout: string[]) => boolean;
 };
 
 export const sampleGroups: SampleGroup[] = [
@@ -322,18 +329,17 @@ def gen_magic_square():
       {
         id: "ascii-fractal",
         label: "ASCII fractal",
-        code: `# Return a random ASCII fractal garden.
-# The result must be exactly 24 strings, each 64 characters wide.
-# Use Python's random module so every call can produce a different composition.
-# Blend at least two recursive-looking motifs, such as ferns, lightning forks,
-# spirals, nebula clusters, branching trees, or coastline noise.
+        code: `# Fractal rendering file.
+# Results must be exactly 24 strings, each 64 characters wide.
+# through the middle, and nested coastline or root contours near the ground.
 # Use only these density characters, from empty to bright: " .:-=+*#%@".
-# Keep the background mostly empty, but make the final image feel detailed and alive.
+# Keep the background mostly empty, with detail clustered into readable forms.
+# Return a deterministic ASCII mandelbrot fractal.
 
-def random_fractal() -> list
+def fractal() -> list
 
 def test():
-  for line in random_fractal():
+  for line in fractal():
     print(line)`,
       },
       {
@@ -708,18 +714,49 @@ def test():
   },
   {
     sampleId: "ascii-fractal",
-    name: "random ascii fractal garden contract",
+    name: "deterministic ascii mandelbrot contract",
     sheet: withTest("ascii-fractal", `def test():
-  import random
-  random.seed(7)
-  rows = random_fractal()
   palette = set(" .:-=+*#%@")
-  print(len(rows), len(rows[0]) if rows else 0)
-  print(all(len(row) == 64 for row in rows))
-  print(all(char in palette for row in rows for char in row))
-  print(any(char != " " for row in rows for char in row))`),
+  first = fractal()
+  second = fractal()
+  filled = sum(char != " " for row in first for char in row)
+  used = {char for row in first for char in row if char != " "}
+  rows_with_marks = sum(any(char != " " for char in row) for row in first)
+  print(len(first), len(first[0]) if first else 0)
+  print(all(len(row) == 64 for row in first))
+  print(all(char in palette for row in first for char in row))
+  print(first == second)
+  print(100 <= filled <= 700)
+  print(rows_with_marks >= 14)
+  print(len(set(first)) >= 12)
+  print(len(used) >= 5)
+  print(any(char in "#%@" for row in first for char in row))`),
     runnable: "test",
-    expectedStdout: ["24 64", "True", "True", "True"],
+    expectedStdout: ["24 64", "True", "True", "True", "True", "True", "True", "True", "True"],
+  },
+  {
+    sampleId: "ascii-fractal",
+    name: "mandelbrot render natural snippet",
+    sheet: `# Fractal rendering file.
+# Results must be exactly 24 strings, each 64 characters wide.
+# through the middle, and nested coastline or root contours near the ground.
+# Use only these density characters, from empty to bright: " .:-=+*#%@".
+# Keep the background mostly empty, with detail clustered into readable forms.
+
+class AsciiArt:
+  def render() -> str
+
+def mandelbrot() -> AsciiArt
+  # Return a deterministic ASCII mandelbrot fractal.
+
+def main():
+  \`generate and render the {mandelbrot} fractal\``,
+    runnable: "main",
+    stdoutCheck: {
+      description:
+        "prints a visible Mandelbrot-style ASCII rendering using the density palette",
+      matches: isVisibleAsciiFractalStdout,
+    },
   },
   {
     sampleId: "formula-spreadsheet",
@@ -811,4 +848,25 @@ function withMain(sampleId: string, mainSource: string): CodeSheet {
   }
 
   return `${code.slice(0, markerIndex)}\n\n${mainSource}`;
+}
+
+function isVisibleAsciiFractalStdout(stdout: string[]): boolean {
+  const palette = new Set(" .:-=+*#%@");
+  const visibleRows = stdout.filter((row) => row.trim().length > 0);
+  const filled = stdout.reduce((total, row) => {
+    return total + [...row].filter((char) => char !== " ").length;
+  }, 0);
+  const used = new Set(stdout.join("").replaceAll(" ", ""));
+
+  return (
+    stdout.length >= 14 &&
+    stdout.length <= 24 &&
+    stdout.every((row) => row.length <= 64 && [...row].every((char) => palette.has(char))) &&
+    visibleRows.length >= 12 &&
+    stdout.some((row) => row.length >= 40) &&
+    filled >= 100 &&
+    filled <= 800 &&
+    used.size >= 5 &&
+    stdout.some((row) => /[#%@]/.test(row))
+  );
 }

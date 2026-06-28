@@ -355,7 +355,7 @@ export async function* compile(
       replacement = await result;
     }
 
-    replacement = normalizeSnippet(replacement, node.snippetKind);
+    replacement = normalizeSnippet(replacement, node.snippetKind, snippet);
     codeCache.set(hash, replacement);
     node.state = { kind: "complete", hash, snippet, implementation: replacement };
     completions.push({ hash, snippet, replacement, cached: false });
@@ -717,9 +717,10 @@ function dependencyContext(parsed: ParsedSheet, snippet: string): string {
   const typeDecls = new Map(parsed.sumTypes.map((decl) => [decl.name, decl]));
   const typeAliases = new Map(parsed.typeAliases.map((decl) => [decl.name, decl]));
   const classDecls = new Map(parsed.classDecls.map((decl) => [decl.name, decl]));
+  const functionDecls = new Map(
+    discoverTopLevelFunctionBlocks(parsed.source).map((decl) => [decl.name, decl]),
+  );
   const needed = new Set<string>();
-  // TODO: Parse explicit dependency markers like {MagicSquare} instead of relying
-  // on the generic capitalized-identifier scan below.
   const queue = referencedIdentifiers(snippet);
 
   while (queue.length > 0) {
@@ -731,12 +732,14 @@ function dependencyContext(parsed: ParsedSheet, snippet: string): string {
     const typeDecl = typeDecls.get(name);
     const typeAlias = typeAliases.get(name);
     const classDecl = classDecls.get(name);
-    if (!typeDecl && !typeAlias && !classDecl) {
+    const functionDecl = functionDecls.get(name);
+    if (!typeDecl && !typeAlias && !classDecl && !functionDecl) {
       continue;
     }
 
     needed.add(name);
-    const dependencySource = typeDecl?.source ?? typeAlias?.source ?? classDecl?.snippet ?? "";
+    const dependencySource =
+      typeDecl?.source ?? typeAlias?.source ?? classDecl?.snippet ?? functionDecl?.source ?? "";
     for (const referenced of referencedIdentifiers(dependencySource)) {
       if (!needed.has(referenced)) {
         queue.push(referenced);
@@ -754,6 +757,9 @@ function dependencyContext(parsed: ParsedSheet, snippet: string): string {
     ...parsed.classDecls
       .filter((decl) => needed.has(decl.name) && decl.snippet !== snippet)
       .map((decl) => ({ line: decl.line, source: decl.snippet })),
+    ...discoverTopLevelFunctionBlocks(parsed.source)
+      .filter((decl) => needed.has(decl.name) && decl.source !== snippet)
+      .map((decl) => ({ line: decl.line, source: decl.source })),
   ].sort((left, right) => left.line - right.line);
 
   return [...parsed.topLevelComments, ...dependencies.map((item) => item.source)]
@@ -773,12 +779,16 @@ function referencedIdentifiers(source: string): string[] {
     "set",
     "tuple",
   ]);
+  const explicit = source.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g);
   const matches = source.match(/\b[A-Za-z_][A-Za-z0-9_]*\b/g) ?? [];
   return Array.from(
     new Set(
-      matches.filter((identifier) => {
-        return /^[A-Z]/.test(identifier) && !ignored.has(identifier);
-      }),
+      [
+        ...Array.from(explicit, (match) => match[1]),
+        ...matches.filter((identifier) => {
+          return /^[A-Z]/.test(identifier) && !ignored.has(identifier);
+        }),
+      ].filter((identifier) => !ignored.has(identifier)),
     ),
   );
 }
@@ -1125,7 +1135,7 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
       end < lines.length &&
       !coveredLines.has(end + 1) &&
       !lineOverlapsRanges(lineStarts, lines, end, naturalRanges) &&
-      isIncompleteTopLevelFunction(lines[end])
+      (isIncompleteTopLevelFunction(lines[end]) || isIndentedComment(lines[end]))
     ) {
       end += 1;
     }
@@ -1161,6 +1171,10 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
 function isIncompleteTopLevelFunction(line: string): boolean {
   const header = parseFunctionHeader(line);
   return header !== null && header.indent.length === 0 && !header.hasColon;
+}
+
+function isIndentedComment(line: string): boolean {
+  return /^\s+#/.test(line);
 }
 
 function lowerSurfaceSyntax(source: string): {
@@ -1623,13 +1637,17 @@ function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidan
   }
 
   return {
-    cacheKey: "natural-single-expression-default-v2",
+    cacheKey: "natural-single-expression-default-v3",
     promptGuidance:
-      "This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, or looping. Do not wrap expression results in print unless the fragment explicitly asks to print.",
+      "This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.",
   };
 }
 
-function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): string {
+function normalizeSnippet(
+  source: string,
+  kind: IncompleteSnippet["kind"],
+  requestedSnippet = "",
+): string {
   const trimmed = source.trim();
   const fence = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   const unfenced = fence?.[1] ?? trimmed;
@@ -1640,26 +1658,31 @@ function normalizeSnippet(source: string, kind: IncompleteSnippet["kind"]): stri
   }
 
   if (kind === "class") {
-    const classIndex = lines.findIndex((line) => /^class\s+/.test(line.trimStart()));
+    const requestedName = requestedSnippet.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+    const classIndex = lines.findIndex((line) => {
+      const match = line.trimStart().match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+      return match !== null && (requestedName === undefined || match[1] === requestedName);
+    });
     if (classIndex < 0) {
       return unfenced.trimEnd();
     }
 
-    const startIndex = lines.findIndex((line, index) => {
-      return index <= classIndex && isTopLevelDefinitionLine(line.trimStart());
-    });
-
-    return extractTopLevelDefinitions(lines, startIndex >= 0 ? startIndex : classIndex);
+    return extractSingleTopLevelDefinition(lines, classIndex);
   }
 
+  const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
   const definitionIndex = lines.findIndex((line) => {
-    return /^(class\s+|def\s+|async\s+def\s+|@|import\s+|from\s+)/.test(line.trimStart());
+    const header = parseFunctionHeader(line.trimStart());
+    return header !== null && (requestedName === undefined || header.name === requestedName);
   });
   if (definitionIndex < 0) {
-    return unfenced.trimEnd();
+    const fallbackIndex = lines.findIndex((line) => {
+      return /^(class\s+|def\s+|async\s+def\s+|@|import\s+|from\s+)/.test(line.trimStart());
+    });
+    return fallbackIndex < 0 ? unfenced.trimEnd() : extractTopLevelDefinitions(lines, fallbackIndex);
   }
 
-  return extractTopLevelDefinitions(lines, definitionIndex);
+  return extractSingleTopLevelDefinition(lines, definitionIndex);
 }
 
 function dedentLines(lines: string[]): string[] {
@@ -1693,6 +1716,71 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
+function extractSingleTopLevelDefinition(lines: string[], definitionIndex: number): string {
+  const start = startOfDefinitionWithImportsAndDecorators(lines, definitionIndex);
+  const snippet: string[] = [];
+  let seenRequestedDefinition = false;
+
+  for (const line of lines.slice(start)) {
+    const trimmed = line.trimStart();
+    const isBlank = line.trim().length === 0;
+    const isNested = /^\s+/.test(line);
+    const isImport = /^(import\s+|from\s+)/.test(trimmed);
+    const isDecorator = /^@/.test(trimmed);
+    const isDefinition = /^(def\s+|async\s+def\s+|class\s+)/.test(trimmed);
+    const isHelperConstant = /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed);
+
+    if (isBlank) {
+      snippet.push(line);
+      continue;
+    }
+
+    if (!seenRequestedDefinition) {
+      if (isImport || isDecorator || isHelperConstant || trimmed.startsWith("#")) {
+        snippet.push(line.trimEnd());
+        continue;
+      }
+
+      if (isDefinition) {
+        seenRequestedDefinition = true;
+        snippet.push(line.trimEnd());
+        continue;
+      }
+
+      continue;
+    }
+
+    if (isNested) {
+      snippet.push(line.trimEnd());
+      continue;
+    }
+
+    break;
+  }
+
+  return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
+function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIndex: number): number {
+  let start = definitionIndex;
+  while (start > 0) {
+    const previous = lines[start - 1];
+    const trimmed = previous.trimStart();
+    if (
+      previous.trim().length === 0 ||
+      /^(import\s+|from\s+|@|#)/.test(trimmed) ||
+      /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
+    ) {
+      start -= 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return start;
 }
 
 function isTopLevelDefinitionLine(trimmed: string): boolean {

@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { completeWithAnthropic } from "./anthropicComplete";
+import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicComplete";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
@@ -58,7 +58,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/compile") {
-      await handleCompileStream(req, res, codeCache, completeWithAnthropic);
+      await handleCompileStream(req, res, codeCache, streamCompleteWithAnthropic);
       return;
     }
 

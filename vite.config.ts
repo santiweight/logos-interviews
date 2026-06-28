@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { runCodeSheet } from "./src/codeSheetRunner";
 import type { CodeCache } from "./src/codeSheet";
-import { completeWithAnthropic } from "./src/anthropicComplete";
+import { completeWithAnthropic, streamCompleteWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
 import { handleSessionEvents } from "./src/sessionCapture";
@@ -50,6 +50,7 @@ function availablePort(host: string): Promise<number> {
 function anthropicCompletionPlugin() {
   const codeCache: CodeCache = new Map();
   const complete = completeWithAnthropic;
+  const compileComplete = streamCompleteWithAnthropic;
   const interactiveRunApi = createInteractiveRunApi({
     cache: codeCache,
     complete,
@@ -138,7 +139,7 @@ function anthropicCompletionPlugin() {
 
       server.middlewares.use("/api/compile", async (req, res) => {
         try {
-          await handleCompileStream(req, res, codeCache, complete);
+          await handleCompileStream(req, res, codeCache, compileComplete);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           sendJson(res, 500, { ok: false, error: message });
