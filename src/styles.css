@@ -225,7 +225,7 @@ textarea:disabled {
 
 .shell {
   display: grid;
-  grid-template-columns: 292px minmax(460px, 1.34fr) minmax(340px, 0.86fr);
+  grid-template-columns: 292px var(--code-pane-width, minmax(460px, 1.34fr)) 6px minmax(340px, 0.86fr);
   min-height: 0;
   gap: 6px;
   overflow: hidden;
@@ -233,7 +233,7 @@ textarea:disabled {
 }
 
 .shell.agent-collapsed {
-  grid-template-columns: 34px minmax(500px, 1.34fr) minmax(340px, 0.86fr);
+  grid-template-columns: 34px var(--code-pane-width, minmax(500px, 1.34fr)) 6px minmax(340px, 0.86fr);
 }
 
 .agent-sidebar,
@@ -256,6 +256,35 @@ textarea:disabled {
 
 .agent-sidebar {
   background: #f8fafc;
+}
+
+.code-run-resize-handle {
+  min-width: 0;
+  border: 1px solid #d6dce5;
+  border-radius: 6px;
+  background: #e5eaf1;
+  cursor: col-resize;
+  outline: none;
+  position: relative;
+}
+
+.code-run-resize-handle::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 2px;
+  height: 42px;
+  border-radius: 999px;
+  background: #9aa6b6;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.code-run-resize-handle:hover,
+.code-run-resize-handle:focus-visible,
+.shell.resizing-code-run .code-run-resize-handle {
+  border-color: #b9c5d4;
+  background: #d9e1eb;
 }
 
 .agent-toggle-button {
@@ -828,8 +857,8 @@ h2 {
 .snippet-panel {
   position: relative;
   display: flex;
-  flex: 0 0 25%;
-  min-height: 132px;
+  flex: 0 0 38%;
+  min-height: 188px;
   max-height: 72%;
   flex-direction: column;
   border-top: 1px solid #2e3746;
@@ -871,11 +900,7 @@ h2 {
   padding: 8px 10px;
 }
 
-.snippet-panel-title {
-  min-width: 0;
-}
-
-.snippet-panel-title h2 {
+.snippet-panel-header h2 {
   overflow: hidden;
   color: #f4f7fb;
   font-size: 0.86rem;
@@ -987,6 +1012,7 @@ h2 {
 .terminal-input:focus,
 .tab:focus-visible,
 .tool-tab-close:focus-visible,
+.code-run-resize-handle:focus-visible,
 .run-button:focus-visible,
 .secondary-button:focus-visible,
 .send-button:focus-visible,
@@ -1064,6 +1090,10 @@ h2 {
 
   .shell:not(.agent-collapsed) {
     grid-template-rows: minmax(168px, 0.42fr) minmax(0, 1.1fr) minmax(0, 0.9fr);
+  }
+
+  .code-run-resize-handle {
+    display: none;
   }
 
   .agent-collapsed .agent-toggle-button {

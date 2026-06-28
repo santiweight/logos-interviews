@@ -165,7 +165,7 @@ app.innerHTML = `
         </div>
       </aside>
 
-      <section class="code-pane" aria-label="Code editor panel">
+      <section id="code-pane" class="code-pane" aria-label="Code editor panel">
         <div class="source-tabs-bar">
           <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
           <details id="sample-menu" class="sample-menu">
@@ -182,6 +182,15 @@ app.innerHTML = `
         </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
       </section>
+
+      <div
+        id="code-run-resize-handle"
+        class="code-run-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize code and run views"
+        tabindex="0"
+      ></div>
 
       <section id="output-pane" class="output-pane" aria-label="Program output panel">
         <div class="tool-tabs">
@@ -205,10 +214,7 @@ app.innerHTML = `
             tabindex="0"
           ></div>
           <header class="snippet-panel-header">
-            <div class="snippet-panel-title">
-              <p class="eyebrow">Implementation Preview</p>
-              <h2 id="snippet-title">No snippet selected</h2>
-            </div>
+            <h2 id="snippet-title">No snippet selected</h2>
             <span id="snippet-status" class="snippet-status">Idle</span>
           </header>
           <pre id="snippet-preview" class="output snippet-preview">Click a function, class, or incomplete snippet in the worksheet.</pre>
@@ -220,7 +226,9 @@ app.innerHTML = `
 
 const shell = requiredQuery<HTMLElement>("#shell");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
+const codePane = requiredQuery<HTMLElement>("#code-pane");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
+const codeRunResizeHandle = requiredQuery<HTMLDivElement>("#code-run-resize-handle");
 const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
@@ -433,6 +441,18 @@ agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
   sessionCapture.track("agent_submit", { input: agentInput.value }, true);
   runAgentTurn();
+});
+codeRunResizeHandle.addEventListener("pointerdown", (event) => {
+  beginCodeRunResize(event);
+});
+codeRunResizeHandle.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    return;
+  }
+
+  event.preventDefault();
+  const currentWidth = codePane.getBoundingClientRect().width;
+  setCodePaneWidth(currentWidth + (event.key === "ArrowLeft" ? -32 : 32));
 });
 toolPanels.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1325,6 +1345,44 @@ function snippetStatusLabel(status: SnippetPreviewState["status"]): string {
     case "stub":
       return "Stub";
   }
+}
+
+function beginCodeRunResize(event: PointerEvent): void {
+  event.preventDefault();
+  codeRunResizeHandle.setPointerCapture(event.pointerId);
+  shell.classList.add("resizing-code-run");
+
+  const startX = event.clientX;
+  const startWidth = codePane.getBoundingClientRect().width;
+
+  const onPointerMove = (moveEvent: PointerEvent): void => {
+    setCodePaneWidth(startWidth + moveEvent.clientX - startX);
+  };
+  const onPointerUp = (): void => {
+    shell.classList.remove("resizing-code-run");
+    codeRunResizeHandle.removeEventListener("pointermove", onPointerMove);
+    codeRunResizeHandle.removeEventListener("pointerup", onPointerUp);
+    codeRunResizeHandle.removeEventListener("pointercancel", onPointerUp);
+  };
+
+  codeRunResizeHandle.addEventListener("pointermove", onPointerMove);
+  codeRunResizeHandle.addEventListener("pointerup", onPointerUp);
+  codeRunResizeHandle.addEventListener("pointercancel", onPointerUp);
+}
+
+function setCodePaneWidth(width: number): void {
+  const shellRect = shell.getBoundingClientRect();
+  const codeRect = codePane.getBoundingClientRect();
+  const minCodeWidth = 360;
+  const minOutputWidth = 300;
+  const dividerAndGapWidth = 18;
+  const maxCodeWidth = Math.max(
+    minCodeWidth,
+    shellRect.right - codeRect.left - minOutputWidth - dividerAndGapWidth,
+  );
+  const nextWidth = Math.min(maxCodeWidth, Math.max(minCodeWidth, width));
+  shell.style.setProperty("--code-pane-width", `${Math.round(nextWidth)}px`);
+  editor.layout();
 }
 
 function beginSnippetPanelResize(event: PointerEvent): void {
