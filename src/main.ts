@@ -110,17 +110,12 @@ const sendIcon = `
     <path d="M10 3.4 5.4 8l1.1 1.1 2.7-2.7v10.2h1.6V6.4l2.7 2.7L14.6 8z" />
   </svg>
 `;
-const settingsIcon = `
-  <svg class="menu-icon" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M8.6 3.6h2.8l.5 2 1.8.8 1.8-1.1 2 2-1.1 1.8.8 1.8 2 .5v2.8l-2 .5-.8 1.8 1.1 1.8-2 2-1.8-1.1-1.8.8-.5 2H8.6l-.5-2-1.8-.8-1.8 1.1-2-2 1.1-1.8-.8-1.8-2-.5v-2.8l2-.5.8-1.8-1.1-1.8 2-2 1.8 1.1 1.8-.8.5-2Z" />
-    <circle cx="10" cy="10" r="2.4" />
-  </svg>
-`;
 const plusIcon = `
   <svg class="plus-icon" viewBox="0 0 20 20" aria-hidden="true">
     <path d="M10 4.5v11M4.5 10h11" />
   </svg>
 `;
+const logosWordmark = `<img class="logos-wordmark" src="/logos-wordmark.png" alt="" />`;
 
 function renderSampleGroup(group: SampleGroup): string {
   return `
@@ -143,26 +138,9 @@ function renderSampleGroup(group: SampleGroup): string {
 
 app.innerHTML = `
   <section class="app-frame" aria-label="Spreadsheet interview workspace">
-    <header class="app-header">
-      <div class="app-header-left">
-        <a class="brand-mark" href="/" aria-label="Logos">
-          <img class="logos-wordmark" src="/logos-wordmark.png" alt="" />
-        </a>
-      </div>
-      <div class="workspace-title" aria-hidden="true"></div>
-      <div class="app-header-right">
-        <details id="settings-menu" class="settings-menu">
-          <summary class="menu-trigger" aria-label="Open settings menu" title="Settings">
-            ${settingsIcon}
-          </summary>
-          <div class="menu-popover menu-popover-right" role="menu">
-            <button id="clear-cache-button" class="menu-item" type="button" role="menuitem">
-              Clear coding cache
-            </button>
-          </div>
-        </details>
-      </div>
-    </header>
+    <button id="agent-logo-toggle" class="brand-mark floating-logo" type="button" aria-label="Open assistant" title="Open assistant">
+      ${logosWordmark}
+    </button>
 
     <section id="shell" class="shell agent-collapsed">
       <aside id="agent-sidebar" class="agent-sidebar">
@@ -257,14 +235,13 @@ const implementationEl = requiredQuery<HTMLPreElement>("#implementation");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
 const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
-const clearCacheButton = requiredQuery<HTMLButtonElement>("#clear-cache-button");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
-const settingsMenu = requiredQuery<HTMLDetailsElement>("#settings-menu");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
 const implementationTab = requiredQuery<HTMLButtonElement>("#implementation-tab");
+const agentLogoToggle = requiredQuery<HTMLButtonElement>("#agent-logo-toggle");
 const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
 const agentLog = requiredQuery<HTMLDivElement>("#agent-log");
 const agentForm = requiredQuery<HTMLFormElement>("#agent-form");
@@ -334,12 +311,12 @@ monaco.editor.defineTheme("interview-light", {
   inherit: true,
   rules: [],
   colors: {
-    "editor.background": "#fbfcfe",
-    "editorGutter.background": "#f4f7fb",
-    "editorLineNumber.foreground": "#98a3b3",
-    "editorLineNumber.activeForeground": "#202b3a",
-    "editor.selectionBackground": "#dbeafe",
-    "editor.lineHighlightBackground": "#eef4fb",
+    "editor.background": "#fcfcfc",
+    "editorGutter.background": "#f6f5f2",
+    "editorLineNumber.foreground": "#74767a",
+    "editorLineNumber.activeForeground": "#07080a",
+    "editor.selectionBackground": "#b2d9ff",
+    "editor.lineHighlightBackground": "#f6f5f2",
   },
 });
 
@@ -422,11 +399,6 @@ editor.onMouseDown((event) => {
   runCurrentProgram(runnable.name);
 });
 
-clearCacheButton.addEventListener("click", () => {
-  settingsMenu.open = false;
-  sessionCapture.track("clear_cache_requested", undefined, true);
-  clearCache();
-});
 toolTabsList.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLElement)) {
@@ -455,6 +427,10 @@ agentToggle.addEventListener("click", () => {
   const expanded = !agentExpanded;
   setAgentExpanded(expanded);
   sessionCapture.track("agent_toggle", { expanded }, true);
+});
+agentLogoToggle.addEventListener("click", () => {
+  setAgentExpanded(true);
+  sessionCapture.track("agent_logo_opened", undefined, true);
 });
 agentForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -587,30 +563,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   finishInteractiveRun(currentTab, result.status, result.implementation);
-}
-
-async function clearCache(): Promise<void> {
-  clearCacheButton.disabled = true;
-  runStatus.textContent = "Clearing cache";
-  runStatus.dataset.state = "";
-
-  try {
-    const cleared = await clearCacheViaDevApi();
-    scheduleCompilation(0);
-    runStatus.textContent = `Cleared ${cleared} cached snippet${cleared === 1 ? "" : "s"}`;
-    runStatus.dataset.state = "ok";
-    sessionCapture.track("clear_cache_completed", { cleared }, true);
-  } catch (error) {
-    runStatus.textContent = "Cache clear failed";
-    runStatus.dataset.state = "error";
-    sessionCapture.track(
-      "clear_cache_failed",
-      { error: error instanceof Error ? error.message : String(error) },
-      true,
-    );
-  } finally {
-    clearCacheButton.disabled = false;
-  }
 }
 
 function scheduleEditorCapture(): void {
@@ -2176,7 +2128,7 @@ function setAgentExpanded(expanded: boolean): void {
   shell.classList.toggle("agent-collapsed", !expanded);
   agentToggle.setAttribute("aria-expanded", String(expanded));
   agentToggle.setAttribute("aria-label", expanded ? "Close assistant" : "Open assistant");
-  agentToggle.innerHTML = `${assistantMark}<span class="toggle-chevron" aria-hidden="true">${expanded ? "‹" : "›"}</span>`;
+  agentToggle.innerHTML = `${expanded ? logosWordmark : assistantMark}<span class="toggle-chevron" aria-hidden="true">${expanded ? "‹" : "›"}</span>`;
 }
 
 function escapeHtml(source: string): string {
@@ -2186,29 +2138,6 @@ function escapeHtml(source: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-async function clearCacheViaDevApi(): Promise<number> {
-  sessionCapture.track("api_request", { method: "DELETE", path: "/api/cache" });
-  const response = await fetch("/api/cache", { method: "DELETE" });
-  const payload = (await response.json()) as {
-    ok?: boolean;
-    cleared?: number;
-    error?: string;
-  };
-
-  sessionCapture.track("api_response", {
-    method: "DELETE",
-    path: "/api/cache",
-    status: response.status,
-    body: payload,
-  });
-
-  if (!response.ok || payload.ok !== true || typeof payload.cleared !== "number") {
-    throw new Error(payload.error ?? "Clear cache request failed");
-  }
-
-  return payload.cleared;
 }
 
 type CompileWireEvent =
@@ -2333,7 +2262,6 @@ function appSnapshot(): JsonObject {
       selectedSampleId: activeSampleItem()?.dataset.sampleId ?? null,
       selectedSampleLabel: activeSampleItem()?.textContent ?? null,
       sampleMenuOpen: sampleMenu.open,
-      settingsMenuOpen: settingsMenu.open,
       activeTab: activeToolTabId,
       lastRunLabel,
       runStatus: {
