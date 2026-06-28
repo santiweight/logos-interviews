@@ -24,6 +24,24 @@ type SampleProgram = {
   code: string;
 };
 
+type SourceTab = {
+  id: string;
+  projectId: string;
+  title: string;
+  source: string;
+};
+
+type SourceTabState = {
+  tabs: SourceTab[];
+  activeTabId: string | null;
+};
+
+const sourceTabDbName = "logos-interviews-user";
+const sourceTabDbVersion = 1;
+const sourceTabStoreName = "state";
+const sourceTabStateKey = "source-tabs-v1";
+const defaultProjectIds = ["add", "multi", "spreadsheet", "parking-lot"];
+
 const samples: SampleProgram[] = [
   {
     id: "add",
@@ -312,7 +330,10 @@ def test():
   },
 ];
 
-const seedCode = samples[0].code;
+const initialSourceTabState = defaultSourceTabState();
+let sourceTabs = initialSourceTabState.tabs;
+let activeSourceTabId = initialSourceTabState.activeTabId;
+const seedCode = activeSourceTab()?.source ?? "";
 
 const app = requiredQuery<HTMLDivElement>("#app");
 const logosMark = `
@@ -393,12 +414,9 @@ app.innerHTML = `
       </aside>
 
       <section class="code-pane" aria-label="Code editor panel">
-        <header class="panel-header code-header">
-          <div>
-            <p class="eyebrow">Source</p>
-            <h2>Editor</h2>
-          </div>
-        </header>
+        <div class="source-tabs-bar">
+          <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
+        </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
       </section>
 
@@ -428,6 +446,7 @@ app.innerHTML = `
 `;
 
 const shell = requiredQuery<HTMLElement>("#shell");
+const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
 const runViewPanel = requiredQuery<HTMLDivElement>("#run-view-panel");
 const outputEl = requiredQuery<HTMLPreElement>("#output");
@@ -454,6 +473,7 @@ let agentExpanded = false;
 let compileController: AbortController | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
+let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
 let runnableStateByLine = new Map<number, RunnableState>();
@@ -501,6 +521,12 @@ const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
 let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
 
 editor.onDidChangeModelContent(() => {
+  const active = activeSourceTab();
+  if (active) {
+    active.source = editor.getValue();
+    scheduleSaveSourceTabs();
+  }
+
   scheduleCompilation(250);
   scheduleEditorCapture();
 });
@@ -560,39 +586,42 @@ agentForm.addEventListener("submit", (event) => {
 });
 sampleMenuItems.forEach((item) => {
   item.addEventListener("click", () => {
-    loadSample(item.dataset.sampleId ?? "");
+    openProject(item.dataset.sampleId ?? "");
   });
 });
+sourceTabsEl.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
 
-function loadSample(sampleId: string): void {
+  const closeButton = target.closest<HTMLButtonElement>("[data-close-tab-id]");
+  if (closeButton) {
+    closeSourceTab(closeButton.dataset.closeTabId ?? "");
+    return;
+  }
+
+  const tabButton = target.closest<HTMLButtonElement>("[data-source-tab-id]");
+  if (tabButton) {
+    activateSourceTab(tabButton.dataset.sourceTabId ?? "");
+  }
+});
+
+function openProject(sampleId: string): void {
   const sample = samples.find((item) => item.id === sampleId);
   if (!sample) {
     return;
   }
 
-  editor.setValue(sample.code);
-  sampleMenuItems.forEach((item) => {
-    item.classList.toggle("active", item.dataset.sampleId === sample.id);
-  });
   projectMenu.open = false;
-  outputEl.textContent = "";
-  agentMessages = [];
-  renderAgentLog();
-  lastRunLabel = "never";
-  lastRunStatusText = "Not run";
-  runStatus.textContent = "Not run";
-  runStatus.dataset.state = "";
-  lastRunDefinitionHash = null;
-  updateRunStaleness();
-  scheduleCompilation(0);
-  setActiveTab("run");
-  sessionCapture.track("sample_changed", { sampleId: sample.id, sampleLabel: sample.label }, true);
+  openProjectTab(sample);
+  sessionCapture.track("project_opened", { sampleId: sample.id, sampleLabel: sample.label }, true);
 }
 
-sampleMenuItems[0]?.classList.add("active");
-
+renderSourceTabs();
 renderAgentLog();
 scheduleCompilation(0);
+void hydrateSourceTabsFromDatabase();
 
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
@@ -702,6 +731,7 @@ function scheduleCompilation(delayMs: number): void {
   implementationEl.textContent = source;
   updateReadinessDecorations(localReadiness(source));
   updateRunStaleness(source);
+  updateEditorAvailability();
 
   if (compileTimer) {
     clearTimeout(compileTimer);
@@ -711,6 +741,277 @@ function scheduleCompilation(delayMs: number): void {
     compileTimer = null;
     streamImplementation(source, version);
   }, delayMs);
+}
+
+function openProjectTab(sample: SampleProgram): void {
+  syncActiveSourceTab();
+  const tab: SourceTab = {
+    id: createSourceTabId(sample.id),
+    projectId: sample.id,
+    title: sample.label,
+    source: sample.code,
+  };
+  sourceTabs = [...sourceTabs, tab];
+  activeSourceTabId = tab.id;
+  applyActiveSourceTab();
+  renderSourceTabs();
+  scheduleSaveSourceTabs();
+  updateActiveProjectMenuItem();
+}
+
+function activateSourceTab(tabId: string): void {
+  if (tabId === activeSourceTabId || !sourceTabs.some((tab) => tab.id === tabId)) {
+    return;
+  }
+
+  syncActiveSourceTab();
+  activeSourceTabId = tabId;
+  applyActiveSourceTab();
+  renderSourceTabs();
+  scheduleSaveSourceTabs();
+  updateActiveProjectMenuItem();
+}
+
+function closeSourceTab(tabId: string): void {
+  const closingIndex = sourceTabs.findIndex((tab) => tab.id === tabId);
+  if (closingIndex === -1) {
+    return;
+  }
+
+  syncActiveSourceTab();
+  sourceTabs = sourceTabs.filter((tab) => tab.id !== tabId);
+
+  if (activeSourceTabId === tabId) {
+    activeSourceTabId = sourceTabs[closingIndex]?.id ?? sourceTabs[closingIndex - 1]?.id ?? null;
+    applyActiveSourceTab();
+  } else if (!sourceTabs.some((tab) => tab.id === activeSourceTabId)) {
+    activeSourceTabId = sourceTabs[0]?.id ?? null;
+  }
+
+  renderSourceTabs();
+  scheduleSaveSourceTabs();
+  updateEditorAvailability();
+  updateActiveProjectMenuItem();
+}
+
+function applyActiveSourceTab(): void {
+  const active = activeSourceTab();
+  editor.setValue(active?.source ?? "");
+  outputEl.textContent = "";
+  agentMessages = [];
+  renderAgentLog();
+  lastRunLabel = "never";
+  lastRunStatusText = active ? "Not run" : "No open project";
+  lastRunDefinitionHash = null;
+  runStatus.textContent = active ? "Not run" : "No open project";
+  runStatus.dataset.state = active ? "" : "error";
+  updateRunStaleness(active?.source ?? "");
+  scheduleCompilation(0);
+  setActiveTab("run");
+  updateEditorAvailability();
+  updateActiveProjectMenuItem();
+}
+
+function syncActiveSourceTab(): void {
+  const active = activeSourceTab();
+  if (active) {
+    active.source = editor.getValue();
+  }
+}
+
+function activeSourceTab(): SourceTab | null {
+  return sourceTabs.find((tab) => tab.id === activeSourceTabId) ?? null;
+}
+
+function renderSourceTabs(): void {
+  if (sourceTabs.length === 0) {
+    sourceTabsEl.innerHTML = `<div class="source-tabs-empty">No open projects</div>`;
+    return;
+  }
+
+  sourceTabsEl.innerHTML = sourceTabs.map((tab) => {
+    const selected = tab.id === activeSourceTabId;
+    return `<div class="source-tab-shell" role="presentation">
+      <button
+        class="source-tab${selected ? " active" : ""}"
+        type="button"
+        role="tab"
+        aria-selected="${selected}"
+        data-source-tab-id="${escapeHtml(tab.id)}"
+      >
+        ${escapeHtml(tab.title)}
+      </button>
+      <button
+        class="source-tab-close"
+        type="button"
+        aria-label="Close ${escapeHtml(tab.title)}"
+        data-close-tab-id="${escapeHtml(tab.id)}"
+      >&times;</button>
+    </div>`;
+  }).join("");
+}
+
+function updateEditorAvailability(): void {
+  const hasActiveTab = activeSourceTab() !== null;
+  editor.updateOptions({ readOnly: !hasActiveTab });
+}
+
+function updateActiveProjectMenuItem(): void {
+  const active = activeSourceTab();
+  sampleMenuItems.forEach((item) => {
+    item.classList.toggle("active", active !== null && item.dataset.sampleId === active.projectId);
+  });
+}
+
+function scheduleSaveSourceTabs(): void {
+  if (sourceTabSaveTimer) {
+    clearTimeout(sourceTabSaveTimer);
+  }
+
+  sourceTabSaveTimer = setTimeout(() => {
+    sourceTabSaveTimer = null;
+    void saveSourceTabState();
+  }, 200);
+}
+
+async function saveSourceTabState(): Promise<void> {
+  try {
+    await writeUserState({
+      tabs: sourceTabs,
+      activeTabId: activeSourceTabId,
+    });
+  } catch (error) {
+    console.error("Failed to save source tabs", error);
+  }
+}
+
+async function hydrateSourceTabsFromDatabase(): Promise<void> {
+  const loadedState = await loadSourceTabState();
+  sourceTabs = loadedState.tabs;
+  activeSourceTabId = loadedState.activeTabId;
+  applyActiveSourceTab();
+  renderSourceTabs();
+}
+
+async function loadSourceTabState(): Promise<SourceTabState> {
+  const defaultState = defaultSourceTabState();
+
+  try {
+    const stored = await readUserState();
+    if (isSourceTabState(stored)) {
+      return normalizeSourceTabState(stored);
+    }
+  } catch (error) {
+    console.error("Failed to load source tabs", error);
+  }
+
+  return defaultState;
+}
+
+function defaultSourceTabState(): SourceTabState {
+  const tabs = defaultProjectIds.flatMap((projectId) => {
+    const sample = samples.find((item) => item.id === projectId);
+    return sample
+      ? [{
+          id: createSourceTabId(sample.id),
+          projectId: sample.id,
+          title: sample.label,
+          source: sample.code,
+        }]
+      : [];
+  });
+
+  return {
+    tabs,
+    activeTabId: tabs[0]?.id ?? null,
+  };
+}
+
+function normalizeSourceTabState(state: SourceTabState): SourceTabState {
+  const activeTabId = state.tabs.some((tab) => tab.id === state.activeTabId)
+    ? state.activeTabId
+    : state.tabs[0]?.id ?? null;
+
+  return {
+    tabs: state.tabs,
+    activeTabId,
+  };
+}
+
+function isSourceTabState(value: unknown): value is SourceTabState {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const state = value as SourceTabState;
+  return (
+    Array.isArray(state.tabs) &&
+    (typeof state.activeTabId === "string" || state.activeTabId === null) &&
+    state.tabs.every((tab) => (
+      typeof tab === "object" &&
+      tab !== null &&
+      typeof tab.id === "string" &&
+      typeof tab.projectId === "string" &&
+      typeof tab.title === "string" &&
+      typeof tab.source === "string"
+    ))
+  );
+}
+
+function createSourceTabId(projectId: string): string {
+  if (typeof crypto.randomUUID === "function") {
+    return `${projectId}-${crypto.randomUUID()}`;
+  }
+
+  return `${projectId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function readUserState(): Promise<unknown> {
+  const db = await openUserDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(sourceTabStoreName, "readonly");
+    const store = transaction.objectStore(sourceTabStoreName);
+    const request = store.get(sourceTabStateKey);
+    request.onerror = () => reject(request.error ?? new Error("Could not read source tab state"));
+    request.onsuccess = () => resolve(request.result);
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Could not read source tab state"));
+    };
+  });
+}
+
+async function writeUserState(state: SourceTabState): Promise<void> {
+  const db = await openUserDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(sourceTabStoreName, "readwrite");
+    const store = transaction.objectStore(sourceTabStoreName);
+    const request = store.put(state, sourceTabStateKey);
+    request.onerror = () => reject(request.error ?? new Error("Could not save source tab state"));
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error ?? new Error("Could not save source tab state"));
+    };
+  });
+}
+
+function openUserDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(sourceTabDbName, sourceTabDbVersion);
+    request.onerror = () => reject(request.error ?? new Error("Could not open user database"));
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(sourceTabStoreName)) {
+        db.createObjectStore(sourceTabStoreName);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+  });
 }
 
 async function streamImplementation(source: string, version: number): Promise<void> {
