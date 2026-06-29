@@ -153,10 +153,10 @@ def test():
   print(sheet.get("A", 1))
   sheet.set("A", 1, "7")
   print(sheet.get("A", 1))
-  sheet.set("B1", "2 + 3")
-  print(sheet.eval().eval("B1"))
-  sheet.set("C1", "(B1 + A1) * 4)")
-  print(sheet.eval().eval("C1"))`,
+  sheet.set("B", 1, "2 + 3")
+  print(sheet.eval().eval("B", 1))
+  sheet.set("C", 1, "(B1 + A1) * 4)")
+  print(sheet.eval().eval("C", 1))`,
     runnable: "test",
     expectedStdout: ["None", "Val(value=7)", "5", "48"],
   },
