@@ -30,7 +30,8 @@ export type RunOptions = {
   agenticMaxIterations?: number;
 };
 
-export type CompilationMode = CompilationStrategy | "auto";
+export type AgenticMethodStrategy = "agentic-methods";
+export type CompilationMode = CompilationStrategy | AgenticMethodStrategy | "auto";
 
 export type RunChunk = {
   stream: "stdout" | "stderr";
@@ -67,6 +68,14 @@ type AgenticObservation = {
   ok: boolean;
   stdout: string[];
   stderr: string;
+};
+
+type RunnerStrategy = CompilationStrategy | AgenticMethodStrategy;
+
+type MethodAgentTask = {
+  snippet: string;
+  prompt: string;
+  synthesized?: string;
 };
 
 export async function runCodeSheet(
@@ -117,10 +126,14 @@ async function compileAndRun(
   codeSheet: CodeSheet,
   runnable: Runnable,
   options: RunOptions,
-  strategy: CompilationStrategy,
+  strategy: RunnerStrategy,
 ): Promise<RunResult> {
   if (strategy === "agentic") {
     return compileAndRunAgentically(cache, codeSheet, runnable, options);
+  }
+
+  if (strategy === "agentic-methods") {
+    return compileAndRunAgenticMethods(cache, codeSheet, runnable, options);
   }
 
   const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options, strategy));
@@ -233,6 +246,64 @@ async function compileAndRunAgentically(
   return runResult(executed, completed);
 }
 
+async function compileAndRunAgenticMethods(
+  cache: CodeCache,
+  codeSheet: CodeSheet,
+  runnable: Runnable,
+  options: RunOptions,
+): Promise<RunResult> {
+  if (!options.complete) {
+    return compileAndRun(cache, codeSheet, runnable, options, "sequential");
+  }
+
+  const cacheKey = hashSnippet(`agentic-methods:${runnable}\n${codeSheet}`);
+  const cachedSource = cache.get(cacheKey);
+  if (cachedSource !== undefined) {
+    const completed = completedAgenticSheet(codeSheet, cachedSource, cacheKey, true);
+    const executed = await runPython(
+      buildPythonProgram(completed.source, runnable),
+      options.python ?? "python3",
+      options.onStdoutLine,
+    );
+    return runResult(executed, completed);
+  }
+
+  const parsed = parse(codeSheet);
+  let currentSource = renderImplementation(buildCompilationIR(parsed));
+  const tasks = buildMethodAgentTasks(codeSheet, runnable, currentSource, parsed.incompleteSnippets.map((snippet) => snippet.snippet));
+  if (tasks.length === 0) {
+    return compileAndRunAgentically(cache, codeSheet, runnable, options);
+  }
+
+  const replacements = await Promise.all(tasks.map(async (task) => ({
+    snippet: task.snippet,
+    replacement: task.synthesized ?? parseMethodAgentReplacement(
+      await collectCompletionResult(options.complete?.(task.prompt) ?? ""),
+      task.snippet,
+    ),
+  })));
+
+  for (const replacement of replacements) {
+    currentSource = replaceAgenticSnippet(currentSource, replacement.snippet, replacement.replacement);
+  }
+
+  const trial = await runPython(buildPythonProgram(currentSource, runnable), options.python ?? "python3");
+  if (!trial.ok) {
+    return compileAndRunAgentically(cache, codeSheet, runnable, options);
+  }
+
+  const completed = completedAgenticSheet(codeSheet, currentSource, cacheKey, false);
+  const executed = await runPython(
+    buildPythonProgram(completed.source, runnable),
+    options.python ?? "python3",
+    options.onStdoutLine,
+  );
+  if (executed.ok) {
+    cache.set(cacheKey, currentSource);
+  }
+  return runResult(executed, completed);
+}
+
 function compileOptions(options: RunOptions, strategy: CompilationStrategy): CompileOptions {
   return {
     strategy,
@@ -250,11 +321,14 @@ function compilationMode(options: RunOptions): CompilationMode {
 
 function interactiveStrategy(options: RunOptions): CompilationStrategy {
   const mode = compilationMode(options);
-  return mode === "auto" ? "parallel" : mode;
+  if (mode === "auto") {
+    return "parallel";
+  }
+  return mode === "agentic-methods" ? "agentic" : mode;
 }
 
-function strategyOrder(): CompilationStrategy[] {
-  return ["parallel", "sequential", "agentic"];
+function strategyOrder(): RunnerStrategy[] {
+  return ["parallel", "sequential", "agentic-methods", "agentic"];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {
@@ -282,6 +356,179 @@ function completedAgenticSheet(
     }],
     ir: buildCompilationIR(parsed),
   };
+}
+
+function buildMethodAgentTasks(
+  codeSheet: CodeSheet,
+  runnable: Runnable,
+  currentSource: string,
+  snippets: string[],
+): MethodAgentTask[] {
+  const classNames = classNamesFromSnippets(snippets);
+  return snippets.flatMap((snippet) => {
+    if (snippet.trimStart().startsWith("class ")) {
+      return methodHeadersFromClassSnippet(snippet).map((methodSnippet) => ({
+        snippet: methodSnippet,
+        prompt: buildMethodAgentPrompt({
+          codeSheet,
+          runnable,
+          currentSource,
+          targetSnippet: methodSnippet,
+          targetKind: "method",
+        }),
+      }));
+    }
+
+    const synthesized = synthesizeAgenticFactory(snippet, classNames);
+    return [{
+      snippet,
+      ...(synthesized === null
+        ? {
+            prompt: buildMethodAgentPrompt({
+              codeSheet,
+              runnable,
+              currentSource,
+              targetSnippet: snippet,
+              targetKind: "snippet",
+            }),
+          }
+        : { prompt: "", synthesized }),
+    }];
+  });
+}
+
+function methodHeadersFromClassSnippet(snippet: string): string[] {
+  return snippet.split("\n").filter((line) => {
+    return /^\s+/.test(line) && methodHeaderWithoutColon(line) !== null;
+  }).map((line) => line.trimEnd());
+}
+
+function methodHeaderWithoutColon(line: string): RegExpMatchArray | null {
+  return line.match(/^\s+def\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*$/);
+}
+
+function classNamesFromSnippets(snippets: string[]): Set<string> {
+  return new Set(snippets.flatMap((snippet) => {
+    const match = snippet.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
+    return match ? [match[1]] : [];
+  }));
+}
+
+function synthesizeAgenticFactory(snippet: string, classNames: Set<string>): string | null {
+  const match = snippet.match(/^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*->\s*([A-Z][A-Za-z0-9_]*)\s*$/);
+  if (!match || !classNames.has(match[2])) {
+    return null;
+  }
+
+  return `def ${match[1]}() -> ${match[2]}:\n  return ${match[2]}()`;
+}
+
+function buildMethodAgentPrompt(options: {
+  codeSheet: CodeSheet;
+  runnable: Runnable;
+  currentSource: string;
+  targetSnippet: string;
+  targetKind: "method" | "snippet";
+}): string {
+  return `You are one of several parallel coding agents compiling a Python worksheet.
+
+Return exactly one JSON object: {"replacement":"<complete Python code that replaces the target snippet>"}.
+
+Rules:
+- Replace only the exact target snippet.
+- Preserve the public behavior required by the runnable/test function.
+- Use only the Python standard library.
+- Keep the replacement concise.
+- For class methods, the replacement is inserted inside the existing class at the same indentation as the target method.
+- For class methods, return only the requested method definition and its nested local helpers. Do not include sibling methods, the class header, or top-level functions.
+- For classes without __init__, methods must work with no-argument construction. Use getattr defaults and dynamic attributes rather than requiring constructor arguments.
+- Parallel agents may complete sibling methods independently, so do not depend on a sibling method adding hidden state during construction.
+- Do not include an if __name__ == "__main__" block.
+
+Runnable to satisfy: ${options.runnable}
+Target kind: ${options.targetKind}
+
+Worksheet:
+\`\`\`python
+${options.codeSheet}
+\`\`\`
+
+Current file:
+\`\`\`python
+${options.currentSource}
+\`\`\`
+
+Target snippet:
+\`\`\`python
+${options.targetSnippet}
+\`\`\``;
+}
+
+function parseMethodAgentReplacement(raw: string, targetSnippet: string): string {
+  const candidates = [
+    raw.trim(),
+    raw.trim().match(/```(?:json)?\s*\n([\s\S]*?)```/)?.[1]?.trim(),
+    raw.trim().match(/({[\s\S]*})/)?.[1]?.trim(),
+  ].filter((value): value is string => value !== undefined && value.length > 0);
+
+  for (const candidate of candidates) {
+    try {
+      const value = JSON.parse(candidate) as { replacement?: unknown };
+      if (typeof value.replacement === "string") {
+        return extractRequestedMethodReplacement(
+          normalizeMethodAgentReplacement(value.replacement),
+          targetSnippet,
+        );
+      }
+    } catch {
+      // Try the next extraction shape.
+    }
+  }
+
+  return extractRequestedMethodReplacement(normalizeMethodAgentReplacement(raw), targetSnippet);
+}
+
+function normalizeMethodAgentReplacement(source: string): string {
+  const withoutCarriageReturns = normalizeAgenticLineEndings(source);
+  const fenced = withoutCarriageReturns.trim().match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1];
+  return (fenced ?? withoutCarriageReturns).replace(/^\n+/, "").trimEnd();
+}
+
+function extractRequestedMethodReplacement(replacement: string, targetSnippet: string): string {
+  const target = methodNameAndIndent(targetSnippet);
+  if (!target) {
+    return replacement;
+  }
+
+  const lines = replacement.split("\n");
+  const start = lines.findIndex((line) => {
+    const match = methodNameAndIndent(line);
+    return match?.name === target.name;
+  });
+  if (start < 0) {
+    return replacement;
+  }
+
+  const result = [lines[start].trimEnd()];
+  for (const line of lines.slice(start + 1)) {
+    if (line.trim().length === 0) {
+      result.push(line);
+      continue;
+    }
+
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+    if (indent <= target.indent && methodNameAndIndent(line)) {
+      break;
+    }
+    result.push(line.trimEnd());
+  }
+
+  return trimOuterBlankLines(result).join("\n").trimEnd();
+}
+
+function methodNameAndIndent(line: string): { name: string; indent: number } | null {
+  const match = line.match(/^(\s*)def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+  return match ? { name: match[2], indent: match[1].length } : null;
 }
 
 function buildAgenticFilePrompt(options: {

@@ -47,7 +47,7 @@ type SourceTabState = {
   activeTabId: string | null;
 };
 
-type CompilationMode = "auto" | "parallel" | "sequential" | "agentic";
+type CompilationMode = "auto" | "parallel" | "sequential" | "agentic" | "agentic-methods";
 
 type AppSettings = {
   compilationStrategy: CompilationMode;
@@ -346,6 +346,7 @@ app.innerHTML = `
                   <option value="parallel"${appSettings.compilationStrategy === "parallel" ? " selected" : ""}>Parallel</option>
                   <option value="sequential"${appSettings.compilationStrategy === "sequential" ? " selected" : ""}>Sequential</option>
                   <option value="agentic"${appSettings.compilationStrategy === "agentic" ? " selected" : ""}>Agentic</option>
+                  <option value="agentic-methods"${appSettings.compilationStrategy === "agentic-methods" ? " selected" : ""}>Agentic methods</option>
                 </select>
               </label>
               <div class="menu-separator" role="separator"></div>
@@ -4177,7 +4178,11 @@ function defaultAppSettings(): AppSettings {
 }
 
 function compilationMode(value: unknown): CompilationMode {
-  return value === "parallel" || value === "sequential" || value === "agentic" || value === "auto"
+  return value === "parallel" ||
+    value === "sequential" ||
+    value === "agentic" ||
+    value === "agentic-methods" ||
+    value === "auto"
     ? value
     : "auto";
 }

@@ -145,7 +145,13 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
 }
 
 function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
-  if (strategy === "auto" || strategy === "parallel" || strategy === "sequential" || strategy === "agentic") {
+  if (
+    strategy === "auto" ||
+    strategy === "parallel" ||
+    strategy === "sequential" ||
+    strategy === "agentic" ||
+    strategy === "agentic-methods"
+  ) {
     return strategy;
   }
 

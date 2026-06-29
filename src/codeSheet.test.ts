@@ -2494,6 +2494,49 @@ def test():
   print(add(1,2))`);
   });
 
+  it("agentic methods strategy completes sibling class methods in parallel", async () => {
+    const methodSheet = `class IsoScene:
+  def render(self) -> str
+  def rotate_y(self, turns: int = 1) -> "IsoScene"
+
+def cube_stack() -> IsoScene
+
+def test():
+  print(cube_stack().render())
+  print(cube_stack().rotate_y().render())`;
+    const started: string[] = [];
+    const resolvers: Array<(replacement: string) => void> = [];
+
+    const runPromise = runCodeSheet(methodSheet, "test", {
+      compilationStrategy: "agentic-methods",
+      complete(prompt) {
+        const targetSnippet = prompt.match(/Target snippet:\n```python\n([\s\S]*?)\n```/)?.[1] ?? "";
+        if (targetSnippet.length === 0) {
+          throw new Error(`unexpected fallback prompt: ${prompt}`);
+        }
+        const target = targetSnippet.includes("def rotate_y(") ? "rotate_y" : "render";
+        started.push(target);
+        return new Promise<string>((resolve) => {
+          resolvers.push((replacement) => {
+            resolve(JSON.stringify({ replacement }));
+          });
+        });
+      },
+    });
+
+    await eventually(() => expect([...started].sort()).toEqual(["render", "rotate_y"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[started.indexOf("render")](`  def render(self) -> str:
+    return "ok"`);
+    resolvers[started.indexOf("rotate_y")](`  def rotate_y(self, turns: int = 1) -> "IsoScene":
+    return self`);
+
+    expect(simplifyRunResult(await runPromise)).toEqual({
+      ok: true,
+      stdout: ["ok", "ok"],
+    });
+  });
+
   it("synthesizes zero-argument class factories without skipping parameterized factories", async () => {
     const factorySheet = `class IsoScene:
   def render(self) -> str

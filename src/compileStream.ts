@@ -63,6 +63,10 @@ function compileStrategy(strategy: unknown, experimentalParallelCompletions: unk
     return strategy;
   }
 
+  if (strategy === "agentic-methods") {
+    return "agentic";
+  }
+
   if (strategy === "auto" || experimentalParallelCompletions === true) {
     return "parallel";
   }

@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "vitest";
 import { benchmarkProvidersFromEnv, type BenchmarkProvider } from "./benchmarkProviders";
-import type { CodeCache, CodeSheet, CompilationStrategy, CompleteFunction, CompleteResult, Runnable } from "./codeSheet";
+import type { CodeCache, CodeSheet, CompleteFunction, CompleteResult, Runnable } from "./codeSheet";
 import { runCodeSheet, type CompilationMode, type RunResult } from "./codeSheetRunner";
 import { sampleEvalCases, type SampleEvalCase } from "./samples";
 
@@ -27,7 +27,7 @@ type CompletionTrace = {
 };
 
 type StrategyAttempt = {
-  strategy: CompilationStrategy;
+  strategy: Exclude<CompilationMode, "auto">;
   elapsedMs: number;
   completionCalls: number;
   completionMs: number;
@@ -352,12 +352,13 @@ function isBenchmarkMode(value: string): value is BenchmarkMode {
   return value === "parallel" ||
     value === "sequential" ||
     value === "agentic" ||
+    value === "agentic-methods" ||
     value === "auto" ||
     value === "semantic-auto";
 }
 
-function strategyOrder(): CompilationStrategy[] {
-  return ["parallel", "sequential", "agentic"];
+function strategyOrder(): Array<Exclude<CompilationMode, "auto">> {
+  return ["parallel", "sequential", "agentic-methods", "agentic"];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {
@@ -414,6 +415,12 @@ function stats(values: number[]): { min: number; mean: number; max: number } {
 }
 
 function completionTarget(prompt: string): string {
+  const methodAgentMarker = "You are one of several parallel coding agents compiling a Python worksheet.";
+  if (prompt.includes(methodAgentMarker)) {
+    const target = prompt.match(/Target snippet:\n```python\n([\s\S]*?)\n```/)?.[1]?.trim();
+    return target ? `method agent: ${target.split("\n")[0]}` : "method agent";
+  }
+
   const agenticMarker = "Your job is to compile this worksheet into one complete Python file.";
   if (prompt.includes(agenticMarker)) {
     return "agentic file";
