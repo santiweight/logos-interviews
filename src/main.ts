@@ -450,12 +450,13 @@ let lastRunStatusState = "";
 let lastRunDefinitionHash: string | null = null;
 let agentMessages: AgentChatMessage[] = [];
 let agentExpanded = false;
-let compileController: AbortController | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
 let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let compilationPending = false;
+let applyingSourceTab = false;
 let latestReadinessDefinitions: DefinitionReadiness[] = [];
+let latestTypeCheckDiagnostics: TypeCheckDiagnostic[] = [];
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
 let incompleteSnippetDecorations: string[] = [];
@@ -471,6 +472,7 @@ let naturalSnippetEditorMode: "python" | "natural" = "python";
 let latestImplementationSource = seedCode;
 let runTabs: RunTab[] = [];
 let activeToolTabId: ToolTabId = null;
+let activeCompilationUnsubscribe: (() => void) | null = null;
 
 type RunnableState = {
   name: Runnable;
@@ -512,6 +514,305 @@ type SnippetPreviewState = {
 };
 
 type SnippetPanelStatus = SnippetPreviewState["status"] | null;
+
+type SheetId = string;
+type SourceFingerprint = string;
+
+type CompilationStatus = "idle" | "compiling" | "compiled" | "failed";
+
+type CompilationState = {
+  sheetId: SheetId;
+  source: string;
+  sourceFingerprint: SourceFingerprint;
+  strategy: CompilationMode;
+  status: CompilationStatus;
+  implementation: string;
+  readiness: DefinitionReadiness[];
+  diagnostics: TypeCheckDiagnostic[];
+  snippetPreviews: Map<SnippetHash, SnippetPreviewState>;
+  error: string | null;
+};
+
+type CompilationRequest = {
+  sheetId: SheetId;
+  source: string;
+  sourceFingerprint: SourceFingerprint;
+  strategy: CompilationMode;
+};
+
+type CompilationJob = {
+  request: CompilationRequest;
+  controller: AbortController;
+  promise: Promise<CompilationState>;
+};
+
+type CompilationListener = (state: CompilationState) => void;
+
+class CompilationService {
+  private readonly states = new Map<SheetId, CompilationState>();
+  private readonly jobs = new Map<SheetId, CompilationJob>();
+  private readonly listeners = new Map<SheetId, Set<CompilationListener>>();
+  private inactiveQueue: SheetId[] = [];
+  private inactiveRunning = false;
+
+  compile(sheetId: SheetId): Promise<CompilationState> {
+    const request = compilationRequestForSheet(sheetId);
+    if (request === null) {
+      return Promise.resolve(this.getCompilationState(sheetId));
+    }
+
+    const state = this.states.get(sheetId);
+    if (state && this.stateMatchesRequest(state, request) && state.status === "compiled") {
+      return Promise.resolve(state);
+    }
+
+    const job = this.jobs.get(sheetId);
+    if (job && this.requestMatches(job.request, request)) {
+      return job.promise;
+    }
+
+    this.abortJob(sheetId);
+    const controller = new AbortController();
+    this.setState(initialCompilationState(request, "compiling"));
+
+    const promise = this.runCompile(request, controller);
+    this.jobs.set(sheetId, { request, controller, promise });
+    return promise;
+  }
+
+  getCompilationState(sheetId: SheetId): CompilationState {
+    const request = compilationRequestForSheet(sheetId);
+    if (request === null) {
+      return emptyCompilationState(sheetId);
+    }
+
+    const state = this.states.get(sheetId);
+    if (state && this.stateMatchesRequest(state, request)) {
+      return state;
+    }
+
+    return initialCompilationState(request, "idle");
+  }
+
+  subscribe(sheetId: SheetId, listener: CompilationListener): () => void {
+    const listeners = this.listeners.get(sheetId) ?? new Set<CompilationListener>();
+    listeners.add(listener);
+    this.listeners.set(sheetId, listeners);
+    listener(this.getCompilationState(sheetId));
+
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) {
+        this.listeners.delete(sheetId);
+      }
+    };
+  }
+
+  invalidateCompilation(sheetId: SheetId): void {
+    this.abortJob(sheetId);
+    this.states.delete(sheetId);
+    const request = compilationRequestForSheet(sheetId);
+    this.emit(sheetId, request === null ? emptyCompilationState(sheetId) : initialCompilationState(request, "idle"));
+    renderSourceTabs();
+  }
+
+  invalidateAllCompilations(): void {
+    for (const sheetId of Array.from(this.jobs.keys())) {
+      this.abortJob(sheetId);
+    }
+    this.inactiveQueue = [];
+    this.inactiveRunning = false;
+    this.states.clear();
+
+    for (const sheetId of this.listeners.keys()) {
+      const request = compilationRequestForSheet(sheetId);
+      this.emit(sheetId, request === null ? emptyCompilationState(sheetId) : initialCompilationState(request, "idle"));
+    }
+    renderSourceTabs();
+  }
+
+  rememberCompilationState(state: CompilationState): void {
+    this.abortJob(state.sheetId);
+    this.setState(state);
+  }
+
+  markCompiling(sheetId: SheetId): void {
+    const request = compilationRequestForSheet(sheetId);
+    if (request === null) {
+      this.setState(emptyCompilationState(sheetId));
+      return;
+    }
+
+    this.abortJob(sheetId);
+    this.setState(initialCompilationState(request, "compiling"));
+  }
+
+  compileInactiveSheets(options: { concurrency: 1; onlyStale: boolean }): void {
+    void options.concurrency;
+
+    for (const tab of sourceTabs) {
+      if (tab.id === activeSourceTabId) {
+        continue;
+      }
+      if (options.onlyStale && this.isFresh(tab.id)) {
+        continue;
+      }
+      if (this.inactiveQueue.includes(tab.id) || this.jobs.has(tab.id)) {
+        continue;
+      }
+      this.inactiveQueue.push(tab.id);
+    }
+
+    this.pumpInactiveQueue();
+  }
+
+  private async runCompile(request: CompilationRequest, controller: AbortController): Promise<CompilationState> {
+    let state = this.getCompilationState(request.sheetId);
+    sessionCapture.track("compile_stream_started", { sheetId: request.sheetId, source: request.source }, false);
+
+    try {
+      for await (const event of compileViaDevApi(request.source, controller.signal, request.strategy)) {
+        if (!this.jobStillCurrent(request, controller)) {
+          return this.getCompilationState(request.sheetId);
+        }
+
+        state = reduceCompilationEvent(state, event);
+        this.setState(state);
+      }
+
+      if (state.status !== "compiled") {
+        state = { ...state, status: "compiled" };
+        this.setState(state);
+      }
+
+      sessionCapture.track("compile_stream_completed", { sheetId: request.sheetId }, true);
+      return state;
+    } catch (error) {
+      if (controller.signal.aborted || !this.jobStillCurrent(request, controller)) {
+        return this.getCompilationState(request.sheetId);
+      }
+
+      const failed = {
+        ...state,
+        status: "failed" as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+      console.error(error);
+      sessionCapture.track(
+        "compile_stream_failed",
+        { sheetId: request.sheetId, error: failed.error },
+        true,
+      );
+      this.setState(failed);
+      return failed;
+    } finally {
+      const job = this.jobs.get(request.sheetId);
+      if (job?.controller === controller) {
+        this.jobs.delete(request.sheetId);
+      }
+    }
+  }
+
+  private pumpInactiveQueue(): void {
+    if (this.inactiveRunning) {
+      return;
+    }
+
+    const nextSheetId = this.inactiveQueue.shift();
+    if (nextSheetId === undefined) {
+      return;
+    }
+
+    if (nextSheetId === activeSourceTabId || this.isFresh(nextSheetId)) {
+      this.pumpInactiveQueue();
+      return;
+    }
+
+    this.inactiveRunning = true;
+    void this.compile(nextSheetId).finally(() => {
+      this.inactiveRunning = false;
+      this.pumpInactiveQueue();
+    });
+  }
+
+  private isFresh(sheetId: SheetId): boolean {
+    const request = compilationRequestForSheet(sheetId);
+    const state = this.states.get(sheetId);
+    return request !== null &&
+      state !== undefined &&
+      this.stateMatchesRequest(state, request) &&
+      state.status === "compiled";
+  }
+
+  private abortJob(sheetId: SheetId): void {
+    const job = this.jobs.get(sheetId);
+    if (job) {
+      job.controller.abort();
+      this.jobs.delete(sheetId);
+    }
+    this.inactiveQueue = this.inactiveQueue.filter((queuedSheetId) => queuedSheetId !== sheetId);
+  }
+
+  private jobStillCurrent(request: CompilationRequest, controller: AbortController): boolean {
+    const job = this.jobs.get(request.sheetId);
+    return job?.controller === controller && this.requestMatches(job.request, request);
+  }
+
+  private stateMatchesRequest(state: CompilationState, request: CompilationRequest): boolean {
+    return state.sourceFingerprint === request.sourceFingerprint && state.strategy === request.strategy;
+  }
+
+  private requestMatches(left: CompilationRequest, right: CompilationRequest): boolean {
+    return left.sheetId === right.sheetId &&
+      left.sourceFingerprint === right.sourceFingerprint &&
+      left.strategy === right.strategy;
+  }
+
+  private setState(state: CompilationState): void {
+    const previousStatus = this.states.get(state.sheetId)?.status ?? null;
+    this.states.set(state.sheetId, state);
+    this.emit(state.sheetId, state);
+    if (previousStatus !== state.status) {
+      renderSourceTabs();
+    }
+  }
+
+  private emit(sheetId: SheetId, state: CompilationState): void {
+    for (const listener of this.listeners.get(sheetId) ?? []) {
+      listener(state);
+    }
+  }
+}
+
+const compilationService = new CompilationService();
+
+function compile(sheetId: SheetId): Promise<CompilationState> {
+  return compilationService.compile(sheetId);
+}
+
+function getCompilationState(sheetId: SheetId): CompilationState {
+  return compilationService.getCompilationState(sheetId);
+}
+
+function subscribeToCompilation(sheetId: SheetId, listener: CompilationListener): () => void {
+  return compilationService.subscribe(sheetId, listener);
+}
+
+function invalidateCompilation(sheetId: SheetId): void {
+  compilationService.invalidateCompilation(sheetId);
+}
+
+function invalidateAllCompilations(): void {
+  compilationService.invalidateAllCompilations();
+}
+
+function rememberCompilationState(state: CompilationState): void {
+  compilationService.rememberCompilationState(state);
+}
+
+function compileInactiveSheets(): void {
+  compilationService.compileInactiveSheets({ concurrency: 1, onlyStale: true });
+}
 
 const logosPythonLanguageId = "logos-python";
 
@@ -655,7 +956,7 @@ let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
 let isLoadingSession = false;
 
 editor.onDidChangeModelContent(() => {
-  if (isLoadingSession) {
+  if (isLoadingSession || applyingSourceTab) {
     return;
   }
 
@@ -918,7 +1219,8 @@ function closeOpenMenus(): void {
 renderSourceTabs();
 renderAgentLog();
 updateShellResizeHandles();
-scheduleCompilation(0);
+setActiveCompilationSheet(activeSourceTabId);
+compileInactiveSheets();
 void bootWorkspace();
 
 const shellResizeObserver = new ResizeObserver(() => {
@@ -970,6 +1272,7 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   latestImplementationSource = result.implementation;
+  rememberActiveCompilationImplementation(result.implementation, source);
   renderSnippetPanel();
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
@@ -994,8 +1297,7 @@ async function resetWorkspace(): Promise<void> {
       clearTimeout(sourceTabSaveTimer);
       sourceTabSaveTimer = null;
     }
-    compileController?.abort();
-    compileController = null;
+    invalidateAllCompilations();
     if (compileTimer) {
       clearTimeout(compileTimer);
       compileTimer = null;
@@ -1032,6 +1334,8 @@ async function clearCodeCache(): Promise<void> {
   clearCodeCacheButton.disabled = true;
   runStatus.textContent = "Clearing code cache";
   runStatus.dataset.state = "";
+  cancelScheduledCompilation();
+  invalidateAllCompilations();
 
   try {
     const response = await fetch("/api/cache", { method: "DELETE" });
@@ -1045,7 +1349,6 @@ async function clearCodeCache(): Promise<void> {
     sessionCapture.track("code_cache_clear_completed", {
       cleared: typeof payload.cleared === "number" ? payload.cleared : null,
     }, true);
-    scheduleCompilation(0);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     runStatus.textContent = "Code cache clear failed";
@@ -1053,6 +1356,9 @@ async function clearCodeCache(): Promise<void> {
     sessionCapture.track("code_cache_clear_failed", { error: message }, true);
   } finally {
     clearCodeCacheButton.disabled = false;
+    if (activeSourceTabId !== null) {
+      scheduleCompilation(0);
+    }
   }
 }
 
@@ -1086,6 +1392,7 @@ function setCompilationStrategy(strategy: CompilationMode): void {
   };
   saveAppSettings(appSettings);
   compilationStrategySelect.value = strategy;
+  invalidateAllCompilations();
   sessionCapture.track("setting_changed", {
     setting: "compilationStrategy",
     strategy,
@@ -1110,27 +1417,33 @@ function scheduleEditorCapture(): void {
 
 function scheduleCompilation(delayMs: number): void {
   compileVersion += 1;
-  const version = compileVersion;
-  const source = editor.getValue();
+  const sheetId = activeSourceTabId;
+  if (sheetId === null) {
+    clearVisibleCompilationState();
+    return;
+  }
 
-  compileController?.abort();
-  compileController = null;
-  compilationPending = true;
-  latestImplementationSource = source;
-  refreshIncompleteSnippets(source);
-  updateTypeCheckMarkers([]);
-  updateReadinessDecorations(localReadiness(source));
-  updateRunStaleness(source);
+  compilationService.markCompiling(sheetId);
+  updateRunStaleness(editor.getValue());
   updateEditorAvailability();
 
   if (compileTimer) {
-    clearTimeout(compileTimer);
+    cancelScheduledCompilation();
   }
 
   compileTimer = setTimeout(() => {
     compileTimer = null;
-    streamImplementation(source, version);
+    void compile(sheetId).then(() => {
+      compileInactiveSheets();
+    });
   }, delayMs);
+}
+
+function cancelScheduledCompilation(): void {
+  if (compileTimer) {
+    clearTimeout(compileTimer);
+    compileTimer = null;
+  }
 }
 
 function openProjectTab(sample: SampleProgram): void {
@@ -1189,6 +1502,7 @@ function closeSourceTab(tabId: string): void {
   }
 
   syncActiveSourceTab();
+  invalidateCompilation(tabId);
   sourceTabs = sourceTabs.filter((tab) => tab.id !== tabId);
 
   if (activeSourceTabId === tabId) {
@@ -1207,7 +1521,12 @@ function closeSourceTab(tabId: string): void {
 function applyActiveSourceTab(): void {
   closeAllRunTabs();
   const active = activeSourceTab();
-  editor.setValue(active?.source ?? "");
+  applyingSourceTab = true;
+  try {
+    editor.setValue(active?.source ?? "");
+  } finally {
+    applyingSourceTab = false;
+  }
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
@@ -1219,10 +1538,11 @@ function applyActiveSourceTab(): void {
   runStatus.textContent = lastRunStatusText;
   runStatus.dataset.state = active ? "" : "error";
   updateRunStaleness(active?.source ?? "");
-  scheduleCompilation(0);
+  setActiveCompilationSheet(active?.id ?? null);
   setActiveTab(null);
   updateEditorAvailability();
   updateActiveProjectMenuItem();
+  compileInactiveSheets();
 }
 
 function syncActiveSourceTab(): void {
@@ -1230,6 +1550,239 @@ function syncActiveSourceTab(): void {
   if (active) {
     active.source = editor.getValue();
   }
+}
+
+function setActiveCompilationSheet(sheetId: SheetId | null): void {
+  activeCompilationUnsubscribe?.();
+  activeCompilationUnsubscribe = null;
+
+  if (sheetId === null) {
+    clearVisibleCompilationState();
+    return;
+  }
+
+  renderCompilationState(getCompilationState(sheetId));
+  activeCompilationUnsubscribe = subscribeToCompilation(sheetId, (state) => {
+    if (activeSourceTabId === state.sheetId) {
+      renderCompilationState(state);
+    }
+  });
+  void compile(sheetId);
+}
+
+function renderCompilationState(state: CompilationState): void {
+  const active = activeSourceTab();
+  if (!active || active.id !== state.sheetId || sourceFingerprint(active.source) !== state.sourceFingerprint) {
+    return;
+  }
+
+  compilationPending = state.status === "compiling";
+  latestImplementationSource = state.implementation;
+  latestReadinessDefinitions = state.readiness.map((definition) => ({ ...definition }));
+  latestTypeCheckDiagnostics = state.diagnostics.map((diagnostic) => ({ ...diagnostic }));
+  snippetPreviewByHash = cloneSnippetPreviewMap(state.snippetPreviews);
+  refreshIncompleteSnippets(active.source);
+  updateTypeCheckMarkers(latestTypeCheckDiagnostics);
+  updateReadinessDecorations(latestReadinessDefinitions);
+  renderSnippetPanel();
+}
+
+function clearVisibleCompilationState(): void {
+  compilationPending = false;
+  latestImplementationSource = "";
+  latestReadinessDefinitions = [];
+  latestTypeCheckDiagnostics = [];
+  snippetPreviewByHash = new Map();
+  selectedSnippetHash = null;
+  selectedDefinitionTarget = null;
+  selectedWholeFileImplementation = false;
+  incompleteSnippetsByLine = new Map();
+  incompleteSnippetByHash = new Map();
+  updateTypeCheckMarkers([]);
+  updateReadinessDecorations([]);
+  updateIncompleteSnippetDecorations();
+  updateSelectedDefinitionDecorations();
+  renderSnippetPanel();
+}
+
+function rememberActiveCompilationImplementation(implementation: string, source: string): void {
+  const active = activeSourceTab();
+  if (!active) {
+    return;
+  }
+
+  if (sourceFingerprint(active.source) !== sourceFingerprint(source)) {
+    return;
+  }
+
+  const state = getCompilationState(active.id);
+  if (state.sourceFingerprint !== sourceFingerprint(active.source)) {
+    return;
+  }
+
+  rememberCompilationState({
+    ...state,
+    status: "compiled",
+    implementation,
+    error: null,
+  });
+}
+
+function compilationRequestForSheet(sheetId: SheetId): CompilationRequest | null {
+  const tab = sourceTabs.find((item) => item.id === sheetId);
+  if (!tab) {
+    return null;
+  }
+
+  return {
+    sheetId,
+    source: tab.source,
+    sourceFingerprint: sourceFingerprint(tab.source),
+    strategy: appSettings.compilationStrategy,
+  };
+}
+
+function initialCompilationState(
+  request: CompilationRequest,
+  status: CompilationStatus,
+): CompilationState {
+  const targets = incompleteSnippetTargetsForSource(request.source);
+  return {
+    sheetId: request.sheetId,
+    source: request.source,
+    sourceFingerprint: request.sourceFingerprint,
+    strategy: request.strategy,
+    status,
+    implementation: request.source,
+    readiness: localReadiness(request.source),
+    diagnostics: [],
+    snippetPreviews: new Map(
+      targets.map((target) => [
+        target.hash,
+        {
+          snippet: target.snippet,
+          streamed: "",
+          implementation: null,
+          status: "stub" as const,
+        },
+      ]),
+    ),
+    error: null,
+  };
+}
+
+function emptyCompilationState(sheetId: SheetId): CompilationState {
+  return {
+    sheetId,
+    source: "",
+    sourceFingerprint: sourceFingerprint(""),
+    strategy: appSettings.compilationStrategy,
+    status: "idle",
+    implementation: "",
+    readiness: [],
+    diagnostics: [],
+    snippetPreviews: new Map(),
+    error: null,
+  };
+}
+
+function reduceCompilationEvent(
+  state: CompilationState,
+  event: CompileWireEvent,
+): CompilationState {
+  let next: CompilationState = state;
+
+  if (
+    (event.kind === "implementation" || event.kind === "compiled") &&
+    typeof event.implementation === "string"
+  ) {
+    next = { ...next, implementation: event.implementation };
+  }
+
+  if (event.kind === "readiness" && Array.isArray(event.definitions)) {
+    next = {
+      ...next,
+      readiness: event.definitions.map((definition) => ({ ...definition })),
+    };
+  }
+
+  if (event.kind === "typecheck" && Array.isArray(event.diagnostics)) {
+    next = {
+      ...next,
+      diagnostics: event.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+    };
+  }
+
+  if (typeof event.hash === "string") {
+    next = {
+      ...next,
+      snippetPreviews: reduceSnippetPreviewEvent(next.snippetPreviews, event),
+    };
+  }
+
+  if (event.kind === "compiled") {
+    next = { ...next, status: "compiled", error: null };
+  }
+
+  return next;
+}
+
+function reduceSnippetPreviewEvent(
+  previews: Map<SnippetHash, SnippetPreviewState>,
+  event: CompileWireEvent,
+): Map<SnippetHash, SnippetPreviewState> {
+  if (typeof event.hash !== "string") {
+    return previews;
+  }
+
+  const current = previews.get(event.hash);
+  if (!current) {
+    return previews;
+  }
+
+  const next = cloneSnippetPreviewMap(previews);
+  if (event.kind === "llm-start") {
+    next.set(event.hash, {
+      ...current,
+      streamed: "",
+      implementation: null,
+      status: "generating",
+    });
+    return next;
+  }
+
+  if (event.kind === "llm-token" && typeof event.token === "string") {
+    next.set(event.hash, {
+      ...current,
+      streamed: current.streamed + event.token,
+      status: "generating",
+    });
+    return next;
+  }
+
+  if (
+    (event.kind === "llm-complete" || event.kind === "cache-hit") &&
+    typeof event.implementation === "string"
+  ) {
+    next.set(event.hash, {
+      ...current,
+      streamed: "",
+      implementation: event.implementation,
+      status: event.kind === "cache-hit" ? "cached" : "complete",
+    });
+  }
+
+  return next;
+}
+
+function cloneSnippetPreviewMap(
+  previews: Map<SnippetHash, SnippetPreviewState>,
+): Map<SnippetHash, SnippetPreviewState> {
+  return new Map(Array.from(previews, ([hash, preview]) => [hash, { ...preview }]));
+}
+
+function sourceFingerprint(source: string): SourceFingerprint {
+  return hashString(source);
 }
 
 function activeSourceTab(): SourceTab | null {
@@ -1244,9 +1797,10 @@ function renderSourceTabs(): void {
 
   sourceTabsEl.innerHTML = sourceTabs.map((tab) => {
     const selected = tab.id === activeSourceTabId;
+    const compiling = getCompilationState(tab.id).status === "compiling";
     return `<div class="source-tab-shell" role="presentation">
       <button
-        class="source-tab${selected ? " active" : ""}"
+        class="source-tab${selected ? " active" : ""}${compiling ? " source-tab-compiling" : ""}"
         type="button"
         role="tab"
         aria-selected="${selected}"
@@ -1254,6 +1808,16 @@ function renderSourceTabs(): void {
       >
         ${escapeHtml(tab.title)}
       </button>
+      ${compiling
+        ? `<button
+          class="source-tab-compiling-indicator"
+          type="button"
+          tabindex="-1"
+          aria-label="${escapeHtml(tab.title)} is compiling"
+          aria-disabled="true"
+          title="Compiling"
+        ></button>`
+        : ""}
       <button
         class="source-tab-close"
         type="button"
@@ -1482,61 +2046,6 @@ function openUserDatabase(): Promise<IDBDatabase> {
   });
 }
 
-async function streamImplementation(source: string, version: number): Promise<void> {
-  const controller = new AbortController();
-  compileController = controller;
-  sessionCapture.track("compile_stream_started", { version, source }, false);
-
-  try {
-    for await (const event of compileViaDevApi(source, controller.signal)) {
-      if (version !== compileVersion) {
-        controller.abort();
-        return;
-      }
-
-      if (
-        (event.kind === "implementation" || event.kind === "compiled") &&
-        typeof event.implementation === "string"
-      ) {
-        latestImplementationSource = event.implementation;
-        renderSnippetPanel();
-      }
-
-      updateSnippetPreviewFromCompileEvent(event);
-
-      if (event.kind === "readiness" && Array.isArray(event.definitions)) {
-        updateReadinessDecorations(event.definitions);
-      }
-
-      if (event.kind === "typecheck" && Array.isArray(event.diagnostics)) {
-        updateTypeCheckMarkers(event.diagnostics);
-      }
-    }
-    sessionCapture.track("compile_stream_completed", { version }, true);
-  } catch (error) {
-    if (controller.signal.aborted || version !== compileVersion) {
-      return;
-    }
-
-    latestImplementationSource = source;
-    renderSnippetPanel();
-    console.error(error);
-    sessionCapture.track(
-      "compile_stream_failed",
-      { version, error: error instanceof Error ? error.message : String(error) },
-      true,
-    );
-  } finally {
-    if (compileController === controller) {
-      compileController = null;
-    }
-    if (version === compileVersion) {
-      compilationPending = false;
-      updateReadinessDecorations(latestReadinessDefinitions);
-    }
-  }
-}
-
 function localReadiness(source: string): DefinitionReadiness[] {
   try {
     return definitionReadiness(parse(source), new Map());
@@ -1614,27 +2123,7 @@ function updateRunStaleness(source = editor.getValue()): void {
 }
 
 function refreshIncompleteSnippets(source: string): void {
-  let targets: IncompleteSnippetTarget[] = [];
-
-  try {
-    const parsed = parse(source);
-    const compilerHashes = completionSnippetHashes(parsed);
-    targets = parsed.incompleteSnippets.map((snippet, index) => {
-      const range = snippetRange(source, snippet);
-      return {
-        hash: compilerHashes[index] ?? hashCompletionInput(parsed, snippet.snippet),
-        startLine: range.startLine,
-        startColumn: range.startColumn,
-        endLine: range.endLine,
-        endColumn: range.endColumn,
-        kind: snippet.kind,
-        snippet: snippet.snippet,
-        label: incompleteSnippetLabel(snippet),
-      };
-    });
-  } catch {
-    targets = [];
-  }
+  const targets = incompleteSnippetTargetsForSource(source);
 
   const nextPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
   for (const target of targets) {
@@ -1674,6 +2163,28 @@ function refreshIncompleteSnippets(source: string): void {
   updateIncompleteSnippetDecorations();
   updateNaturalSnippetEditorMode();
   renderSnippetPanel();
+}
+
+function incompleteSnippetTargetsForSource(source: string): IncompleteSnippetTarget[] {
+  try {
+    const parsed = parse(source);
+    const compilerHashes = completionSnippetHashes(parsed);
+    return parsed.incompleteSnippets.map((snippet, index) => {
+      const range = snippetRange(source, snippet);
+      return {
+        hash: compilerHashes[index] ?? hashCompletionInput(parsed, snippet.snippet),
+        startLine: range.startLine,
+        startColumn: range.startColumn,
+        endLine: range.endLine,
+        endColumn: range.endColumn,
+        kind: snippet.kind,
+        snippet: snippet.snippet,
+        label: incompleteSnippetLabel(snippet),
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "auto"): void {
@@ -1735,51 +2246,6 @@ function refreshedDefinitionTarget(source: string): ImplementationTarget | null 
   }
 
   return refreshed;
-}
-
-function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
-  if (typeof event.hash !== "string") {
-    return;
-  }
-
-  const current = snippetPreviewByHash.get(event.hash);
-  if (!current) {
-    return;
-  }
-
-  if (event.kind === "llm-start") {
-    snippetPreviewByHash.set(event.hash, {
-      ...current,
-      streamed: "",
-      implementation: null,
-      status: "generating",
-    });
-    renderSnippetPanel();
-    return;
-  }
-
-  if (event.kind === "llm-token" && typeof event.token === "string") {
-    snippetPreviewByHash.set(event.hash, {
-      ...current,
-      streamed: current.streamed + event.token,
-      status: "generating",
-    });
-    renderSnippetPanel();
-    return;
-  }
-
-  if (
-    (event.kind === "llm-complete" || event.kind === "cache-hit") &&
-    typeof event.implementation === "string"
-  ) {
-    snippetPreviewByHash.set(event.hash, {
-      ...current,
-      streamed: "",
-      implementation: event.implementation,
-      status: event.kind === "cache-hit" ? "cached" : "complete",
-    });
-    renderSnippetPanel();
-  }
 }
 
 function updateIncompleteSnippetDecorations(): void {
@@ -2988,7 +3454,7 @@ function updateToolbarRunState(runnablesState: Array<RunnableState & { line: num
 }
 
 function updateTypeCheckMarkers(diagnostics: TypeCheckDiagnostic[]): void {
-  void diagnostics;
+  latestTypeCheckDiagnostics = diagnostics;
 
   const model = editor.getModel();
   if (!model) {
@@ -3262,6 +3728,7 @@ async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
 
   tab.implementation = result.implementation;
   latestImplementationSource = result.implementation;
+  rememberActiveCompilationImplementation(result.implementation, tab.source);
   renderSnippetPanel();
   appendTerminalChunks(tab, result.chunks);
   if (result.status.state === "running") {
@@ -3329,6 +3796,7 @@ async function pollRunTab(runTabId: string): Promise<void> {
 
   currentTab.implementation = result.implementation;
   latestImplementationSource = result.implementation;
+  rememberActiveCompilationImplementation(result.implementation, currentTab.source);
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
 
@@ -3376,6 +3844,7 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
   latestImplementationSource = result.implementation;
+  rememberActiveCompilationImplementation(result.implementation, currentTab.source);
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
 
@@ -3391,6 +3860,7 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   tab.status = status;
   tab.implementation = implementation;
   latestImplementationSource = implementation;
+  rememberActiveCompilationImplementation(implementation, tab.source);
   renderSnippetPanel();
   markLastRunCompleted();
   lastRunDefinitionHash = tab.sourceHash;
@@ -4016,10 +4486,11 @@ type CompileWireEvent =
 async function* compileViaDevApi(
   sheet: string,
   signal: AbortSignal,
+  compilationStrategy = appSettings.compilationStrategy,
 ): AsyncIterable<CompileWireEvent> {
   const body = {
     sheet,
-    compilationStrategy: appSettings.compilationStrategy,
+    compilationStrategy,
   };
   sessionCapture.track("api_request", {
     method: "POST",
@@ -4150,8 +4621,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
 
   isLoadingSession = true;
   try {
-    compileController?.abort();
-    compileController = null;
+    invalidateAllCompilations();
     if (compileTimer) {
       clearTimeout(compileTimer);
       compileTimer = null;
@@ -4213,6 +4683,21 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     updateReadinessDecorations(localReadiness(editor.getValue()));
     updateRunStaleness(editor.getValue());
     refreshIncompleteSnippets(editor.getValue());
+    if (active) {
+      const request = compilationRequestForSheet(active.id);
+      if (request) {
+        rememberCompilationState({
+          ...initialCompilationState(request, "compiled"),
+          implementation: latestImplementationSource,
+          readiness: latestReadinessDefinitions,
+          diagnostics: latestTypeCheckDiagnostics,
+          snippetPreviews: cloneSnippetPreviewMap(snippetPreviewByHash),
+        });
+      }
+      setActiveCompilationSheet(active.id);
+    } else {
+      setActiveCompilationSheet(null);
+    }
     restoreLoadableSelection(session.compilation.selection);
     renderSnippetPanel();
     renderAgentLog("Session loaded");

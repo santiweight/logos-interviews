@@ -688,6 +688,10 @@ h2 {
   white-space: nowrap;
 }
 
+.source-tab.source-tab-compiling {
+  padding-right: 48px;
+}
+
 .source-tab.active {
   z-index: 1;
   background: var(--paper);
@@ -727,6 +731,32 @@ h2 {
   font-weight: 600;
   line-height: 1;
   padding: 0;
+}
+
+.source-tab-compiling-indicator {
+  position: absolute;
+  top: 9px;
+  right: 28px;
+  z-index: 3;
+  display: grid;
+  width: 11px;
+  height: 11px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.source-tab-compiling-indicator::before {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: glyph-pulse 0.9s ease-in-out infinite;
+  content: "";
 }
 
 .source-tab-shell:hover .source-tab-close,
