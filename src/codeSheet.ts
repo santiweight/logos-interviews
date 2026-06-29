@@ -66,7 +66,6 @@ export type CompileOptions = {
   streamTokens?: boolean;
   abortCurrentCompletion?: boolean;
   strategy?: CompilationStrategy;
-  experimentalParallelCompletions?: boolean;
 };
 
 export type CompilationStrategy = "sequential" | "parallel" | "agentic";
@@ -510,11 +509,7 @@ export async function* compile(
 }
 
 function compileInParallel(options: CompileOptions): boolean {
-  if (options.strategy !== undefined) {
-    return options.strategy === "parallel";
-  }
-
-  return options.experimentalParallelCompletions === true;
+  return options.strategy === "parallel";
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {

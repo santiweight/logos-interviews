@@ -22,7 +22,7 @@ export async function handleCompileStream(
     return;
   }
 
-  const { sheet, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
+  const { sheet, compilationStrategy } = await readJson(req);
   if (typeof sheet !== "string") {
     sendJson(res, 400, { ok: false, error: "Missing sheet" });
     return;
@@ -41,7 +41,7 @@ export async function handleCompileStream(
     for await (const event of compile(cache, sheet, complete, {
       signal: abortController.signal,
       streamTokens: true,
-      strategy: compileStrategy(compilationStrategy, experimentalParallelCompletions),
+      strategy: compileStrategy(compilationStrategy),
     })) {
       if (abortController.signal.aborted || res.destroyed) {
         return;
@@ -62,7 +62,7 @@ export async function handleCompileStream(
   }
 }
 
-function compileStrategy(strategy: unknown, experimentalParallelCompletions: unknown): CompilationStrategy {
+function compileStrategy(strategy: unknown): CompilationStrategy {
   if (isStableCompilationStrategy(strategy)) {
     return strategy;
   }
@@ -71,7 +71,7 @@ function compileStrategy(strategy: unknown, experimentalParallelCompletions: unk
     return experimentalCompilePreviewStrategy(strategy);
   }
 
-  if (strategy === "auto" || experimentalParallelCompletions === true) {
+  if (strategy === "auto") {
     return "parallel";
   }
 

@@ -16,7 +16,7 @@ import {
   type StrategyRunOptions,
 } from "./compilationStrategies/shared";
 import {
-  legacyAutoStrategyOrder,
+  defaultAutoStrategyOrder,
   type CompilationMode,
   type RunnerStrategy,
 } from "./compilationStrategies/types";
@@ -29,7 +29,6 @@ export type RunOptions = StrategyRunOptions & {
   complete?: CompleteFunction;
   cache?: CodeCache;
   compilationStrategy?: CompilationMode;
-  experimentalParallelCompletions?: boolean;
 };
 
 export type RunChunk = {
@@ -81,7 +80,7 @@ export async function startInteractiveCodeSheet(
   options: RunOptions = {},
 ): Promise<InteractiveRunStart> {
   const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options, interactiveStrategy(options)));
+  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(interactiveStrategy(options)));
   const source = buildPythonProgram(completed.source, runnable);
   return {
     session: new InteractivePythonRun(source, options.python ?? "python3"),
@@ -104,10 +103,9 @@ function compileAndRunStrategy(
   return definition.run({ cache, codeSheet, runnable, options }, fallback);
 }
 
-function compileOptions(options: RunOptions, strategy: CompilationStrategy): CompileOptions {
+function compileOptions(strategy: CompilationStrategy): CompileOptions {
   return {
     strategy,
-    experimentalParallelCompletions: options.experimentalParallelCompletions,
   };
 }
 
@@ -116,7 +114,7 @@ function compilationMode(options: RunOptions): CompilationMode {
     return options.compilationStrategy;
   }
 
-  return options.experimentalParallelCompletions ? "parallel" : "sequential";
+  return "sequential";
 }
 
 function interactiveStrategy(options: RunOptions): CompilationStrategy {
@@ -128,7 +126,7 @@ function interactiveStrategy(options: RunOptions): CompilationStrategy {
 }
 
 function strategyOrder(): RunnerStrategy[] {
-  return [...legacyAutoStrategyOrder];
+  return [...defaultAutoStrategyOrder];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {

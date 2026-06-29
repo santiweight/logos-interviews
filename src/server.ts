@@ -112,7 +112,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
     return;
   }
 
-  const { sheet, runnable, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
+  const { sheet, runnable, compilationStrategy } = await readJson(req);
   if (typeof sheet !== "string" || typeof runnable !== "string") {
     sendJson(res, 400, {
       ok: false,
@@ -125,7 +125,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
   const result = await runCodeSheet(sheet, runnable, {
     cache: codeCache,
     complete: completeWithAnthropic,
-    compilationStrategy: compilationMode(compilationStrategy, experimentalParallelCompletions),
+    compilationStrategy: compilationMode(compilationStrategy),
   });
 
   if (result.ok) {
@@ -145,12 +145,12 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
   });
 }
 
-function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
+function compilationMode(strategy: unknown): CompilationMode {
   if (isCompilationMode(strategy)) {
     return strategy;
   }
 
-  return experimentalParallelCompletions === true ? "parallel" : "sequential";
+  return "sequential";
 }
 
 async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<void> {

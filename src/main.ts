@@ -4148,12 +4148,7 @@ function loadAppSettings(): AppSettings {
 
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     return {
-      compilationStrategy: compilationMode(
-        parsed.compilationStrategy ??
-          ((parsed as { experimentalParallelCompletions?: boolean }).experimentalParallelCompletions === true
-            ? "parallel"
-            : "auto"),
-      ),
+      compilationStrategy: compilationMode(parsed.compilationStrategy),
     };
   } catch {
     return defaultAppSettings();

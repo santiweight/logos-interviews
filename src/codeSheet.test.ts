@@ -1540,7 +1540,7 @@ def test():
             resolvers.push(resolve);
           });
         },
-        { experimentalParallelCompletions: true },
+        { strategy: "parallel" },
       )) {
         events.push(event);
       }
@@ -2378,7 +2378,7 @@ def gen_magic_square():
             resolvers.push(resolve);
           });
         },
-        { experimentalParallelCompletions: true },
+        { strategy: "parallel" },
       )) {
         events.push(event);
       }

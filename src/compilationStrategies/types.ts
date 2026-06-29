@@ -10,7 +10,7 @@ export const experimentalCompilationStrategies = [
   "agentic-methods",
 ] as const satisfies readonly ExperimentalCompilationStrategy[];
 
-export const legacyAutoStrategyOrder = ["parallel", "sequential", "agentic"] as const satisfies readonly RunnerStrategy[];
+export const defaultAutoStrategyOrder = ["parallel", "sequential", "agentic"] as const satisfies readonly RunnerStrategy[];
 
 export function isCompilationMode(value: unknown): value is CompilationMode {
   return value === "auto" || isRunnerStrategy(value);

@@ -61,7 +61,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     }
 
     cleanupSessions();
-    const { sheet, runnable, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
+    const { sheet, runnable, compilationStrategy } = await readJson(req);
     if (typeof sheet !== "string" || typeof runnable !== "string") {
       sendJson(res, 400, {
         ok: false,
@@ -73,7 +73,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     const result = await startInteractiveCodeSheet(sheet, runnable, {
       cache: options.cache,
       complete: options.complete,
-      compilationStrategy: compilationMode(compilationStrategy, experimentalParallelCompletions),
+      compilationStrategy: compilationMode(compilationStrategy),
     });
     const sessionId = randomUUID();
     sessions.set(sessionId, {
@@ -179,12 +179,12 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
   };
 }
 
-function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
+function compilationMode(strategy: unknown): CompilationMode {
   if (isCompilationMode(strategy)) {
     return strategy;
   }
 
-  return experimentalParallelCompletions === true ? "parallel" : "sequential";
+  return "sequential";
 }
 
 export type InteractiveRunWireStatus = InteractiveRunStatus;
