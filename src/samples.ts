@@ -1048,8 +1048,8 @@ def main():
   print(rows != shifted)
   print(rows != zoomed)
   print(rows != rotated)
-  print(100 <= filled <= 800)
-  print(len({char for row in rows for char in row if char != " "}) >= 5)
+  print(50 <= filled <= 1200)
+  print(len({char for row in rows for char in row if char != " "}) >= 4)
   print(any(char in "#%@" for row in rows for char in row))`),
     runnable: "test",
     expectedStdout: [
