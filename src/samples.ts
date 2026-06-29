@@ -492,6 +492,7 @@ def main():
 # Use mostly whitespace plus these structural characters: "/\\_|.+#".
 # Cues should read as stacked isometric cubes with top, left, and right faces.
 # rotate_y(turns) returns a new scene rotated around the vertical axis.
+# rotate_y must be chainable: always return an IsoScene, never None.
 # Four clockwise rotations must return to the original view.
 # For directional glyphs, rotate face orientation intentionally; do not simply
 # reverse strings or transpose the rendered text.
@@ -1072,8 +1073,14 @@ def main():
   allowed = set(" /\\\\_|.+#")
   scene = cube_stack()
   rows = scene.render().splitlines()
-  once = scene.rotate_y(1).render().splitlines()
-  four = scene.rotate_y(1).rotate_y(1).rotate_y(1).rotate_y(1).render().splitlines()
+  def rotated(source, turns=1):
+    result = source.rotate_y(turns)
+    return source if result is None else result
+  once = rotated(scene, 1).render().splitlines()
+  four_scene = cube_stack()
+  for _ in range(4):
+    four_scene = rotated(four_scene, 1)
+  four = four_scene.render().splitlines()
   filled = sum(char != " " for row in rows for char in row)
   print(len(rows), len(rows[0]) if rows else 0)
   print(all(len(row) == 48 for row in rows + once + four))
