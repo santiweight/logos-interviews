@@ -330,31 +330,17 @@ def test_magic_square():
         id: "ascii-fractal",
         label: "ASCII fractal",
         code: `# Fractal rendering file.
-# AsciiArt represents a generated image, not just a finished text buffer.
-# render() returns exactly 24 newline-separated rows, each exactly 64 columns.
-# rotate() returns a new AsciiArt view rotated 90 degrees clockwise.
-# For generated images, rotate by re-rendering transformed sample coordinates,
-# preserving the 24x64 output size; do not transpose the rendered text grid.
-# Keep every rendered character in this density palette, from empty to bright:
-# " .:-=+*#%@".
-# Keep the background mostly whitespace and make the main shape opaque.
-# Mandelbrot should have a compact body with a bulb, a horizontal waist,
-# nested coastline detail, and deterministic output.
-# If you use helper functions or constants such as ROWS, COLS, or PALETTE,
-# define them in the completion rather than assuming they already exist.
+# Results must be exactly 24 strings, each 64 characters wide.
+# through the middle, and nested coastline or root contours near the ground.
+# Use only these density characters, from empty to bright: " .:-=+*#%@".
+# Keep the background mostly empty, with detail clustered into readable forms.
+# Return a deterministic ASCII mandelbrot fractal.
 
-class AsciiArt:
-  def render(self) -> str
-  def rotate(self) -> "AsciiArt"
-
-# Return a deterministic ASCII Mandelbrot fractal.
-def mandelbrot() -> AsciiArt
+def mandelbrot() -> list
 
 def test():
-  art = mandelbrot()
-  print(art.render())
-  print()
-  print(art.rotate().render())`,
+  for line in mandelbrot():
+    print(line)`,
       },
       {
         id: "weather-map",
@@ -912,53 +898,25 @@ def test():
   },
   {
     sampleId: "ascii-fractal",
-    name: "deterministic ascii mandelbrot render and rotate contract",
+    name: "deterministic ascii mandelbrot contract",
     sheet: withTest("ascii-fractal", `def test():
   palette = set(" .:-=+*#%@")
-  art = mandelbrot()
-  normal = art.render().splitlines()
-  rotated = art.rotate().render().splitlines()
-  repeat = mandelbrot().render().splitlines()
-  normal_filled = sum(char != " " for row in normal for char in row)
-  rotated_filled = sum(char != " " for row in rotated for char in row)
-  normal_used = {char for row in normal for char in row if char != " "}
-  rotated_used = {char for row in rotated for char in row if char != " "}
-  overlap_rows = sum(left == right for left, right in zip(normal, rotated))
-  print(len(normal), len(normal[0]) if normal else 0)
-  print(len(rotated), len(rotated[0]) if rotated else 0)
-  print(all(len(row) == 64 for row in normal + rotated))
-  print(all(char in palette for row in normal + rotated for char in row))
-  print(normal == repeat)
-  print(normal != rotated)
-  print(100 <= normal_filled <= 700)
-  print(100 <= rotated_filled <= 700)
-  print(sum(any(char != " " for char in row) for row in normal) >= 14)
-  print(sum(any(char != " " for char in row) for row in rotated) >= 14)
-  print(len(set(normal)) >= 12)
-  print(len(set(rotated)) >= 12)
-  print(len(normal_used) >= 5 and len(rotated_used) >= 5)
-  print(any(char in "#%@" for row in normal for char in row))
-  print(any(char in "#%@" for row in rotated for char in row))
-  print(overlap_rows <= 10)`),
+  first = mandelbrot()
+  second = mandelbrot()
+  filled = sum(char != " " for row in first for char in row)
+  used = {char for row in first for char in row if char != " "}
+  rows_with_marks = sum(any(char != " " for char in row) for row in first)
+  print(len(first), len(first[0]) if first else 0)
+  print(all(len(row) == 64 for row in first))
+  print(all(char in palette for row in first for char in row))
+  print(first == second)
+  print(100 <= filled <= 700)
+  print(rows_with_marks >= 14)
+  print(len(set(first)) >= 12)
+  print(len(used) >= 5)
+  print(any(char in "#%@" for row in first for char in row))`),
     runnable: "test",
-    expectedStdout: [
-      "24 64",
-      "24 64",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-      "True",
-    ],
+    expectedStdout: ["24 64", "True", "True", "True", "True", "True", "True", "True", "True"],
   },
   {
     sampleId: "ascii-fractal",
