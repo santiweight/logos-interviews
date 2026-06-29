@@ -608,6 +608,7 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
 
 attachBlockIndentGuideOverlay(editor);
 attachBlockIndentGuideOverlay(snippetPreviewEditor);
+installEditorTypingAssist(editor);
 
 const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
 let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1987,6 +1988,201 @@ function registerLogosPythonLanguage(): void {
       ],
     },
   });
+}
+
+function installEditorTypingAssist(targetEditor: monaco.editor.IStandaloneCodeEditor): void {
+  let applyingTypingAssist = false;
+
+  targetEditor.onDidChangeModelContent((event) => {
+    if (applyingTypingAssist || event.isUndoing || event.isRedoing || event.isFlush) {
+      return;
+    }
+
+    const change = event.changes[0];
+    if (
+      event.changes.length !== 1 ||
+      !change ||
+      change.text !== "`" ||
+      change.rangeLength !== 0
+    ) {
+      return;
+    }
+
+    applyingTypingAssist = true;
+    try {
+      expandOpeningTripleBacktick(targetEditor, {
+        lineNumber: change.range.startLineNumber,
+        column: change.range.startColumn + 1,
+      });
+    } finally {
+      applyingTypingAssist = false;
+    }
+  });
+
+  targetEditor.onKeyDown((event) => {
+    const browserEvent = event.browserEvent;
+    if (
+      browserEvent.key !== "Enter" ||
+      browserEvent.altKey ||
+      browserEvent.ctrlKey ||
+      browserEvent.metaKey ||
+      browserEvent.shiftKey
+    ) {
+      return;
+    }
+
+    if (!insertAssistedNewLine(targetEditor)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+  });
+}
+
+function expandOpeningTripleBacktick(
+  targetEditor: monaco.editor.IStandaloneCodeEditor,
+  position: monaco.IPosition,
+): void {
+  const model = targetEditor.getModel();
+  if (!model) {
+    return;
+  }
+
+  const line = model.getLineContent(position.lineNumber);
+  const beforeCursor = line.slice(0, position.column - 1);
+  const afterCursor = line.slice(position.column - 1);
+  const delimiterStartColumn = position.column - 3;
+  if (
+    delimiterStartColumn < 1 ||
+    !beforeCursor.endsWith("```") ||
+    afterCursor.trim().length > 0
+  ) {
+    return;
+  }
+
+  const indent = line.slice(0, delimiterStartColumn - 1);
+  if (indent.trim().length > 0) {
+    return;
+  }
+
+  const delimiterOffset = model.getOffsetAt({
+    lineNumber: position.lineNumber,
+    column: delimiterStartColumn,
+  });
+  if (standaloneTripleBacktickStateBefore(model.getValue(), delimiterOffset) !== "outside") {
+    return;
+  }
+
+  const cursorLine = position.lineNumber + 1;
+  const cursorColumn = indent.length + 1;
+  targetEditor.executeEdits(
+    "logos-triple-backtick",
+    [{
+      range: new monaco.Range(
+        position.lineNumber,
+        position.column,
+        position.lineNumber,
+        model.getLineMaxColumn(position.lineNumber),
+      ),
+      text: `\n${indent}\n${indent}\`\`\``,
+      forceMoveMarkers: true,
+    }],
+    [new monaco.Selection(cursorLine, cursorColumn, cursorLine, cursorColumn)],
+  );
+}
+
+function insertAssistedNewLine(targetEditor: monaco.editor.IStandaloneCodeEditor): boolean {
+  const model = targetEditor.getModel();
+  const position = targetEditor.getPosition();
+  const selection = targetEditor.getSelection();
+  if (!model || !position || !selection?.isEmpty()) {
+    return false;
+  }
+
+  const line = model.getLineContent(position.lineNumber);
+  const offset = model.getOffsetAt(position);
+  const tripleBacktickIndent = openStandaloneTripleBacktickIndentAt(model.getValue(), offset);
+  if (tripleBacktickIndent !== null) {
+    insertTextAtCursor(targetEditor, `\n${tripleBacktickIndent}`);
+    return true;
+  }
+
+  const commentPrefix = commentContinuationPrefix(line);
+  if (commentPrefix === null) {
+    return false;
+  }
+
+  insertTextAtCursor(targetEditor, `\n${commentPrefix}`);
+  return true;
+}
+
+function insertTextAtCursor(targetEditor: monaco.editor.IStandaloneCodeEditor, text: string): void {
+  const selection = targetEditor.getSelection();
+  if (!selection) {
+    return;
+  }
+
+  const endLineNumber = selection.startLineNumber + text.split("\n").length - 1;
+  const lastLine = text.split("\n").at(-1) ?? "";
+  const endColumn = endLineNumber === selection.startLineNumber
+    ? selection.startColumn + text.length
+    : lastLine.length + 1;
+
+  targetEditor.executeEdits(
+    "logos-newline-assist",
+    [{
+      range: selection,
+      text,
+      forceMoveMarkers: true,
+    }],
+    [new monaco.Selection(endLineNumber, endColumn, endLineNumber, endColumn)],
+  );
+}
+
+function commentContinuationPrefix(line: string): string | null {
+  const match = line.match(/^(\s*)# ?/);
+  if (!match) {
+    return null;
+  }
+
+  return `${match[1]}# `;
+}
+
+function openStandaloneTripleBacktickIndentAt(source: string, offset: number): string | null {
+  const state = scanStandaloneTripleBackticks(source, offset);
+  return state.kind === "inside" ? state.indent : null;
+}
+
+function standaloneTripleBacktickStateBefore(source: string, offset: number): "inside" | "outside" {
+  return scanStandaloneTripleBackticks(source, offset).kind;
+}
+
+function scanStandaloneTripleBackticks(
+  source: string,
+  offset: number,
+): { kind: "inside"; indent: string } | { kind: "outside" } {
+  let state: { kind: "inside"; indent: string } | { kind: "outside" } = { kind: "outside" };
+  let searchStart = 0;
+
+  while (searchStart < offset) {
+    const delimiterOffset = source.indexOf("```", searchStart);
+    if (delimiterOffset === -1 || delimiterOffset >= offset) {
+      break;
+    }
+
+    const lineStart = source.lastIndexOf("\n", delimiterOffset - 1) + 1;
+    const beforeDelimiter = source.slice(lineStart, delimiterOffset);
+    if (beforeDelimiter.trim().length === 0) {
+      state = state.kind === "outside"
+        ? { kind: "inside", indent: beforeDelimiter }
+        : { kind: "outside" };
+    }
+
+    searchStart = delimiterOffset + 3;
+  }
+
+  return state;
 }
 
 function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
