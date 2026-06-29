@@ -6,7 +6,7 @@ export type BenchmarkProvider = {
   complete: CompleteFunction;
 };
 
-type ProviderKind = "anthropic" | "openai" | "openai-compatible" | "ollama";
+type ProviderKind = "anthropic" | "openai" | "openai-responses" | "openai-compatible" | "ollama";
 
 type ProviderSpec = {
   kind: ProviderKind;
@@ -41,6 +41,13 @@ export function benchmarkProvider(source: string): BenchmarkProvider {
             baseUrl: "https://api.openai.com/v1",
             apiKey: process.env.OPENAI_API_KEY,
             apiKeyName: "OPENAI_API_KEY",
+            signal: options?.signal,
+          });
+        case "openai-responses":
+          return completeOpenAIResponses({
+            prompt,
+            model: spec.model,
+            apiKey: process.env.OPENAI_API_KEY,
             signal: options?.signal,
           });
         case "openai-compatible":
@@ -116,7 +123,9 @@ async function completeOpenAICompatible(options: {
     body: JSON.stringify({
       model: options.model,
       temperature: 0,
-      max_tokens: 4096,
+      ...(usesMaxCompletionTokens(options.model)
+        ? { max_completion_tokens: 4096 }
+        : { max_tokens: 4096 }),
       messages: [{ role: "user", content: options.prompt }],
     }),
   });
@@ -132,6 +141,52 @@ async function completeOpenAICompatible(options: {
   return json.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
+async function completeOpenAIResponses(options: {
+  prompt: string;
+  model: string;
+  apiKey: string | undefined;
+  signal: AbortSignal | undefined;
+}): Promise<string> {
+  if (!options.apiKey) {
+    throw new Error("OPENAI_API_KEY is required for benchmark completion");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal: options.signal,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${options.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: options.model,
+      input: options.prompt,
+      temperature: 0,
+      max_output_tokens: 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Completion request failed (${response.status}): ${body.slice(0, 500)}`);
+  }
+
+  const json = await response.json() as {
+    output_text?: string;
+    output?: Array<{
+      content?: Array<{ type?: string; text?: string }>;
+    }>;
+  };
+  return (
+    json.output_text ??
+    json.output
+      ?.flatMap((item) => item.content ?? [])
+      .map((content) => content.text ?? "")
+      .join("") ??
+    ""
+  ).trim();
+}
+
 function providerId(spec: ProviderSpec): string {
   return spec.baseUrl === undefined
     ? `${spec.kind}:${spec.model}`
@@ -141,8 +196,13 @@ function providerId(spec: ProviderSpec): string {
 function isProviderKind(value: string): value is ProviderKind {
   return value === "anthropic" ||
     value === "openai" ||
+    value === "openai-responses" ||
     value === "openai-compatible" ||
     value === "ollama";
+}
+
+function usesMaxCompletionTokens(model: string): boolean {
+  return /^(?:gpt-5|o[0-9])/.test(model);
 }
 
 function splitOnce(source: string, delimiter: string): [string, string | undefined] {
