@@ -15,6 +15,11 @@
   --border: #d4d0c8;
   --border-strong: #b5afa5;
   --shadow: rgba(14, 21, 37, 0.08);
+  --terminal-font:
+    ui-monospace, "SF Mono", "SFMono-Regular", "Cascadia Code", "JetBrains Mono",
+    "Fira Code", "Roboto Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  --terminal-line-height: 1.18;
   color: var(--ink);
   background: var(--canvas);
   font-family:
@@ -1130,9 +1135,13 @@ h2 {
   overflow: auto;
   background: var(--paper);
   color: var(--ink);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
-  font-size: 0.84rem;
-  line-height: 1.5;
+  font-family: var(--terminal-font);
+  font-size: 0.82rem;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+  font-variant-ligatures: none;
+  line-height: var(--terminal-line-height);
   padding: 10px;
   white-space: pre-wrap;
 }
@@ -1167,7 +1176,7 @@ h2 {
   gap: 6px;
   background: transparent;
   color: var(--ink);
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--terminal-font);
   padding: 0;
   vertical-align: baseline;
 }
@@ -1175,7 +1184,7 @@ h2 {
 .terminal-input {
   width: min(34ch, calc(100vw - 96px));
   min-width: 0;
-  height: 1.5em;
+  height: calc(var(--terminal-line-height) * 1em);
   border: 0;
   border-radius: 0;
   background: transparent;
