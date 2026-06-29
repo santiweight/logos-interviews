@@ -14,12 +14,15 @@ It includes:
 pnpm install
 pnpm dev
 pnpm test
+pnpm test:e2e
 pnpm build
 pnpm start
 ```
 
 `pnpm dev` runs the Vite development server. `pnpm build && pnpm start`
 builds and serves the deployable app with a production Node server.
+`pnpm test:e2e` runs deterministic end-to-end tests. The live Anthropic
+reliability eval is opt-in with `RUN_ANTHROPIC_E2E=true pnpm test:e2e`.
 
 The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
 Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
@@ -42,6 +45,25 @@ event. The log directory is ignored by git.
 This captures browser-visible and application state only. Browsers do not expose
 arbitrary OS or machine state to web apps; for full reproduction, replay against
 the captured app snapshots and API responses for a given `sessionId`.
+
+## Shared Sessions
+
+The Share button stores a loadable session blob and returns a URL with
+`?session=<share-id>`. Local development stores those blobs in
+`SHARED_SESSION_DIR`, or `logs/shared-sessions` if unset.
+
+For durable share links in production, configure S3-compatible object storage:
+
+```sh
+SHARED_SESSION_S3_BUCKET=...
+SHARED_SESSION_S3_REGION=...
+SHARED_SESSION_S3_ENDPOINT=... # optional for R2, Tigris, MinIO, etc.
+SHARED_SESSION_S3_PREFIX=shared-sessions
+SHARED_SESSION_S3_FORCE_PATH_STYLE=false
+```
+
+Credentials use the standard AWS SDK environment variables, such as
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
 Fly deployment is configured with `Dockerfile`, `fly.toml`, and
 `.github/workflows/deploy.yml`. Configure the repository with:

@@ -2,9 +2,21 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
+import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 type SharedSessionPayload = {
   loadableSession?: unknown;
+};
+
+type SharedSessionRecord = {
+  shareId: string;
+  createdAt: string;
+  loadableSession: unknown;
+};
+
+type SharedSessionStore = {
+  read: (shareId: string) => Promise<string>;
+  write: (shareId: string, record: SharedSessionRecord) => Promise<void>;
 };
 
 const maxBodyBytes = 12_000_000;
@@ -55,13 +67,13 @@ async function createSharedSession(
   }
 
   const shareId = randomUUID();
-  const record = {
+  const record: SharedSessionRecord = {
     shareId,
     createdAt: new Date().toISOString(),
     loadableSession: sanitizeJson(payload.loadableSession),
   };
 
-  await writeSharedSessionRecord(shareId, record);
+  await sharedSessionStore().write(shareId, record);
   sendJson(res, 200, { ok: true, shareId });
 }
 
@@ -71,7 +83,7 @@ async function readSharedSession(shareId: string, res: ServerResponse): Promise<
   }
 
   try {
-    const raw = await readFile(sharedSessionPath(shareId), "utf8");
+    const raw = await sharedSessionStore().read(shareId);
     const record = JSON.parse(raw) as {
       shareId?: unknown;
       createdAt?: unknown;
@@ -93,10 +105,7 @@ async function readSharedSession(shareId: string, res: ServerResponse): Promise<
       throw error;
     }
 
-    const code = typeof error === "object" && error !== null && "code" in error
-      ? (error as { code?: unknown }).code
-      : null;
-    if (code === "ENOENT") {
+    if (isMissingSharedSessionError(error)) {
       throw new SharedSessionError(404, "Shared session not found");
     }
 
@@ -173,13 +182,85 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
-async function writeSharedSessionRecord(
-  shareId: string,
-  record: Record<string, unknown>,
-): Promise<void> {
-  const dir = sharedSessionDir();
-  await mkdir(dir, { recursive: true });
-  await writeFile(sharedSessionPath(shareId), JSON.stringify(record), "utf8");
+function sharedSessionStore(): SharedSessionStore {
+  const s3Bucket = process.env.SHARED_SESSION_S3_BUCKET;
+  if (s3Bucket) {
+    return s3SharedSessionStore(s3Bucket);
+  }
+
+  return fileSharedSessionStore();
+}
+
+function fileSharedSessionStore(): SharedSessionStore {
+  return {
+    async read(shareId) {
+      return await readFile(sharedSessionPath(shareId), "utf8");
+    },
+    async write(shareId, record) {
+      const dir = sharedSessionDir();
+      await mkdir(dir, { recursive: true });
+      await writeFile(sharedSessionPath(shareId), JSON.stringify(record), "utf8");
+    },
+  };
+}
+
+function s3SharedSessionStore(bucket: string): SharedSessionStore {
+  const client = new S3Client({
+    region: process.env.SHARED_SESSION_S3_REGION ?? process.env.AWS_REGION ?? "auto",
+    endpoint: process.env.SHARED_SESSION_S3_ENDPOINT,
+    forcePathStyle: process.env.SHARED_SESSION_S3_FORCE_PATH_STYLE === "true",
+  });
+
+  return {
+    async read(shareId) {
+      const response = await client.send(new GetObjectCommand({
+        Bucket: bucket,
+        Key: sharedSessionObjectKey(shareId),
+      }));
+      return await bodyToString(response.Body);
+    },
+    async write(shareId, record) {
+      await client.send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: sharedSessionObjectKey(shareId),
+        Body: JSON.stringify(record),
+        ContentType: "application/json",
+      }));
+    },
+  };
+}
+
+function sharedSessionObjectKey(shareId: string): string {
+  const prefix = process.env.SHARED_SESSION_S3_PREFIX ?? "shared-sessions";
+  const trimmed = prefix.replace(/^\/+|\/+$/g, "");
+  return trimmed.length === 0 ? `${shareId}.json` : `${trimmed}/${shareId}.json`;
+}
+
+async function bodyToString(body: unknown): Promise<string> {
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "transformToString" in body &&
+    typeof body.transformToString === "function"
+  ) {
+    return await body.transformToString();
+  }
+
+  throw new SharedSessionError(500, "Shared session response body is unreadable");
+}
+
+function isMissingSharedSessionError(error: unknown): boolean {
+  if (error instanceof NoSuchKey) {
+    return true;
+  }
+
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const code = "code" in error ? (error as { code?: unknown }).code : null;
+  const name = "name" in error ? (error as { name?: unknown }).name : null;
+  return code === "ENOENT" || name === "NoSuchKey" || name === "NotFound";
 }
 
 function sharedSessionPath(shareId: string): string {
