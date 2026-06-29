@@ -17,6 +17,14 @@ export default defineConfig(async ({ command }) => {
   const devPort = command === "serve" ? await availablePort(devHost) : undefined;
 
   return {
+    build: {
+      rollupOptions: {
+        input: {
+          main: "index.html",
+          replay: "replay.html",
+        },
+      },
+    },
     plugins: [anthropicCompletionPlugin()],
     server: {
       host: devHost,

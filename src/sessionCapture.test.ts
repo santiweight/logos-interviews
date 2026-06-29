@@ -129,7 +129,93 @@ describe("session capture", () => {
       restoreEnv(previousEnv);
     }
   });
+
+  it("reads captured session records and replay events when replay reads are enabled", async () => {
+    logDir = await mkdtemp(join(tmpdir(), "logos-session-replay-"));
+    const previousDir = process.env.SESSION_CAPTURE_DIR;
+    const previousReadEnabled = process.env.SESSION_CAPTURE_READ_ENABLED;
+    const previousStorageEnv = snapshotEnv(objectStorageEnvKeys);
+    process.env.SESSION_CAPTURE_DIR = logDir;
+    process.env.SESSION_CAPTURE_READ_ENABLED = "true";
+    clearEnv(previousStorageEnv);
+
+    try {
+      const server = createServer((req, res) => {
+        void handleSessionEvents(req, res);
+      });
+      const baseUrl = await listen(server);
+
+      try {
+        const writeResponse = await fetch(`${baseUrl}/api/session-events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "session-replay-1",
+            events: [
+              {
+                seq: 1,
+                type: "dom_replay",
+                details: {
+                  schema: "rrweb@2",
+                  event: { type: 2, timestamp: 10, data: { source: 1, nested: nestedReplayNode(30) } },
+                },
+              },
+              { seq: 0, type: "session_start" },
+            ],
+          }),
+        });
+        expect(writeResponse.status).toBe(200);
+
+        const readResponse = await fetch(`${baseUrl}/api/session-events/session-replay-1`);
+        expect(readResponse.status).toBe(200);
+
+        const payload = await readResponse.json() as {
+          ok?: boolean;
+          sessionId?: string;
+          records?: Array<{ event?: { seq?: number; type?: string } }>;
+          replayEvents?: unknown[];
+        };
+
+        expect(payload).toMatchObject({
+          ok: true,
+          sessionId: "session-replay-1",
+        });
+        expect(payload.records?.map((record) => record.event?.seq)).toEqual([0, 1]);
+        expect(payload.replayEvents).toEqual([
+          { type: 2, timestamp: 10, data: { source: 1, nested: nestedReplayNode(30) } },
+        ]);
+      } finally {
+        await closeServer(server);
+      }
+    } finally {
+      if (previousDir === undefined) {
+        delete process.env.SESSION_CAPTURE_DIR;
+      } else {
+        process.env.SESSION_CAPTURE_DIR = previousDir;
+      }
+      if (previousReadEnabled === undefined) {
+        delete process.env.SESSION_CAPTURE_READ_ENABLED;
+      } else {
+        process.env.SESSION_CAPTURE_READ_ENABLED = previousReadEnabled;
+      }
+      restoreEnv(previousStorageEnv);
+    }
+  });
 });
+
+function nestedReplayNode(depth: number): Record<string, unknown> {
+  let node: Record<string, unknown> = { tagName: "span", attributes: { class: "view-line" } };
+
+  for (let index = 0; index < depth; index++) {
+    node = {
+      tagName: "div",
+      attributes: { class: `level-${index}` },
+      childNodes: [node],
+    };
+  }
+
+  return node;
+}
 
 type CapturedRequest = {
   method: string;

@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { writeSessionCaptureRecords } from "./captureStorage";
+import {
+  readSessionCaptureRecords,
+  writeSessionCaptureRecords,
+} from "./captureStorage";
 
 type SessionCapturePayload = {
   sessionId?: unknown;
@@ -13,21 +16,47 @@ export async function handleSessionEvents(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
-  if (req.method !== "POST") {
-    sendJson(res, 405, { ok: false, error: "Method not allowed" });
-    return;
-  }
-
   try {
-    const payload = await readJson(req);
-    const records = normalizePayload(payload, req);
-    await writeSessionCaptureRecords(records);
-    sendJson(res, 200, { ok: true, captured: records.length });
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const sessionId = sessionIdFromPath(url.pathname);
+
+    if (req.method === "POST" && sessionId === null) {
+      const payload = await readJson(req);
+      const records = normalizePayload(payload, req);
+      await writeSessionCaptureRecords(records);
+      sendJson(res, 200, { ok: true, captured: records.length });
+      return;
+    }
+
+    if (req.method === "GET" && sessionId !== null) {
+      await readSessionEvents(sessionId, res);
+      return;
+    }
+
+    sendJson(res, 405, { ok: false, error: "Method not allowed" });
   } catch (error) {
     const statusCode = error instanceof SessionCaptureError ? error.statusCode : 500;
     const message = error instanceof Error ? error.message : String(error);
     sendJson(res, statusCode, { ok: false, error: message });
   }
+}
+
+async function readSessionEvents(sessionId: string, res: ServerResponse): Promise<void> {
+  if (process.env.SESSION_CAPTURE_READ_ENABLED !== "true") {
+    throw new SessionCaptureError(404, "Session capture replay is not enabled");
+  }
+
+  if (!/^[a-zA-Z0-9._:-]{8,120}$/.test(sessionId)) {
+    throw new SessionCaptureError(404, "Session capture not found");
+  }
+
+  const records = await readSessionCaptureRecords(sessionId);
+  sendJson(res, 200, {
+    ok: true,
+    sessionId,
+    records,
+    replayEvents: replayEventsFromRecords(records),
+  });
 }
 
 class SessionCaptureError extends Error {
@@ -85,11 +114,46 @@ function normalizePayload(
       forwardedFor: req.headers["x-forwarded-for"] ?? null,
       remoteAddress: req.socket.remoteAddress ?? null,
     },
-    event: sanitizeJson(event),
+    event: sanitizeCaptureEvent(event),
   }));
 }
 
-function sanitizeJson(value: unknown, depth = 0): unknown {
+function sessionIdFromPath(pathname: string): string | null {
+  const normalized = pathname.replace(/^\/api\/session-events\/?/, "/");
+  if (normalized === "/" || normalized === "") {
+    return null;
+  }
+
+  const sessionId = decodeURIComponent(normalized.replace(/^\//, "").split("/")[0] ?? "");
+  return sessionId.length > 0 ? sessionId : null;
+}
+
+function replayEventsFromRecords(records: Array<Record<string, unknown>>): unknown[] {
+  const replayEvents: unknown[] = [];
+
+  for (const record of records) {
+    const event = record.event;
+    if (!isJsonObject(event) || event.type !== "dom_replay" || !isJsonObject(event.details)) {
+      continue;
+    }
+
+    replayEvents.push(event.details.event ?? null);
+  }
+
+  return replayEvents.filter((event) => event !== null);
+}
+
+function sanitizeCaptureEvent(event: unknown): unknown {
+  const maxDepth = isJsonObject(event) && event.type === "dom_replay" ? 120 : 20;
+  const maxArrayLength = isJsonObject(event) && event.type === "dom_replay" ? 20_000 : 500;
+  return sanitizeJson(event, { maxDepth, maxArrayLength });
+}
+
+function sanitizeJson(
+  value: unknown,
+  options: { maxDepth: number; maxArrayLength: number },
+  depth = 0,
+): unknown {
   if (value === null || typeof value === "boolean" || typeof value === "number") {
     return value;
   }
@@ -98,12 +162,14 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
     return value.length > 2_000_000 ? `${value.slice(0, 2_000_000)}...[truncated]` : value;
   }
 
-  if (depth >= 20) {
+  if (depth >= options.maxDepth) {
     return "[max-depth]";
   }
 
   if (Array.isArray(value)) {
-    return value.slice(0, 500).map((item) => sanitizeJson(item, depth + 1));
+    return value
+      .slice(0, options.maxArrayLength)
+      .map((item) => sanitizeJson(item, options, depth + 1));
   }
 
   if (typeof value === "object") {
@@ -113,13 +179,17 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
         continue;
       }
 
-      result[key] = sanitizeJson(child, depth + 1);
+      result[key] = sanitizeJson(child, options, depth + 1);
     }
 
     return result;
   }
 
   return String(value);
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function sendJson(

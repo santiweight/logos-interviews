@@ -318,6 +318,9 @@ app.innerHTML = `
                 </select>
               </label>
               <div class="menu-separator" role="separator"></div>
+              <button id="copy-session-id-button" class="menu-item" type="button" role="menuitem">
+                Copy session ID
+              </button>
               <button id="clear-code-cache-button" class="menu-item" type="button" role="menuitem">
                 Clear code cache
               </button>
@@ -416,6 +419,7 @@ const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
+const copySessionIdButton = requiredQuery<HTMLButtonElement>("#copy-session-id-button");
 const clearCodeCacheButton = requiredQuery<HTMLButtonElement>("#clear-code-cache-button");
 const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
 const compilationStrategySelect = requiredQuery<HTMLSelectElement>("#compilation-strategy-select");
@@ -732,6 +736,10 @@ resetWorkspaceButton.addEventListener("click", () => {
 compilationStrategySelect.addEventListener("change", () => {
   setCompilationStrategy(compilationMode(compilationStrategySelect.value));
 });
+copySessionIdButton.addEventListener("click", () => {
+  workspaceMenu.open = false;
+  void copyCurrentSessionId();
+});
 clearCodeCacheButton.addEventListener("click", () => {
   workspaceMenu.open = false;
   sessionCapture.track("code_cache_clear_requested", undefined, true);
@@ -1035,6 +1043,24 @@ async function clearCodeCache(): Promise<void> {
     sessionCapture.track("code_cache_clear_failed", { error: message }, true);
   } finally {
     clearCodeCacheButton.disabled = false;
+  }
+}
+
+async function copyCurrentSessionId(): Promise<void> {
+  copySessionIdButton.disabled = true;
+
+  try {
+    await copyTextToClipboard(sessionCapture.sessionId);
+    runStatus.textContent = "Session ID copied";
+    runStatus.dataset.state = "ok";
+    sessionCapture.track("session_id_copied", { sessionId: sessionCapture.sessionId }, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runStatus.textContent = "Session ID copy failed";
+    runStatus.dataset.state = "error";
+    sessionCapture.track("session_id_copy_failed", { error: message }, true);
+  } finally {
+    copySessionIdButton.disabled = false;
   }
 }
 
@@ -3649,7 +3675,7 @@ async function copyTextToClipboard(text: string): Promise<void> {
   const copied = document.execCommand("copy");
   textarea.remove();
   if (!copied) {
-    throw new Error("Could not copy share link");
+    throw new Error("Could not copy text");
   }
 }
 
