@@ -3001,7 +3001,7 @@ function renderRunTab(tab: RunTab): void {
   panel.classList.toggle("active", activeToolTabId === tab.id);
   panel.classList.toggle("terminal-running", running);
   if (output) {
-    renderAnsiTerminalText(output, tab.terminalText);
+    renderAnsiTerminalText(output, terminalDisplayText(tab));
   }
   if (form) {
     form.hidden = !running;
@@ -3011,6 +3011,18 @@ function renderRunTab(tab: RunTab): void {
   }
 
   panel.scrollTop = panel.scrollHeight;
+}
+
+function terminalDisplayText(tab: RunTab): string {
+  if (tab.terminalText.length > 0) {
+    return tab.terminalText;
+  }
+
+  if (tab.status?.state === "exited" && tab.status.error) {
+    return `${tab.status.error}\n`;
+  }
+
+  return "";
 }
 
 function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {

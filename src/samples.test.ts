@@ -94,5 +94,21 @@ describe("product samples", () => {
       "          A           B           C      ",
       "1         7           5           48",
     ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "A1 -> None",
+      "A1 = 7",
+      "A1 -> 7",
+      "B1 = 2 + 3",
+      "B1 -> 5",
+      "C1 = (B1 + A1) * 4",
+      "C1 -> 48",
+      "",
+      "=== Unevaluated Expressions ===",
+      "          A           B           C      ",
+      "1         7         2 + 3    (B1 + A1) * 4",
+      "2                   10",
+      "3                   10",
+    ])).toBe(true);
   });
 });
