@@ -59,7 +59,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     }
 
     cleanupSessions();
-    const { sheet, runnable } = await readJson(req);
+    const { sheet, runnable, experimentalParallelCompletions } = await readJson(req);
     if (typeof sheet !== "string" || typeof runnable !== "string") {
       sendJson(res, 400, {
         ok: false,
@@ -71,6 +71,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     const result = await startInteractiveCodeSheet(sheet, runnable, {
       cache: options.cache,
       complete: options.complete,
+      experimentalParallelCompletions: experimentalParallelCompletions === true,
     });
     const sessionId = randomUUID();
     sessions.set(sessionId, {

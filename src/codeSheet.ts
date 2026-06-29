@@ -65,6 +65,7 @@ export type CompileOptions = {
   signal?: AbortSignal;
   streamTokens?: boolean;
   abortCurrentCompletion?: boolean;
+  experimentalParallelCompletions?: boolean;
 };
 
 export type DefinitionReadiness = {
@@ -270,9 +271,10 @@ export async function completeSheet(
   codeCache: CodeCache,
   codeSheet: CodeSheet,
   complete?: CompleteFunction,
+  options: CompileOptions = {},
 ): Promise<CompletedCodeSheet> {
   let compiled: CompletedCodeSheet | null = null;
-  for await (const event of compile(codeCache, codeSheet, complete)) {
+  for await (const event of compile(codeCache, codeSheet, complete, options)) {
     if (event.kind === "compiled") {
       compiled = event.completed;
     }
@@ -310,6 +312,104 @@ export async function* compile(
     completedSnippets,
     totalSnippets,
   };
+
+  if (options.experimentalParallelCompletions && complete) {
+    const missing: Array<{
+      node: Extract<CompilationNode, { kind: "incomplete" }>;
+      hash: SnippetHash;
+      snippet: string;
+      prompt: string;
+    }> = [];
+
+    for (const node of ir.nodes) {
+      if (isAborted(options.signal)) {
+        return;
+      }
+
+      if (node.kind !== "incomplete" || node.state.kind !== "partial") {
+        continue;
+      }
+
+      const { hash, snippet } = node.state;
+      if (codeCache.has(hash)) {
+        const cachedReplacement = codeCache.get(hash) ?? "";
+        node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
+        completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
+        completedSnippets += 1;
+        yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+        continue;
+      }
+
+      missing.push({
+        node,
+        hash,
+        snippet,
+        prompt: buildCompletionPrompt(renderImplementation(ir), snippet, node.snippetKind),
+      });
+    }
+
+    for (const item of missing) {
+      yield { kind: "llm-start", hash: item.hash, snippet: item.snippet };
+    }
+
+    const pending = missing.map((item) => {
+      const result = complete(
+        item.prompt,
+        options.abortCurrentCompletion ? { signal: options.signal } : undefined,
+      );
+      return collectCompletionResult(result).then((replacement) => ({
+        ...item,
+        replacement: normalizeSnippet(replacement, item.node.snippetKind, item.snippet),
+      }));
+    });
+
+    for (const item of await Promise.all(pending)) {
+      codeCache.set(item.hash, item.replacement);
+      item.node.state = {
+        kind: "complete",
+        hash: item.hash,
+        snippet: item.snippet,
+        implementation: item.replacement,
+      };
+      completions.push({
+        hash: item.hash,
+        snippet: item.snippet,
+        replacement: item.replacement,
+        cached: false,
+      });
+      completedSnippets += 1;
+      if (isAborted(options.signal)) {
+        return;
+      }
+
+      yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+    }
+
+    yield {
+      kind: "compiled",
+      completed: {
+        source: renderImplementation(ir),
+        lowered: ir.lowered,
+        completions,
+        ir,
+      },
+    };
+    return;
+  }
 
   for (const node of ir.nodes) {
     if (isAborted(options.signal)) {
@@ -614,6 +714,18 @@ function declarations(
 
 function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> {
   return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
+}
+
+async function collectCompletionResult(result: CompleteResult): Promise<string> {
+  if (!isAsyncIterable(result)) {
+    return await result;
+  }
+
+  let replacement = "";
+  for await (const token of result) {
+    replacement += token;
+  }
+  return replacement;
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {

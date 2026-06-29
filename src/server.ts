@@ -111,7 +111,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
     return;
   }
 
-  const { sheet, runnable } = await readJson(req);
+  const { sheet, runnable, experimentalParallelCompletions } = await readJson(req);
   if (typeof sheet !== "string" || typeof runnable !== "string") {
     sendJson(res, 400, {
       ok: false,
@@ -124,6 +124,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
   const result = await runCodeSheet(sheet, runnable, {
     cache: codeCache,
     complete: completeWithAnthropic,
+    experimentalParallelCompletions: experimentalParallelCompletions === true,
   });
 
   if (result.ok) {

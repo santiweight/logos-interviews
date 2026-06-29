@@ -17,7 +17,7 @@ export async function handleCompileStream(
     return;
   }
 
-  const { sheet } = await readJson(req);
+  const { sheet, experimentalParallelCompletions } = await readJson(req);
   if (typeof sheet !== "string") {
     sendJson(res, 400, { ok: false, error: "Missing sheet" });
     return;
@@ -36,6 +36,7 @@ export async function handleCompileStream(
     for await (const event of compile(cache, sheet, complete, {
       signal: abortController.signal,
       streamTokens: true,
+      experimentalParallelCompletions: experimentalParallelCompletions === true,
     })) {
       if (abortController.signal.aborted || res.destroyed) {
         return;

@@ -47,6 +47,10 @@ type SourceTabState = {
   activeTabId: string | null;
 };
 
+type AppSettings = {
+  experimentalParallelCompletions: boolean;
+};
+
 type RunChunk = {
   stream: "stdout" | "stderr";
   text: string;
@@ -142,6 +146,7 @@ const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
 const workspaceIdStorageKey = "logos-interviews-workspace-id";
+const appSettingsStorageKey = "logos-interviews-settings-v1";
 const staleDefaultProjectIdSets = [
   [
     "notification-retries",
@@ -166,6 +171,7 @@ const initialSourceTabState = defaultSourceTabState();
 let sourceTabs = initialSourceTabState.tabs;
 let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
+let appSettings = loadAppSettings();
 
 const app = requiredQuery<HTMLDivElement>("#app");
 const lambdaMark = `<span class="lambda-mark" aria-hidden="true">λ</span>`;
@@ -328,6 +334,19 @@ app.innerHTML = `
               <span class="sidebar-menu-label">Settings</span>
             </summary>
             <div class="menu-popover workspace-popover" role="menu">
+              <label class="settings-toggle menu-setting-row">
+                <input
+                  id="parallel-completions-toggle"
+                  class="settings-checkbox"
+                  type="checkbox"
+                  ${appSettings.experimentalParallelCompletions ? "checked" : ""}
+                />
+                <span class="settings-toggle-copy">
+                  <span class="settings-toggle-title">Parallel code generation</span>
+                  <span class="settings-toggle-description">Experimental. Generate incomplete definitions concurrently.</span>
+                </span>
+              </label>
+              <div class="menu-separator" role="separator"></div>
               <button id="reset-workspace-button" class="menu-item menu-item-danger" type="button" role="menuitem">
                 Reset workspace
               </button>
@@ -422,6 +441,7 @@ const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
 const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
+const parallelCompletionsToggle = requiredQuery<HTMLInputElement>("#parallel-completions-toggle");
 const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
@@ -724,6 +744,9 @@ resetWorkspaceButton.addEventListener("click", () => {
 
   sessionCapture.track("reset_workspace_requested", undefined, true);
   void resetWorkspace();
+});
+parallelCompletionsToggle.addEventListener("change", () => {
+  setExperimentalParallelCompletions(parallelCompletionsToggle.checked);
 });
 app.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
@@ -1029,6 +1052,25 @@ async function resetWorkspace(): Promise<void> {
   } finally {
     resetWorkspaceButton.disabled = false;
   }
+}
+
+function setExperimentalParallelCompletions(enabled: boolean): void {
+  if (appSettings.experimentalParallelCompletions === enabled) {
+    parallelCompletionsToggle.checked = enabled;
+    return;
+  }
+
+  appSettings = {
+    ...appSettings,
+    experimentalParallelCompletions: enabled,
+  };
+  saveAppSettings(appSettings);
+  parallelCompletionsToggle.checked = enabled;
+  sessionCapture.track("setting_changed", {
+    setting: "experimentalParallelCompletions",
+    enabled,
+  }, true);
+  scheduleCompilation(0);
 }
 
 function scheduleEditorCapture(): void {
@@ -3355,15 +3397,20 @@ async function startInteractiveRunViaDevApi(
   sheet: string,
   runnable: Runnable,
 ): Promise<InteractiveRunStartResponse> {
+  const body = {
+    sheet,
+    runnable,
+    experimentalParallelCompletions: appSettings.experimentalParallelCompletions,
+  };
   sessionCapture.track("api_request", {
     method: "POST",
     path: "/api/run/start",
-    body: { sheet, runnable },
+    body,
   });
   const response = await fetch("/api/run/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sheet, runnable }),
+    body: JSON.stringify(body),
   });
 
   const payload = (await response.json()) as {
@@ -3714,15 +3761,19 @@ async function* compileViaDevApi(
   sheet: string,
   signal: AbortSignal,
 ): AsyncIterable<CompileWireEvent> {
+  const body = {
+    sheet,
+    experimentalParallelCompletions: appSettings.experimentalParallelCompletions,
+  };
   sessionCapture.track("api_request", {
     method: "POST",
     path: "/api/compile",
-    body: { sheet },
+    body,
   });
   const response = await fetch("/api/compile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sheet }),
+    body: JSON.stringify(body),
     signal,
   });
 
@@ -4083,6 +4134,36 @@ function getOrCreateWorkspaceId(): string {
   }
 }
 
+function loadAppSettings(): AppSettings {
+  try {
+    const raw = window.localStorage.getItem(appSettingsStorageKey);
+    if (!raw) {
+      return defaultAppSettings();
+    }
+
+    const parsed = JSON.parse(raw) as Partial<AppSettings>;
+    return {
+      experimentalParallelCompletions: parsed.experimentalParallelCompletions === true,
+    };
+  } catch {
+    return defaultAppSettings();
+  }
+}
+
+function saveAppSettings(settings: AppSettings): void {
+  try {
+    window.localStorage.setItem(appSettingsStorageKey, JSON.stringify(settings));
+  } catch (error) {
+    console.error("Failed to save settings", error);
+  }
+}
+
+function defaultAppSettings(): AppSettings {
+  return {
+    experimentalParallelCompletions: false,
+  };
+}
+
 window.loadLogosSession = loadSession;
 window.createLogosSessionBundle = createLoadableSession;
 
@@ -4126,6 +4207,9 @@ function appSnapshot(): JsonObject {
       latestImplementationSource,
     },
     ui: {
+      settings: {
+        experimentalParallelCompletions: appSettings.experimentalParallelCompletions,
+      },
       selectedSampleId: activeSampleItem()?.dataset.sampleId ?? null,
       selectedSampleLabel: activeSampleItem()?.textContent ?? null,
       sampleMenuOpen: sampleMenu.open,

@@ -2249,6 +2249,69 @@ def gen_magic_square():
     expect(calls).toHaveLength(2);
     expect(cache.size).toBe(2);
   });
+
+  it("can start independent completions in parallel", async () => {
+    const started: string[] = [];
+    const resolvers: Array<(replacement: string) => void> = [];
+
+    const eventsPromise = (async () => {
+      const events: CompilationEvent[] = [];
+      for await (const event of compile(
+        new Map(),
+        multiIncompleteSheet,
+        (prompt) => {
+          const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
+          started.push(target);
+          return new Promise<string>((resolve) => {
+            resolvers.push(resolve);
+          });
+        },
+        { experimentalParallelCompletions: true },
+      )) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[0](`def add(x: int, y: int) -> int:
+  return x + y`);
+    resolvers[1](`def mul(x: int, y: int) -> int:
+  return x * y`);
+
+    const events = await eventsPromise;
+    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(2);
+    expect(events.at(-1)?.kind).toBe("compiled");
+  });
+
+  it("passes experimental parallel completions through the runner", async () => {
+    const started: string[] = [];
+    const resolvers: Array<(replacement: string) => void> = [];
+
+    const runPromise = runCodeSheet(multiIncompleteSheet, "test", {
+      experimentalParallelCompletions: true,
+      complete(prompt) {
+        const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
+        started.push(target);
+        return new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    });
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[0](`def add(x: int, y: int) -> int:
+  return x + y`);
+    resolvers[1](`def mul(x: int, y: int) -> int:
+  return x * y`);
+
+    expect(simplifyRunResult(await runPromise)).toEqual({
+      ok: true,
+      stdout: ["2"],
+    });
+  });
 });
 
 function completionPromptTarget(prompt: string): string {
@@ -2299,4 +2362,19 @@ async function waitForInteractiveExit(session: InteractivePythonRun): Promise<vo
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function eventually(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(5);
+    }
+  }
+
+  throw lastError;
 }

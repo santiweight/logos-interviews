@@ -5,6 +5,7 @@ import {
   type CodeSheet,
   type CompleteFunction,
   type CompletedCodeSheet,
+  type CompileOptions,
   type Runnable,
 } from "./codeSheet";
 
@@ -17,6 +18,7 @@ export type RunOptions = {
   cache?: CodeCache;
   python?: string;
   onStdoutLine?: (line: string) => void;
+  experimentalParallelCompletions?: boolean;
 };
 
 export type RunChunk = {
@@ -39,7 +41,7 @@ export async function runCodeSheet(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete);
+  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options));
   const source = buildPythonProgram(completed.source, runnable);
   const executed = await runPython(source, options.python ?? "python3", options.onStdoutLine);
 
@@ -66,11 +68,17 @@ export async function startInteractiveCodeSheet(
   options: RunOptions = {},
 ): Promise<InteractiveRunStart> {
   const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete);
+  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options));
   const source = buildPythonProgram(completed.source, runnable);
   return {
     session: new InteractivePythonRun(source, options.python ?? "python3"),
     completed,
+  };
+}
+
+function compileOptions(options: RunOptions): CompileOptions {
+  return {
+    experimentalParallelCompletions: options.experimentalParallelCompletions,
   };
 }
 

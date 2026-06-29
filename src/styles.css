@@ -215,6 +215,48 @@ textarea:disabled {
   color: var(--accent);
 }
 
+.menu-setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  padding: 7px;
+}
+
+.menu-setting-row:hover {
+  background: var(--accent-hover-soft);
+}
+
+.settings-checkbox {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.settings-toggle-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.settings-toggle-title {
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.settings-toggle-description {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 460;
+  line-height: 1.25;
+}
+
 .scratch-file-menu-item {
   min-height: 28px;
   font-weight: 620;
@@ -1325,6 +1367,7 @@ h2 {
 .send-button:focus-visible,
 .agent-toggle-button:focus-visible,
 .sidebar-menu-trigger:focus-visible,
+.settings-checkbox:focus-visible,
 .source-add-tab:focus-visible,
 .sample-menu-group-title:focus-visible,
 .menu-item:focus-visible,
