@@ -514,8 +514,8 @@ const editor = monaco.editor.create(editorEl, {
   bracketPairColorization: { enabled: false },
   "semanticHighlighting.enabled": false,
   guides: {
-    indentation: true,
-    highlightActiveIndentation: "always",
+    indentation: false,
+    highlightActiveIndentation: false,
   },
   padding: { top: 12, bottom: 12 },
 });
@@ -548,11 +548,14 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   bracketPairColorization: { enabled: false },
   "semanticHighlighting.enabled": false,
   guides: {
-    indentation: true,
+    indentation: false,
     highlightActiveIndentation: false,
   },
   padding: { top: 12, bottom: 12 },
 });
+
+attachBlockIndentGuideOverlay(editor);
+attachBlockIndentGuideOverlay(snippetPreviewEditor);
 
 const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
 let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1657,6 +1660,199 @@ function setSnippetPreviewSource(source: string): void {
   if (snippetPreviewEditor.getValue() !== source) {
     snippetPreviewEditor.setValue(source);
   }
+}
+
+function attachBlockIndentGuideOverlay(targetEditor: monaco.editor.IStandaloneCodeEditor): void {
+  const overlay = document.createElement("div");
+  overlay.className = "block-indent-guide-overlay";
+  targetEditor.getContainerDomNode().append(overlay);
+
+  let animationFrame = 0;
+  const scheduleRender = (): void => {
+    if (animationFrame !== 0) {
+      return;
+    }
+
+    animationFrame = window.requestAnimationFrame(() => {
+      animationFrame = 0;
+      renderBlockIndentGuides(targetEditor, overlay);
+    });
+  };
+
+  targetEditor.onDidChangeModelContent(scheduleRender);
+  targetEditor.onDidScrollChange(scheduleRender);
+  targetEditor.onDidLayoutChange(scheduleRender);
+  targetEditor.onDidContentSizeChange(scheduleRender);
+  targetEditor.onDidChangeModel(scheduleRender);
+  targetEditor.onDidChangeModelOptions(scheduleRender);
+  scheduleRender();
+  window.setTimeout(scheduleRender, 0);
+  window.setTimeout(scheduleRender, 100);
+  window.setTimeout(scheduleRender, 500);
+}
+
+function renderBlockIndentGuides(
+  targetEditor: monaco.editor.IStandaloneCodeEditor,
+  overlay: HTMLDivElement,
+): void {
+  const model = targetEditor.getModel();
+  if (model === null) {
+    overlay.replaceChildren();
+    return;
+  }
+
+  const tabSize = model.getOptions().tabSize;
+  const scrollTop = targetEditor.getScrollTop();
+  const fragment = document.createDocumentFragment();
+  const endpointInset = 6;
+
+  for (const block of indentGuideBlocks(model, tabSize)) {
+    appendIndentGuideBlock({
+      editor: targetEditor,
+      fragment,
+      model,
+      ...block,
+      tabSize,
+      scrollTop,
+      endpointInset,
+    });
+  }
+
+  overlay.replaceChildren(fragment);
+}
+
+function indentGuideBlocks(
+  model: monaco.editor.ITextModel,
+  tabSize: number,
+): Array<{ level: number; startLine: number; endLine: number }> {
+  const blocks: Array<{ level: number; startLine: number; endLine: number }> = [];
+  const activeStarts = new Map<number, number>();
+  let previousContentLine: number | null = null;
+  let previousLevel = 0;
+
+  for (let line = 1; line <= model.getLineCount(); line += 1) {
+    const content = model.getLineContent(line);
+    if (content.trim().length === 0) {
+      continue;
+    }
+
+    const level = indentGuideLevel(content, tabSize);
+    for (const [activeLevel, startLine] of [...activeStarts.entries()]) {
+      if (activeLevel > level) {
+        blocks.push({ level: activeLevel, startLine, endLine: line - 1 });
+        activeStarts.delete(activeLevel);
+      }
+    }
+
+    if (previousContentLine !== null && level > previousLevel) {
+      for (let activeLevel = previousLevel + 1; activeLevel <= level; activeLevel += 1) {
+        if (!activeStarts.has(activeLevel)) {
+          activeStarts.set(activeLevel, previousContentLine);
+        }
+      }
+    }
+
+    previousContentLine = line;
+    previousLevel = level;
+  }
+
+  const finalLine = model.getLineCount();
+  for (const [level, startLine] of activeStarts.entries()) {
+    blocks.push({ level, startLine, endLine: finalLine });
+  }
+
+  return blocks;
+}
+
+function appendIndentGuideBlock({
+  editor: targetEditor,
+  fragment,
+  model,
+  level,
+  startLine,
+  endLine,
+  tabSize,
+  scrollTop,
+  endpointInset,
+}: {
+  editor: monaco.editor.IStandaloneCodeEditor;
+  fragment: DocumentFragment;
+  model: monaco.editor.ITextModel;
+  level: number;
+  startLine: number;
+  endLine: number;
+  tabSize: number;
+  scrollTop: number;
+  endpointInset: number;
+}): void {
+  const anchorLine = indentGuideAnchorLine(model, level, startLine, endLine, tabSize);
+  const guideColumn = Math.max(1, level * tabSize);
+  const visiblePosition = targetEditor.getScrolledVisiblePosition({
+    lineNumber: anchorLine,
+    column: guideColumn,
+  });
+  if (visiblePosition === null) {
+    return;
+  }
+
+  const top =
+    targetEditor.getTopForLineNumber(startLine) -
+    scrollTop +
+    endpointInset;
+  const bottom =
+    targetEditor.getBottomForLineNumber(endLine) -
+    scrollTop -
+    endpointInset;
+  const height = Math.max(0, bottom - top);
+  if (height <= 0) {
+    return;
+  }
+
+  const guide = document.createElement("div");
+  guide.className = "block-indent-guide";
+  guide.style.left = `${Math.round(visiblePosition.left)}px`;
+  guide.style.top = `${Math.round(top)}px`;
+  guide.style.height = `${Math.round(height)}px`;
+  fragment.append(guide);
+}
+
+function indentGuideAnchorLine(
+  model: monaco.editor.ITextModel,
+  level: number,
+  startLine: number,
+  endLine: number,
+  tabSize: number,
+): number {
+  for (let line = startLine; line <= endLine; line += 1) {
+    if (indentGuideLevel(model.getLineContent(line), tabSize) >= level) {
+      return line;
+    }
+  }
+
+  return startLine;
+}
+
+function indentGuideLevel(line: string, tabSize: number): number {
+  if (line.trim().length === 0) {
+    return 0;
+  }
+
+  let width = 0;
+  for (const character of line) {
+    if (character === " ") {
+      width += 1;
+      continue;
+    }
+
+    if (character === "\t") {
+      width += tabSize;
+      continue;
+    }
+
+    break;
+  }
+
+  return Math.floor(width / tabSize);
 }
 
 function registerLogosPythonLanguage(): void {

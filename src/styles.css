@@ -1293,6 +1293,20 @@ h2 {
   display: none !important;
 }
 
+.monaco-editor .block-indent-guide-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.monaco-editor .block-indent-guide {
+  position: absolute;
+  width: 1px;
+  background: rgba(102, 92, 78, 0.12);
+}
+
 .agent-log {
   flex: 1;
   min-height: 0;
