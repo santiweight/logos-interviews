@@ -111,4 +111,129 @@ describe("product samples", () => {
       "3                   10",
     ])).toBe(true);
   });
+
+  it("requires annotated maze path color to be attached to visible glyphs", () => {
+    const testCase = sampleEvalCases.find((item) => {
+      return item.name === "annotated maze generation and visible colored astar path";
+    });
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    const base = [
+      "Maze:",
+      "############",
+      "#O         #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#         X#",
+      "#          #",
+      "############",
+      "",
+      "Solved Maze (path in color):",
+    ];
+
+    expect(testCase.stdoutCheck.matches([
+      ...base,
+      "############",
+      "#O\x1b[32m·\x1b[0m        #",
+      "# \x1b[32m·\x1b[0m        #",
+      "# \x1b[32m·\x1b[0m        #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#         X#",
+      "#          #",
+      "############",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      ...base,
+      "############",
+      "#O\x1b[32m \x1b[0m        #",
+      "# \x1b[32m \x1b[0m        #",
+      "# \x1b[32m \x1b[0m        #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#         X#",
+      "#          #",
+      "############",
+    ])).toBe(false);
+
+    expect(testCase.stdoutCheck.matches([
+      ...base,
+      "############",
+      "#O\x1b[32m.\x1b[0m        #",
+      "# \x1b[32m.\x1b[0m        #",
+      "# \x1b[32m.\x1b[0m        #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#          #",
+      "#         X#",
+      "#          #",
+      "############",
+    ])).toBe(false);
+
+    expect(testCase.stdoutCheck.matches([
+      "Maze:",
+      "#############",
+      "#O          #",
+      "#############",
+      "",
+      "Solved Maze (path in color):",
+      "#############",
+      "#O\x1b[32m·\x1b[0m         #",
+      "#############",
+    ])).toBe(false);
+  });
+
+  it("allows debug output around the annotated maze api contract", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "annotated maze api contract");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    expect(testCase.stdoutCheck.matches([
+      "[MazeGenerator.gen] Grid dimensions: 10x10",
+      "10 10",
+      "True",
+      "True",
+      "True",
+      "True True True",
+      "True",
+      "True",
+      "[MazeGenerator.grid] Rendered 12 rows, width=12",
+      "12 12",
+      "True",
+      "True",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "[MazeGenerator.grid] Rendered 14 rows x 14 cols",
+      "10 10",
+      "True",
+      "True",
+      "True",
+      "True True True",
+      "True",
+      "True",
+      "14 14",
+      "False",
+      "True",
+    ])).toBe(false);
+  });
 });

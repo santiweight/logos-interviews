@@ -61,6 +61,48 @@ def main():
   Print each strategy name, the board before and after, and any candidate changes.
   \`\`\``;
 
+const annotatedMazeEvalSheet = `# Maze generator, rendered, and solver.
+# 
+# Walls: #
+# Open cells: ' '
+# Start: O
+# Goal: X
+# Path: ·
+#
+# A size 10 maze has 10 rows and 10 columns of cells.
+# When printed, it has only the outside edge walls added, so it is 12 rows tall and 12 characters wide.
+
+class Maze(grid: list[list[str]], start: tuple[int, int], goal: tuple[int, int])
+
+def maze_is_solvable(maze: Maze) -> bool
+
+@logos.debug.print()
+class MazeGenerator:
+  size: int = 8
+
+  # Generates a solvable maze by building a filled-in grid, and then incrementally
+  # stepping along many paths at once. The result should be: the maze can have only
+  # junctions but no open areas.
+  #
+  # Also, the maze will be fully connected.
+  #
+  # The starting place will be top left, and the bottom right will be the end.
+  def gen(self) -> Maze
+
+  def grid(self) -> list[str]
+
+def astar_solve(maze: Maze) -> list[tuple[int, int]]
+
+@logos.debug.print()
+def main():
+  \`\`\`
+  Build a 10x10 maze using MazeGenerator, and then solve it using A*.
+  
+  Print the maze, and then the solved maze.
+  
+  Use colors to make it clear where the path went.
+  \`\`\``;
+
 export const sampleGroups: SampleGroup[] = [
   {
     label: "Product workflows",
@@ -648,39 +690,7 @@ def main():
       {
         id: "annotated-maze",
         label: "Annotated maze",
-        code: `# Maze.grid is a rectangular list of rows.
-# Use "#" for walls, " " for open cells, "S" for start, and "G" for goal.
-# start and goal are (row, col) coordinates.
-# MazeGenerator.gen returns a deterministic, solvable maze of the configured size.
-# astar_solve returns a shortest path from start to goal, including both endpoints.
-
-class Maze(grid: list[list[str]], start: tuple[int, int], goal: tuple[int, int])
-
-def maze_is_solvable(maze: Maze) -> bool
-
-@logos.debug.print()
-class MazeGenerator:
-  size: int = 8
-
-  # Generates a solvable maze using classical graph techniques.
-  # Start with a connected grid graph, choose two opposing reachable nodes,
-  # and remove enough edges or cells to make the route interesting while
-  # preserving at least one path between start and goal.
-  # Use maze_is_solvable for validation rather than undeclared helpers.
-  def gen(self) -> Maze
-
-def astar_solve(maze: Maze) -> list[tuple[int, int]]
-
-@logos.debug.print()
-def main():
-  \`\`\`
-  build a 10x10 maze using MazeGenerator, and then solve it using A*.
-  only generate solvable mazes.
-  use maze_is_solvable to check the generated maze before solving it.
-  print the maze, the start and goal, the path length, and the solved maze
-  with the path marked.
-  use colors to make it clear where the path is
-  \`\`\``,
+        code: annotatedMazeEvalSheet,
       },
       {
         id: "sudoku-human-strategies",
@@ -1388,13 +1398,40 @@ def main():
   },
   {
     sampleId: "annotated-maze",
-    name: "annotated maze generation and astar debug output",
-    sheet: sampleById("annotated-maze").code,
+    name: "annotated maze generation and visible colored astar path",
+    sheet: annotatedMazeEvalSheet,
     runnable: "main",
     stdoutCheck: {
       description:
-        "prints maze generation/debug details, a visible maze, and an A* path length",
-      matches: isMazeDebugStdout,
+        "prints a solvable 10x10 maze and a solved 12x12 rendered maze with visible ANSI-colored path dots",
+      matches: isMazeMainStdout,
+    },
+  },
+  {
+    sampleId: "annotated-maze",
+    name: "annotated maze api contract",
+    sheet: withMainSource(annotatedMazeEvalSheet, "annotated-maze", `def main():
+  gen = MazeGenerator()
+  gen.size = 10
+  maze = gen.gen()
+  path = astar_solve(maze)
+  rendered = gen.grid()
+
+  print(len(maze.grid), len(maze.grid[0]) if maze.grid else 0)
+  print(maze.start == (0, 0))
+  print(maze.goal == (9, 9))
+  print(maze_is_solvable(maze))
+  print(path[0] == maze.start, path[-1] == maze.goal, len(path) == len(set(path)))
+  print(all(abs(a[0] - b[0]) + abs(a[1] - b[1]) == 1 for a, b in zip(path, path[1:])))
+  print(all(maze.grid[r][c] != "#" for r, c in path))
+  print(len(rendered), len(rendered[0]) if rendered else 0)
+  print(rendered[0] == "#" * 12 and rendered[-1] == "#" * 12)
+  print(all(row[0] == "#" and row[-1] == "#" for row in rendered))`),
+    runnable: "main",
+    stdoutCheck: {
+      description:
+        "validates the 10x10 internal and 12x12 rendered maze API contract while allowing debug-print lines",
+      matches: isMazeApiContractStdout,
     },
   },
 ];
@@ -1421,10 +1458,14 @@ function withTest(sampleId: string, testSource: string): CodeSheet {
 
 function withMain(sampleId: string, mainSource: string): CodeSheet {
   const code = sampleById(sampleId).code;
+  return withMainSource(code, sampleId, mainSource);
+}
+
+function withMainSource(code: CodeSheet, label: string, mainSource: string): CodeSheet {
   const marker = "\ndef main():\n";
   const markerIndex = code.lastIndexOf(marker);
   if (markerIndex < 0) {
-    throw new Error(`Sample has no main runnable: ${sampleId}`);
+    throw new Error(`Sheet has no main runnable: ${label}`);
   }
 
   return `${code.slice(0, markerIndex)}\n\n${mainSource}`;
@@ -1516,17 +1557,102 @@ function isVisibleAsciiFractalFrame(stdout: string[]): boolean {
   );
 }
 
-function isMazeDebugStdout(stdout: string[]): boolean {
-  const joined = stdout.join("\n");
-  const mazeRows = stdout.filter((row) => /^[#.*SG ]{6,}$/.test(row));
-  const pathLength = stdout.some((row) => /path\s*(length|len)?\D+\d+/i.test(row));
+function isMazeMainStdout(stdout: string[]): boolean {
+  const mazeRows = stdout
+    .map((row) => ({ raw: row, plain: stripAnsi(row) }))
+    .filter(({ plain }) => isMazeDisplayRow(plain));
+  const firstMaze = mazeRows.slice(0, 12);
+  const solvedMaze = mazeRows.slice(-12);
+  const firstPlain = firstMaze.map(({ plain }) => plain);
+  const solvedPlain = solvedMaze.map(({ plain }) => plain);
+  const pathDots = solvedPlain.reduce((total, row) => {
+    return total + [...row].filter((char) => isMazePathDot(char)).length;
+  }, 0);
 
   return (
-    stdout.length >= 6 &&
-    mazeRows.length >= 4 &&
-    /start/i.test(joined) &&
-    /goal/i.test(joined) &&
-    /(?:a\*|astar|path)/i.test(joined) &&
-    pathLength
+    mazeRows.length >= 24 &&
+    isExactMazeRender(firstPlain, 12) &&
+    isExactMazeRender(solvedPlain, 12) &&
+    firstPlain.join("\n") !== solvedPlain.join("\n") &&
+    firstPlain.some((row) => row.includes("O")) &&
+    firstPlain.some((row) => row.includes("X")) &&
+    solvedPlain.some((row) => row.includes("O")) &&
+    solvedPlain.some((row) => row.includes("X")) &&
+    pathDots >= 2 &&
+    hasAnsiColoredPathDot(solvedMaze.map(({ raw }) => raw))
   );
+}
+
+function isMazeApiContractStdout(stdout: string[]): boolean {
+  return containsOrderedLines(stdout, [
+    "10 10",
+    "True",
+    "True",
+    "True",
+    "True True True",
+    "True",
+    "True",
+    "12 12",
+    "True",
+    "True",
+  ]);
+}
+
+function containsOrderedLines(stdout: string[], expected: string[]): boolean {
+  let cursor = 0;
+  for (const line of stdout) {
+    if (line === expected[cursor]) {
+      cursor += 1;
+      if (cursor === expected.length) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function isMazeDisplayRow(row: string): boolean {
+  return row.length === 12 && /^[# OX·]+$/.test(row) && row.includes("#");
+}
+
+function isExactMazeRender(rows: string[], width: number): boolean {
+  return (
+    rows.length === width &&
+    rows.every((row) => row.length === width && row[0] === "#" && row[row.length - 1] === "#") &&
+    rows[0] === "#".repeat(width) &&
+    rows[rows.length - 1] === "#".repeat(width)
+  );
+}
+
+function isMazePathDot(char: string): boolean {
+  return char === "·";
+}
+
+function hasAnsiColoredPathDot(rows: string[]): boolean {
+  let styled = false;
+
+  for (const row of rows) {
+    for (let index = 0; index < row.length; index += 1) {
+      if (row[index] === "\x1b") {
+        const match = row.slice(index).match(/^\x1b\[([0-9;]*)m/);
+        if (match) {
+          const codes = match[1]?.split(";").filter(Boolean) ?? [];
+          styled = codes.length === 0 || !codes.every((code) => code === "0");
+          index += match[0].length - 1;
+          continue;
+        }
+      }
+
+      if (styled && isMazePathDot(row[index] ?? "")) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
