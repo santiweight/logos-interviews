@@ -446,6 +446,8 @@ Rules:
 - For class methods, the replacement is inserted inside the existing class at the same indentation as the target method.
 - For class methods, return only the requested method definition and its nested local helpers. Do not include sibling methods, the class header, or top-level functions.
 - Helpers are allowed only when nested inside the requested declaration.
+- For top-level functions, do not define nested replacements for methods on declared classes. Construct the declared class and set ordinary instance state only.
+- Do not monkey-patch declared classes or assign methods onto instances or classes. Avoid MethodType, setattr for methods, and assignments such as obj.render = ... or ClassName.render = ....
 - For classes without __init__, methods must work with no-argument construction. Use getattr defaults and dynamic attributes rather than requiring constructor arguments.
 - Parallel agents may complete sibling methods independently, so do not depend on a sibling method adding hidden state during construction.
 - If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
