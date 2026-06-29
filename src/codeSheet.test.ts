@@ -2478,6 +2478,22 @@ User(name: str, active: bool = true):
     ]);
   });
 
+  it("does not mark a runnable with only comments ready when its dependencies are ready", () => {
+    const parsed = parse(`def helper():
+  return 1
+
+def test():
+  # helper is ready, but this runnable has no executable body`);
+
+    expect(definitionReadiness(parsed, new Map()).find((definition) => definition.name === "test")).toMatchObject({
+      name: "test",
+      ready: false,
+      reason: "implementation",
+      dependencies: ["helper"],
+      blockingDependencies: [],
+    });
+  });
+
   it("finds implementation targets for complete functions and classes", () => {
     const source = `class Counter:
   def next(self) -> int:

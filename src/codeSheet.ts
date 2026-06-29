@@ -683,6 +683,7 @@ export function definitionReadiness(
       (decl.className !== undefined
         ? incomplete.has(decl.className)
         : incomplete.has(decl.name)) ||
+      (decl.className === undefined && !hasExecutableFunctionBody(source)) ||
       hasUncachedNaturalSnippet(parsed, codeCache, source);
     const deps = decl.className ? [] : dependencies.get(decl.name) ?? [];
     const blockingDependencies = directImplementationMissing
@@ -1029,6 +1030,21 @@ function hasUncachedNaturalSnippet(
       source.includes(snippet.snippet) &&
       !codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts))
     );
+  });
+}
+
+function hasExecutableFunctionBody(source: string): boolean {
+  const lines = source.split("\n");
+  const header = parseFunctionHeader(lines[0] ?? "");
+  if (header !== null && !header.hasColon) {
+    return true;
+  }
+
+  const headerIndent = indentWidth(lines[0] ?? "");
+
+  return lines.slice(1).some((line) => {
+    const trimmed = line.trim();
+    return trimmed.length > 0 && !trimmed.startsWith("#") && indentWidth(line) > headerIndent;
   });
 }
 
