@@ -29,6 +29,9 @@ export type SampleEvalCase = {
 export type SampleStdoutCheck = {
   description: string;
   matches: (stdout: string[]) => boolean;
+  llmJudge?: {
+    instructions: string;
+  };
 };
 
 const starterArithmeticEvalSheet = `# In Logos, LLMs will complete partial code for you.
@@ -417,7 +420,7 @@ def main():
   print("Regular Python: ", mul(add(1, 2), 3))
 
   # Or use natural langauge: Logos will compile the code for you.
-  \`print mul of (add one and two) and 3 with a "Logos:" prefix\`
+  \`print Logos: mul of (add one and two) and 3\`
 
   # Or mix python syntax with natural language.
   print("Mixed Logos:", mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
@@ -429,7 +432,7 @@ def main():
       {
         id: "beyond-basics",
         label: "Beyond Basics",
-        code: `# Logos supports classes, even if incomplete.
+        code: `# Logos supports classes, even when incomplete.
 #
 # Click MagicSquare, and notice how the agent's implementations
 # compare to the stub we provided.
@@ -437,20 +440,36 @@ def main():
 class MagicSquare:
   size: int
 
-  def gen() -> MagicSquare
+  def gen(self) -> MagicSquare
   def grid(self) -> [[int]]
 
   def pretty(self) -> str
 
-def test_magic_square():
-  # Logos also support multi-line snippets.
+
+def magic_square_example():
   \`\`\`
-  Generate a MagicSquare.
+  Generate a MagicSquare of size 4.
 
   Pretty print it, including the sums of columns/rows.
 
   Check the MagicSquare is valid, and show the work.
-  \`\`\``,
+  \`\`\`
+
+# [Idea] Build a magic square puzzle solver (use Cmd+/ to uncomment)
+
+# class MagicSquarePuzzle:
+#   size: int
+#   def grid(self) -> list[int | None]
+
+# def generate_solvable_magic_square(size, percent_filled) -> MagicSquarePuzzle
+
+# def solve_magic_square(puzzle) -> MagicSquarePuzzle
+
+# def puzzle_example():
+#   \`\`\`
+#   Generate a size 3 puzzle with about 45% of cells filled, print it,
+#   then solve it and print the solution.
+#   \`\`\``,
       },
       {
         id: "ascii-fractal",
@@ -768,6 +787,64 @@ export const sampleTemplateGroups: SampleTemplateGroup[] = [
   },
 ];
 
+function solutionGrid(stdout: string[], solutionIndex: number): number[][] {
+  const rows: number[][] = [];
+  for (const line of stdout.slice(solutionIndex + 1).map(stripAnsi)) {
+    const values = Array.from(line.matchAll(/-?\d+/g), (match) => Number(match[0]));
+    if (values.length < 3) {
+      continue;
+    }
+
+    const width = rows[0]?.length ?? values.length;
+    if (values.length !== width) {
+      if (rows.length > 0) {
+        break;
+      }
+      continue;
+    }
+
+    rows.push(values);
+    if (rows.length === width) {
+      break;
+    }
+  }
+  return rows;
+}
+
+function isMagicSquare(rows: number[][]): boolean {
+  const size = rows.length;
+  if (size < 3 || rows.some((row) => row.length !== size)) {
+    return false;
+  }
+
+  const target = rows[0].reduce((sum, value) => sum + value, 0);
+  const rowSums = rows.map((row) => row.reduce((sum, value) => sum + value, 0));
+  const columnSums = rows.map((_, column) => rows.reduce((sum, row) => sum + row[column], 0));
+  const diagonalSums = [
+    rows.reduce((sum, row, index) => sum + row[index], 0),
+    rows.reduce((sum, row, index) => sum + row[size - index - 1], 0),
+  ];
+  return [...rowSums, ...columnSums, ...diagonalSums].every((sum) => sum === target);
+}
+
+function hasPrettyTable(stdout: string[]): boolean {
+  const clean = stdout.map(stripAnsi);
+  const hasBorder = clean.some((line) => {
+    const trimmed = line.trim();
+    return /^\+-{3,}(?:\+-{3,})+\+$/.test(trimmed) || /^[-+]{5,}$/.test(trimmed);
+  });
+  const tableRows = clean.filter((line) => /^\|.*\|$/.test(line.trim()));
+  return hasBorder && tableRows.length >= 3;
+}
+
+function containsExactlyPrimesUnder100(values: number[]): boolean {
+  return values.join(",") === [
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29,
+    31, 37, 41, 43, 47, 53, 59, 61, 67, 71,
+    73, 79, 83, 89, 97,
+  ].join(",");
+}
+
 export const sampleEvalCases: SampleEvalCase[] = [
   {
     sampleId: "cart-promotions",
@@ -1011,11 +1088,11 @@ def test():
     sampleId: "beyond-basics",
     name: "completed magic square pretty print",
     sheet: `class MagicSquare:
-  def __init__(self, grid: list):
-    self.grid = grid
-    self.size = len(grid)
+  def __init__(self, grid: list | None = None):
+    self.grid = grid or []
+    self.size = len(self.grid)
 
-  def gen() -> MagicSquare:
+  def gen(self) -> MagicSquare:
     return MagicSquare([
       [8, 1, 6],
       [3, 5, 7],
@@ -1026,7 +1103,7 @@ def test():
     return "\\n".join(" ".join(str(value) for value in row) for row in self.grid)
 
 def test():
-  square = MagicSquare.gen()
+  square = MagicSquare().gen()
   print(square.size)
   print(square.pretty())`,
     runnable: "test",
@@ -1034,18 +1111,107 @@ def test():
   },
   {
     sampleId: "beyond-basics",
-    name: "unbraced magic square natural language template",
+    name: "raw magic square size four natural language template",
     sheet: sampleById("beyond-basics").code,
-    runnable: "test_magic_square",
+    runnable: "magic_square_example",
     stdoutCheck: {
-      description: "prints a valid magic square and shows validation work",
+      description: "prints a valid 4x4 magic square and shows validation work",
       matches(stdout) {
         const joined = stdout.join("\n");
         return (
           stdout.length > 0 &&
-          /\b15\b/.test(joined) &&
+          /\b34\b/.test(joined) &&
           /(?:valid|row|column|diagonal|magic)/i.test(joined)
         );
+      },
+    },
+  },
+  {
+    sampleId: "beyond-basics",
+    name: "isolated magic square puzzle solver idea",
+    sheet: `class MagicSquarePuzzle:
+  size: int
+  def grid(self) -> list[int | None]
+
+def generate_solvable_magic_square(size, percent_filled) -> MagicSquarePuzzle
+
+def solve_magic_square(puzzle) -> MagicSquarePuzzle
+
+def puzzle_example():
+  \`\`\`
+  Generate a size 3 puzzle with about 45% of cells filled, print it,
+  then solve it and print the solution.
+  \`\`\``,
+    runnable: "puzzle_example",
+    stdoutCheck: {
+      description: "pretty-prints a partial magic square puzzle and solved valid magic square",
+      matches(stdout) {
+        const clean = stdout.map(stripAnsi);
+        const joined = clean.join("\n");
+        const puzzleIndex = clean.findIndex((line) => /puzzle/i.test(line));
+        const solutionIndex = clean.findIndex((line) => /(?:solution|solved|complete)/i.test(line));
+        if (
+          stdout.length === 0 ||
+          !/(?:puzzle|given|blank|none|_|\.)/i.test(joined) ||
+          puzzleIndex === -1 ||
+          solutionIndex === -1
+        ) {
+          return false;
+        }
+
+        const puzzleLines = clean.slice(puzzleIndex + 1, solutionIndex);
+        const puzzleHasBlank = puzzleLines.some((line) => /(?:_|\.|\?|none|blank)/i.test(line));
+        const puzzleHasGiven = puzzleLines.some((line) => /\b-?\d+\b/.test(line));
+        if (!puzzleHasBlank || !puzzleHasGiven) {
+          return false;
+        }
+
+        return hasPrettyTable(stdout) && isMagicSquare(solutionGrid(stdout, solutionIndex));
+      },
+      llmJudge: {
+        instructions: `Pass if the output is a polished terminal presentation of a size-3 magic square puzzle and its solution.
+The prompt only said "print", so judge whether the model inferred good printing on its own.
+Require:
+- labeled puzzle and solution sections;
+- a partial puzzle with both blanks and givens;
+- a readable grid/table layout rather than plain raw rows or Python reprs;
+- a valid solved 3x3 magic square;
+- no runtime error text.
+Prefer outputs with borders, alignment, useful labels, and helpful but not excessive color.
+Fail dry outputs like "_ _ 6" rows followed by bare solution rows, even if numerically correct.`,
+      },
+    },
+  },
+  {
+    sampleId: "beyond-basics",
+    name: "natural language primes grid print quality",
+    sheet: `def main():
+  \`\`\`
+  print all primes less than 100 in a grid
+  \`\`\``,
+    runnable: "main",
+    stdoutCheck: {
+      description: "prints primes under 100 as an aligned multi-row grid, not a raw list",
+      matches(stdout) {
+        const clean = stdout.map(stripAnsi).filter((line) => line.trim().length > 0);
+        const values = clean.flatMap((line) => {
+          return Array.from(line.matchAll(/\b\d+\b/g), (match) => Number(match[0]));
+        });
+        const rawListLike = clean.some((line) => /[\[\],]/.test(line));
+        const numericRows = clean.filter((line) => /\b\d+\b/.test(line));
+        const hasMultipleRows = numericRows.length >= 3;
+        const hasAlignedSpacing = numericRows.some((line) => /\d\s{2,}\d/.test(line));
+        return containsExactlyPrimesUnder100(values) && hasMultipleRows && hasAlignedSpacing && !rawListLike;
+      },
+      llmJudge: {
+        instructions: `Pass if the output prints exactly the primes less than 100 as a readable aligned grid.
+The prompt only said "print all primes less than 100 in a grid", so judge whether the grid is clear.
+Require:
+- all and only primes below 100;
+- multiple rows with consistent spacing or alignment;
+- not a Python list/repr or a comma-separated dump;
+- no runtime error text.
+No title is required, but labels are acceptable if they do not obscure the grid.`,
       },
     },
   },

@@ -200,6 +200,83 @@ describe("product samples", () => {
     ])).toBe(false);
   });
 
+  it("accepts pretty magic square puzzle solver output", () => {
+    const testCase = sampleEvalCases.find((item) => {
+      return item.name === "isolated magic square puzzle solver idea";
+    });
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    expect(testCase.stdoutCheck.matches([
+      "Puzzle:",
+      "Magic Square Puzzle (size=3, magic sum=15)",
+      "",
+      "+---+---+---+",
+      "| ? | ? | 6 |",
+      "+---+---+---+",
+      "| 3 | ? | ? |",
+      "+---+---+---+",
+      "| 4 | ? | 2 |",
+      "+---+---+---+",
+      "",
+      "Solution:",
+      "Magic Square Puzzle (size=3, magic sum=15)",
+      "",
+      "+---+---+---+",
+      "| 8 | 1 | 6 |",
+      "+---+---+---+",
+      "| 3 | 5 | 7 |",
+      "+---+---+---+",
+      "| 4 | 9 | 2 |",
+      "+---+---+---+",
+      "",
+      "Solved puzzle is: VALID",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "Puzzle:",
+      "_ _ _",
+      "_ _ _",
+      "_ _ _",
+      "",
+      "Solution:",
+      "2 7 6",
+      "9 5 1",
+      "4 3 8",
+    ])).toBe(false);
+
+    expect(testCase.stdoutCheck.matches([
+      "Puzzle:",
+      "_ _ _",
+      "Solution:",
+      "1 2 3",
+      "4 5 6",
+      "7 8 9",
+    ])).toBe(false);
+  });
+
+  it("accepts primes rendered as a grid and rejects raw list output", () => {
+    const testCase = sampleEvalCases.find((item) => {
+      return item.name === "natural language primes grid print quality";
+    });
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    expect(testCase.stdoutCheck.matches([
+      "   2    3    5    7   11   13   17   19   23   29",
+      "  31   37   41   43   47   53   59   61   67   71",
+      "  73   79   83   89   97",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97]",
+    ])).toBe(false);
+  });
+
   it("allows debug output around the annotated maze api contract", () => {
     const testCase = sampleEvalCases.find((item) => item.name === "annotated maze api contract");
     expect(testCase?.stdoutCheck).toBeDefined();

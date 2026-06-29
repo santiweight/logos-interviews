@@ -279,7 +279,10 @@ async function runStrategyAttempt(
   const elapsedMs = roundMs(nowMs() - started);
   const stdout = result.stdout;
   const runtimeOk = result.ok;
-  const semanticOk = runtimeOk && stdoutMatches(stdout, testCase);
+  const semanticResult = runtimeOk
+    ? await evaluateStdout(stdout, testCase, provider)
+    : { ok: false };
+  const semanticOk = runtimeOk && semanticResult.ok;
   const sourcePath = "completed" in result && result.completed
     ? saveCompletedSource(context, strategy, result.completed.source)
     : undefined;
@@ -293,7 +296,9 @@ async function runStrategyAttempt(
     runtimeOk,
     semanticOk,
     stdout,
-    ...(runtimeOk ? {} : { error: result.error }),
+    ...(runtimeOk
+      ? semanticOk || semanticResult.reason === undefined ? {} : { error: semanticResult.reason }
+      : { error: result.error }),
     ...(sourcePath === undefined ? {} : { sourcePath }),
     completions,
   };
@@ -487,12 +492,66 @@ function commitCache(target: CodeCache, source: CodeCache): void {
   }
 }
 
+async function evaluateStdout(
+  stdout: string[],
+  testCase: BenchmarkCase,
+  provider: BenchmarkProvider,
+): Promise<{ ok: boolean; reason?: string }> {
+  if (testCase.stdoutCheck?.llmJudge) {
+    const judgment = await collectCompletionResult(provider.complete(judgePrompt(stdout, testCase)));
+    const parsed = parseJudgeResult(judgment);
+    return {
+      ok: parsed.pass,
+      ...(parsed.reason === undefined ? {} : { reason: `LLM judge: ${parsed.reason}` }),
+    };
+  }
+
+  return { ok: stdoutMatches(stdout, testCase) };
+}
+
 function stdoutMatches(stdout: string[], testCase: BenchmarkCase): boolean {
   if (testCase.expectedStdout) {
     return arraysEqual(stdout, testCase.expectedStdout);
   }
 
   return testCase.stdoutCheck?.matches(stdout) ?? false;
+}
+
+function judgePrompt(stdout: string[], testCase: BenchmarkCase): string {
+  return `You are judging terminal output from a generated Python program.
+
+Case: ${testCase.name}
+Expected behavior: ${testCase.stdoutCheck?.description ?? testCase.expectedStdout?.join("\n") ?? ""}
+
+Judge instructions:
+${testCase.stdoutCheck?.llmJudge?.instructions ?? ""}
+
+Terminal stdout:
+\`\`\`
+${stdout.join("\n")}
+\`\`\`
+
+Return strict JSON only, with this shape:
+{"pass": true, "reason": "brief reason"}
+
+Use pass=false for runtime tracebacks, raw Python repr/list dumps when presentation quality matters, missing required values, or output that is hard for a user to understand.`;
+}
+
+function parseJudgeResult(source: string): { pass: boolean; reason?: string } {
+  const jsonMatch = source.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return { pass: false, reason: `judge returned non-JSON: ${source.slice(0, 200)}` };
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as { pass?: unknown; reason?: unknown };
+    return {
+      pass: parsed.pass === true,
+      ...(typeof parsed.reason === "string" ? { reason: parsed.reason } : {}),
+    };
+  } catch (error) {
+    return { pass: false, reason: `judge JSON parse failed: ${errorMessage(error)}` };
+  }
 }
 
 function arraysEqual(left: string[], right: string[]): boolean {
