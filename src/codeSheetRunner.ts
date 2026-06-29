@@ -51,8 +51,14 @@ type PythonExecution =
   | { ok: false; code: number | null; stdout: string; stderr: string };
 
 type AgenticAction = {
-  tool: "replace_file" | "finish";
+  tool: "replace_file" | "replace_snippets" | "finish";
   source?: string;
+  replacements?: AgenticSnippetReplacement[];
+};
+
+type AgenticSnippetReplacement = {
+  snippet: string;
+  replacement: string;
 };
 
 type AgenticObservation = {
@@ -189,16 +195,14 @@ async function compileAndRunAgentically(
       codeSheet,
       runnable,
       currentSource,
+      incompleteSnippets: parsed.incompleteSnippets.map((snippet) => snippet.snippet),
       observations,
       iteration,
       maxIterations,
     });
     const raw = await collectCompletionResult(options.complete(prompt));
     const action = parseAgenticAction(raw);
-
-    if (action.source !== undefined) {
-      currentSource = normalizeAgenticSource(action.source);
-    }
+    currentSource = applyAgenticAction(currentSource, action);
 
     const executed = await runPython(
       buildPythonProgram(currentSource, runnable),
@@ -284,6 +288,7 @@ function buildAgenticFilePrompt(options: {
   codeSheet: CodeSheet;
   runnable: Runnable;
   currentSource: string;
+  incompleteSnippets: string[];
   observations: AgenticObservation[];
   iteration: number;
   maxIterations: number;
@@ -294,7 +299,8 @@ You are a stateful coding agent editing a single Python source file. Use the too
 
 Tool protocol:
 - Return exactly one JSON object.
-- To edit the file: {"tool":"replace_file","source":"<complete Python source without a __main__ block>"}
+- Prefer small edits: {"tool":"replace_snippets","replacements":[{"snippet":"<exact current snippet>","replacement":"<complete replacement code>"}]}
+- To replace the whole file: {"tool":"replace_file","source":"<complete Python source without a __main__ block>"}
 - To finish with the current or supplied file: {"tool":"finish"} or {"tool":"finish","source":"<complete Python source without a __main__ block>"}
 
 Rules:
@@ -302,6 +308,7 @@ Rules:
 - Use only the Python standard library.
 - Keep declarations top-level unless nesting is explicitly required.
 - If the worksheet declares a class without __init__, no-argument construction must produce a valid default object.
+- Prefer concise code. Avoid comments, docstrings, and copied worksheet prose unless they are needed for behavior.
 - Do not include an if __name__ == "__main__" block; the runner adds it.
 
 Runnable to satisfy: ${options.runnable}
@@ -315,6 +322,11 @@ ${options.codeSheet}
 Current file:
 \`\`\`python
 ${options.currentSource}
+\`\`\`
+
+Exact snippets you may replace:
+\`\`\`json
+${JSON.stringify(options.incompleteSnippets, null, 2)}
 \`\`\`
 
 Prior tool results:
@@ -344,14 +356,21 @@ function parseJsonAction(raw: string): AgenticAction | null {
 
   for (const candidate of candidates) {
     try {
-      const value = JSON.parse(candidate) as { tool?: unknown; source?: unknown };
-      if (value.tool !== "replace_file" && value.tool !== "finish") {
+      const value = JSON.parse(candidate) as {
+        tool?: unknown;
+        source?: unknown;
+        replacements?: unknown;
+      };
+      if (value.tool !== "replace_file" && value.tool !== "replace_snippets" && value.tool !== "finish") {
         continue;
       }
 
       return {
         tool: value.tool,
         ...(typeof value.source === "string" ? { source: value.source } : {}),
+        ...(value.tool === "replace_snippets"
+          ? { replacements: parseAgenticSnippetReplacements(value.replacements) }
+          : {}),
       };
     } catch {
       // Try the next extraction shape.
@@ -361,13 +380,75 @@ function parseJsonAction(raw: string): AgenticAction | null {
   return null;
 }
 
+function parseAgenticSnippetReplacements(value: unknown): AgenticSnippetReplacement[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (
+      typeof item === "object" &&
+      item !== null &&
+      "snippet" in item &&
+      "replacement" in item &&
+      typeof item.snippet === "string" &&
+      typeof item.replacement === "string"
+    ) {
+      return [{
+        snippet: item.snippet,
+        replacement: item.replacement,
+      }];
+    }
+
+    return [];
+  });
+}
+
+function applyAgenticAction(source: string, action: AgenticAction): string {
+  if (action.source !== undefined) {
+    return normalizeAgenticSource(action.source);
+  }
+
+  if (action.tool !== "replace_snippets") {
+    return source;
+  }
+
+  return action.replacements?.reduce((current, replacement) => {
+    return replaceAgenticSnippet(
+      current,
+      normalizeAgenticLineEndings(replacement.snippet).trimEnd(),
+      normalizeAgenticSnippet(replacement.replacement),
+    );
+  }, source) ?? source;
+}
+
+function replaceAgenticSnippet(source: string, snippet: string, replacement: string): string {
+  const normalizedSource = normalizeAgenticLineEndings(source);
+  const index = normalizedSource.indexOf(snippet);
+  if (index < 0) {
+    return source;
+  }
+
+  return `${normalizedSource.slice(0, index)}${replacement}${normalizedSource.slice(index + snippet.length)}`;
+}
+
 function normalizeAgenticSource(source: string): string {
   const trimmed = source.trim();
   const fenced = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1] ?? trimmed;
-  const lines = fenced.replaceAll("\r\n", "\n").split("\n");
+  const lines = normalizeAgenticLineEndings(fenced).split("\n");
   const withoutFuture = lines.filter((line) => line.trim() !== "from __future__ import annotations");
   const mainIndex = withoutFuture.findIndex((line) => /^if\s+__name__\s*==\s*["']__main__["']\s*:/.test(line.trim()));
   return trimOuterBlankLines(mainIndex < 0 ? withoutFuture : withoutFuture.slice(0, mainIndex)).join("\n").trimEnd();
+}
+
+function normalizeAgenticSnippet(source: string): string {
+  const trimmed = source.trim();
+  const fenced = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1] ?? trimmed;
+  return normalizeAgenticLineEndings(fenced).trimEnd();
+}
+
+function normalizeAgenticLineEndings(source: string): string {
+  return source.replaceAll("\r\n", "\n");
 }
 
 function trimOuterBlankLines(lines: string[]): string[] {

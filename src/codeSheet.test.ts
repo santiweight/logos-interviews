@@ -2462,6 +2462,38 @@ def test():
     expect(prompts[1]).toContain("bad draft");
   });
 
+  it("agentic strategy can patch exact incomplete snippets instead of replacing the whole file", async () => {
+    const prompts: string[] = [];
+    const snippet = `def add(x: int, y: int) -> int`;
+    const result = await runCodeSheet(sheet, "test", {
+      compilationStrategy: "agentic",
+      agenticMaxIterations: 3,
+      complete(prompt) {
+        prompts.push(prompt);
+        expect(prompt).toContain(JSON.stringify(snippet));
+        return JSON.stringify({
+          tool: "replace_snippets",
+          replacements: [{
+            snippet,
+            replacement: `def add(x: int, y: int) -> int:
+  return x + y`,
+          }],
+        });
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["3"],
+    });
+    expect(prompts).toHaveLength(1);
+    expect(result.completed.source).toBe(`def add(x: int, y: int) -> int:
+  return x + y
+
+def test():
+  print(add(1,2))`);
+  });
+
   it("synthesizes zero-argument class factories without skipping parameterized factories", async () => {
     const factorySheet = `class IsoScene:
   def render(self) -> str
