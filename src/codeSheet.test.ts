@@ -1500,6 +1500,56 @@ print(square.pretty())`;
     );
   });
 
+  it("can start independent completions in parallel", async () => {
+    const sheetWithTwoSnippets = `def add(x: int, y: int) -> int
+
+def mul(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))
+  print(mul(2, 3))`;
+    const started: string[] = [];
+    const resolvers: Array<(value: string) => void> = [];
+    const compileTask = (async (): Promise<CompilationEvent[]> => {
+      const events: CompilationEvent[] = [];
+      for await (const event of compile(
+        new Map(),
+        sheetWithTwoSnippets,
+        (prompt) => {
+          const target = completionPromptTarget(prompt).includes("def add(") ? "add" : "mul";
+          started.push(target);
+          return new Promise<string>((resolve) => {
+            resolvers.push(resolve);
+          });
+        },
+        { experimentalParallelCompletions: true },
+      )) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    for (let attempt = 0; attempt < 20 && resolvers.length < 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(started.sort()).toEqual(["add", "mul"]);
+    expect(resolvers).toHaveLength(2);
+
+    resolvers[0](`def add(x: int, y: int) -> int:
+  return x + y`);
+    resolvers[1](`def mul(x: int, y: int) -> int:
+  return x * y`);
+
+    const events = await compileTask;
+    const compiled = events.find((event) => event.kind === "compiled");
+    if (compiled?.kind !== "compiled") {
+      throw new Error("expected compiled event");
+    }
+
+    expect(renderImplementation(compiled.completed.ir)).toContain("return x + y");
+    expect(renderImplementation(compiled.completed.ir)).toContain("return x * y");
+  });
+
   it("can compile to a partial implementation when snippets are unresolved", async () => {
     const events: CompilationEvent[] = [];
 
