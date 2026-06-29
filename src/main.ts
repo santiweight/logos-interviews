@@ -190,10 +190,9 @@ const thumbDownIcon = `
   </svg>
 `;
 const shareIcon = `
-  <svg class="feedback-icon share-icon" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M7.3 10.6 5.8 12c-1 1-1 2.7 0 3.7s2.7 1 3.7 0l2-2" />
-    <path d="M12.7 9.4 14.2 8c1-1 1-2.7 0-3.7s-2.7-1-3.7 0l-2 2" />
-    <path d="m8 12 4-4" />
+  <svg class="feedback-icon share-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
   </svg>
 `;
 const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
@@ -222,10 +221,11 @@ function renderFeedbackControls(panel: string, options: { includeShare?: boolean
     <div class="feedback-controls" data-feedback-controls="${panel}" aria-label="${panel} feedback">
       <span class="feedback-receipt" data-feedback-receipt aria-live="polite"></span>
       ${options.includeShare
-        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share current session" title="Share">
+        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share session link" title="Share link">
           ${shareIcon}
         </button>`
         : ""}
+      ${options.includeShare ? `<span class="feedback-separator" aria-hidden="true"></span>` : ""}
       <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="up" aria-label="Mark ${panel} helpful" title="Helpful">
         ${thumbUpIcon}
       </button>
