@@ -397,6 +397,203 @@ def test():
       "[('c', '4')]",
     ],
   },
+  {
+    name: "url router path params and query strings",
+    sheet: `# Router matches HTTP method + path patterns in registration order.
+# Patterns can include named segments like /users/:id/orders/:order_id.
+# dispatch returns {"handler": name, "params": dict, "query": dict} or None.
+# Query strings are separated by ? and split on & and =. Missing values become "".
+# URL decoding is not required.
+
+class Router:
+  routes: list
+
+  def __init__(self) -> None
+  def add(self, method: str, pattern: str, handler: str) -> None
+  def dispatch(self, method: str, url: str) -> dict | None
+
+def test():
+  router = Router()
+  router.add("GET", "/users/:id", "show_user")
+  router.add("GET", "/users/:id/orders/:order_id", "show_order")
+  router.add("POST", "/users", "create_user")
+  print(router.dispatch("GET", "/users/42"))
+  print(router.dispatch("GET", "/users/42/orders/abc?expand=items&debug="))
+  print(router.dispatch("POST", "/users"))
+  print(router.dispatch("DELETE", "/users/42"))`,
+    runnable: "test",
+    expectedStdout: [
+      "{'handler': 'show_user', 'params': {'id': '42'}, 'query': {}}",
+      "{'handler': 'show_order', 'params': {'id': '42', 'order_id': 'abc'}, 'query': {'expand': 'items', 'debug': ''}}",
+      "{'handler': 'create_user', 'params': {}, 'query': {}}",
+      "None",
+    ],
+  },
+  {
+    name: "lru cache eviction and recency",
+    sheet: `# LRUCache stores string keys and integer values.
+# get returns None for a miss and marks a hit as most recently used.
+# put inserts or updates a key and evicts the least recently used key when capacity is exceeded.
+# keys returns keys from least recently used to most recently used.
+
+class LRUCache:
+  capacity: int
+
+  def __init__(self, capacity: int) -> None
+  def get(self, key: str) -> int | None
+  def put(self, key: str, value: int) -> None
+  def keys(self) -> list
+
+def test():
+  cache = LRUCache(2)
+  cache.put("a", 1)
+  cache.put("b", 2)
+  print(cache.keys())
+  print(cache.get("a"))
+  cache.put("c", 3)
+  print(cache.get("b"), cache.keys())
+  cache.put("a", 10)
+  print(cache.get("a"), cache.keys())`,
+    runnable: "test",
+    expectedStdout: [
+      "['a', 'b']",
+      "1",
+      "None ['a', 'c']",
+      "10 ['c', 'a']",
+    ],
+  },
+  {
+    name: "inventory reservations with expiration",
+    sheet: `# Inventory tracks on-hand stock and reservations against an injectable clock.
+# reserve(sku, qty, ttl) returns deterministic ids "res-1", "res-2", ... or None when not enough available stock.
+# commit(id) consumes stock and removes the reservation.
+# release(id) cancels an active, unexpired reservation without consuming stock.
+# Expired reservations no longer count against availability.
+# available(sku) returns on-hand minus active reserved quantity.
+
+class Clock:
+  def __init__(self):
+    self.now = 0
+
+class Inventory:
+  clock: Clock
+  stock: dict
+  reservations: dict
+
+  def __init__(self, clock: Clock) -> None
+  def add(self, sku: str, qty: int) -> None
+  def available(self, sku: str) -> int
+  def reserve(self, sku: str, qty: int, ttl: int) -> str | None
+  def commit(self, reservation_id: str) -> bool
+  def release(self, reservation_id: str) -> bool
+
+def test():
+  clock = Clock()
+  inv = Inventory(clock)
+  inv.add("tea", 5)
+  r1 = inv.reserve("tea", 3, 10)
+  print(r1, inv.available("tea"))
+  print(inv.reserve("tea", 3, 10))
+  clock.now = 10
+  print(inv.available("tea"))
+  r2 = inv.reserve("tea", 5, 10)
+  print(r2, inv.commit(r2), inv.available("tea"))
+  print(inv.release(r1), inv.available("tea"))`,
+    runnable: "test",
+    expectedStdout: [
+      "res-1 2",
+      "None",
+      "5",
+      "res-2 True 0",
+      "False 0",
+    ],
+  },
+  {
+    name: "markdown table parser and projection",
+    sheet: `# parse_markdown_table parses a simple GitHub-flavored markdown table.
+# Ignore leading/trailing blank lines.
+# The second row is a separator row and should be ignored.
+# Return a list of dicts mapping header names to cell strings.
+# project_rows returns selected columns in order, as tuples.
+
+def parse_markdown_table(source: str) -> list
+def project_rows(rows: list, columns: list) -> list
+
+def test():
+  source = """
+| name | age | city |
+| --- | ---: | --- |
+| Ada | 36 | London |
+| Ben | 41 | Paris |
+"""
+  rows = parse_markdown_table(source)
+  print(rows)
+  print(project_rows(rows, ["city", "name"]))`,
+    runnable: "test",
+    expectedStdout: [
+      "[{'name': 'Ada', 'age': '36', 'city': 'London'}, {'name': 'Ben', 'age': '41', 'city': 'Paris'}]",
+      "[('London', 'Ada'), ('Paris', 'Ben')]",
+    ],
+  },
+  {
+    name: "ledger running balances and reversal entries",
+    sheet: `# Ledger posts signed integer amounts by account.
+# post returns monotonically increasing entry ids like "entry-1".
+# balance(account) is the sum of every posted entry for that account, including reversing entries.
+# reverse(entry_id) appends a reversing entry with the opposite amount and returns its id; the original entry remains in history and balance.
+# entries(account) returns (id, amount, memo) tuples for that account in posting order.
+
+class Ledger:
+  entries_by_id: dict
+  order: list
+
+  def __init__(self) -> None
+  def post(self, account: str, amount: int, memo: str) -> str
+  def reverse(self, entry_id: str) -> str | None
+  def balance(self, account: str) -> int
+  def entries(self, account: str) -> list
+
+def test():
+  ledger = Ledger()
+  e1 = ledger.post("cash", 100, "deposit")
+  e2 = ledger.post("cash", -30, "snacks")
+  ledger.post("ar", 50, "invoice")
+  print(e1, e2, ledger.balance("cash"))
+  print(ledger.reverse(e2), ledger.balance("cash"))
+  print(ledger.reverse("missing"))
+  print(ledger.entries("cash"))`,
+    runnable: "test",
+    expectedStdout: [
+      "entry-1 entry-2 70",
+      "entry-4 100",
+      "None",
+      "[('entry-1', 100, 'deposit'), ('entry-2', -30, 'snacks'), ('entry-4', 30, 'reversal of entry-2')]",
+    ],
+  },
+  {
+    name: "sessionize events by idle gap",
+    sheet: `# Events are dicts with user, ts, and action fields.
+# sessionize groups events per user into sessions.
+# A new session starts when the gap from the previous event for that user is greater than max_gap.
+# Events may be unsorted. Return sessions sorted by user then start time.
+# Each session dict has user, start, end, and actions fields.
+
+def sessionize(events: list, max_gap: int) -> list
+
+def test():
+  events = [
+    {"user": "b", "ts": 20, "action": "view"},
+    {"user": "a", "ts": 0, "action": "open"},
+    {"user": "a", "ts": 4, "action": "click"},
+    {"user": "a", "ts": 20, "action": "buy"},
+    {"user": "b", "ts": 28, "action": "close"},
+  ]
+  print(sessionize(events, 10))`,
+    runnable: "test",
+    expectedStdout: [
+      "[{'user': 'a', 'start': 0, 'end': 4, 'actions': ['open', 'click']}, {'user': 'a', 'start': 20, 'end': 20, 'actions': ['buy']}, {'user': 'b', 'start': 20, 'end': 28, 'actions': ['view', 'close']}]",
+    ],
+  },
 ];
 
 const allCases: E2ECase[] = [...cases, ...sampleEvalCases];
