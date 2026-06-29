@@ -75,7 +75,9 @@ class PersistentCodeCache extends Map<SnippetHash, string> implements CodeCache 
 }
 
 function codeCacheStore(): CodeCacheStore {
-  const s3Bucket = process.env.CODE_CACHE_S3_BUCKET ?? process.env.SHARED_SESSION_S3_BUCKET;
+  const s3Bucket = process.env.CODE_CACHE_S3_BUCKET ??
+    process.env.SHARED_SESSION_S3_BUCKET ??
+    process.env.BUCKET_NAME;
   if (s3Bucket) {
     return s3CodeCacheStore(s3Bucket);
   }
@@ -109,7 +111,9 @@ function s3CodeCacheStore(bucket: string): CodeCacheStore {
       process.env.SHARED_SESSION_S3_REGION ??
       process.env.AWS_REGION ??
       "auto",
-    endpoint: process.env.CODE_CACHE_S3_ENDPOINT ?? process.env.SHARED_SESSION_S3_ENDPOINT,
+    endpoint: process.env.CODE_CACHE_S3_ENDPOINT ??
+      process.env.SHARED_SESSION_S3_ENDPOINT ??
+      process.env.AWS_ENDPOINT_URL_S3,
     forcePathStyle:
       process.env.CODE_CACHE_S3_FORCE_PATH_STYLE === "true" ||
       process.env.SHARED_SESSION_S3_FORCE_PATH_STYLE === "true",

@@ -107,8 +107,9 @@ CODE_CACHE_S3_PREFIX=code-cache
 CODE_CACHE_S3_FORCE_PATH_STYLE=false
 ```
 
-If `CODE_CACHE_S3_BUCKET` is unset but `SHARED_SESSION_S3_BUCKET` is set, the
-code cache reuses that bucket with the `code-cache` prefix.
+If `CODE_CACHE_S3_BUCKET` is unset, the code cache reuses
+`SHARED_SESSION_S3_BUCKET` or Fly/Tigris-style `BUCKET_NAME` with the
+`code-cache` prefix.
 
 Fly deployment is configured with `Dockerfile`, `fly.toml`, and
 `.github/workflows/deploy.yml`. Configure the repository with:
