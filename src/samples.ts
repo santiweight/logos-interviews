@@ -598,20 +598,22 @@ class SpreadsheetResult:
   def eval(self, cell: CellAddress) -> int | EvalError | None
   def eval_inner(self, stack: list, cell: CellAddress) -> int | EvalError | None
 
-def test():
+@logos.debug.print()
+def main():
   sheet = Spreadsheet()
-  \`render + print sheet\`
-  print(sheet.get(c("A1")))
-  sheet.set(c("A1"), "7")
-  print(sheet.get(c("A1")))
-  sheet.set(c("B1"), "2 + 3")
-  print(sheet.eval().eval(c("B1")))
-  sheet.set(c("C1"), "(B1 + A1) * 4)")
-  print(sheet.eval().eval(c("C1")))
+
   \`\`\`
-  render + print sheet as unevaluated expressions and then as an excel-like table
-  print as pretty tables
-  use pretty_expr
+  print results of each step...
+  A1 -> None
+  A1 = 7
+  A1 -> 7
+  B1 = 2 + 3
+  B1 -> 5
+  C1 = (B1 + A1) * 4
+  C1 -> ?
+  D[1:3] = B[1:3] * 2 # just do the first 3 rows
+
+  render + print sheet as unevaluated expressions in an excel-like table
   \`\`\``,
       },
       {
@@ -1252,7 +1254,7 @@ def main():
     sampleId: "formula-spreadsheet",
     name: "formula spreadsheet strings and rendering",
     sheet: sampleById("formula-spreadsheet").code,
-    runnable: "test",
+    runnable: "main",
     stdoutCheck: {
       description:
         "prints the core spreadsheet results and at least one rendered table-like view with cell addresses",
@@ -1262,7 +1264,7 @@ def main():
   {
     sampleId: "formula-spreadsheet",
     name: "formula spreadsheet precedence and parentheses",
-    sheet: withTest("formula-spreadsheet", `def test():
+    sheet: withMain("formula-spreadsheet", `def test():
   sheet = Spreadsheet()
   sheet.set(c("A1"), "10 - 2 * 3")
   sheet.set(c("B1"), "(10 - 2) * 3")
@@ -1440,6 +1442,12 @@ function isRenderedSpreadsheetStdout(stdout: string[]): boolean {
   }
 
   const joined = stdout.join("\n");
+  const hasLegacyCoreOutputs = cursor === coreOutputs.length;
+  const hasLabeledCoreOutputs =
+    stdout.some((line) => /\bA1\b.*(?:->|:).*\bNone\b/i.test(line)) &&
+    stdout.some((line) => /\bA1\b.*(?:->|=|:).*\b7\b/.test(line)) &&
+    stdout.some((line) => /\bB1\b.*(?:->|:).*\b5\b/.test(line)) &&
+    stdout.some((line) => /\bC1\b.*(?:->|:).*\b48\b/.test(line));
   const hasA1Addresses = ["A1", "B1", "C1"].every((address) => joined.includes(address));
   const hasGridAddresses =
     stdout.some((line) => /\bA\b.*\bB\b.*\bC\b/.test(line)) &&
@@ -1450,7 +1458,7 @@ function isRenderedSpreadsheetStdout(stdout: string[]): boolean {
     return /[|+]/.test(line) || /-{3,}/.test(line) || /\bA\b.*\bB\b.*\bC\b/.test(line) || /^\s*1\b/.test(line);
   }).length;
 
-  return cursor === coreOutputs.length && hasFormulaCells && hasPrettyFormula && tableLikeRows >= 2;
+  return (hasLegacyCoreOutputs || hasLabeledCoreOutputs) && hasFormulaCells && hasPrettyFormula && tableLikeRows >= 2;
 }
 
 function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {
