@@ -6,6 +6,7 @@ import {
   language as pythonLanguage,
 } from "monaco-editor/esm/vs/basic-languages/python/python.js";
 import {
+  completionSnippetHashes,
   definitionReadiness,
   hashCompletionInput,
   implementationBlockForTarget,
@@ -1563,10 +1564,11 @@ function refreshIncompleteSnippets(source: string): void {
 
   try {
     const parsed = parse(source);
-    targets = parsed.incompleteSnippets.map((snippet) => {
+    const compilerHashes = completionSnippetHashes(parsed);
+    targets = parsed.incompleteSnippets.map((snippet, index) => {
       const range = snippetRange(source, snippet);
       return {
-        hash: hashCompletionInput(parsed, snippet.snippet),
+        hash: compilerHashes[index] ?? hashCompletionInput(parsed, snippet.snippet),
         startLine: range.startLine,
         startColumn: range.startColumn,
         endLine: range.endLine,
@@ -1808,6 +1810,8 @@ function updateSelectedDefinitionDecorations(): void {
 function renderSnippetPanel(): void {
   if (selectedDefinitionTarget !== null) {
     const text =
+      directPreviewForDefinitionTarget(selectedDefinitionTarget) ??
+      implementationBlockForTarget(previewImplementationSource(), selectedDefinitionTarget) ??
       implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
       selectedDefinitionTarget.source;
 
@@ -1818,7 +1822,7 @@ function renderSnippetPanel(): void {
 
   if (selectedWholeFileImplementation) {
     setSnippetPanelTitle("Whole file");
-    setSnippetPreviewSource(latestImplementationSource);
+    setSnippetPreviewSource(previewImplementationSource());
     return;
   }
 
@@ -1841,6 +1845,57 @@ function renderSnippetPanel(): void {
 
   setSnippetPanelTitle(target.label);
   setSnippetPreviewSource(text);
+}
+
+function directPreviewForDefinitionTarget(target: ImplementationTarget): string | null {
+  const snippet = Array.from(incompleteSnippetByHash.values()).find((candidate) => {
+    return candidate.kind === target.kind &&
+      candidate.label === target.name &&
+      candidate.startLine === target.line;
+  });
+
+  return snippet === undefined ? null : previewReplacementForSnippet(snippet);
+}
+
+function previewImplementationSource(): string {
+  const source = editor.getValue();
+  const lineStarts = sourceLineStartOffsets(source);
+  const replacements = Array.from(incompleteSnippetByHash.values())
+    .map((target) => {
+      const replacement = previewReplacementForSnippet(target);
+      if (replacement === null) {
+        return null;
+      }
+
+      return {
+        start: editorPositionToOffset(lineStarts, target.startLine, target.startColumn),
+        end: editorPositionToOffset(lineStarts, target.endLine, target.endColumn),
+        replacement,
+      };
+    })
+    .filter((item): item is { start: number; end: number; replacement: string } => item !== null)
+    .sort((left, right) => right.start - left.start);
+
+  if (replacements.length === 0) {
+    return latestImplementationSource;
+  }
+
+  let preview = source;
+  for (const replacement of replacements) {
+    preview = `${preview.slice(0, replacement.start)}${replacement.replacement}${preview.slice(replacement.end)}`;
+  }
+
+  return preview;
+}
+
+function previewReplacementForSnippet(target: IncompleteSnippetTarget): string | null {
+  const preview = snippetPreviewByHash.get(target.hash);
+  if (!preview) {
+    return null;
+  }
+
+  return preview.implementation ??
+    (preview.streamed.length > 0 ? preview.streamed : null);
 }
 
 function setSnippetPanelTitle(label: string | null): void {
@@ -2449,6 +2504,11 @@ function sourceLineStartOffsets(source: string): number[] {
   }
 
   return starts;
+}
+
+function editorPositionToOffset(lineStarts: number[], line: number, column: number): number {
+  const lineStart = lineStarts[line - 1] ?? 0;
+  return lineStart + Math.max(0, column - 1);
 }
 
 function offsetToEditorPosition(lineStarts: number[], offset: number): { line: number; column: number } {

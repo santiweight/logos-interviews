@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compile,
+  completionSnippetHashes,
   definitionReadiness,
   completeSheet,
   hashCompletionInput,
@@ -1181,6 +1182,21 @@ fn test():
     expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["3"] });
     expect(prompts[0]).toContain("Your job is to finish the implementation of:\n\ndef add");
     expect(prompts[0]).not.toContain("Your job is to finish the implementation of:\n\nfn add");
+  });
+
+  it("exposes compiler hashes for lowered snippets", () => {
+    const fnSheet = `fn add(x: int, y: int) -> int
+
+fn test():
+  print(add(1, 2))`;
+    const parsed = parse(fnSheet);
+
+    expect(hashCompletionInput(parsed, parsed.incompleteSnippets[0]!.snippet)).not.toBe(
+      completionSnippetHashes(parsed)[0],
+    );
+    expect(completionSnippetHashes(parsed)[0]).toBe(
+      hashCompletionInput(parsed, "def add(x: int, y: int) -> int"),
+    );
   });
 
   it("completes methods inside dataclass shorthand classes", async () => {

@@ -294,6 +294,12 @@ export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
   return { parsed, lowered, nodes };
 }
 
+export function completionSnippetHashes(parsed: ParsedSheet): SnippetHash[] {
+  return buildCompilationIR(parsed).nodes.flatMap((node) => {
+    return node.kind === "incomplete" ? [node.state.hash] : [];
+  });
+}
+
 export async function completeSheet(
   codeCache: CodeCache,
   codeSheet: CodeSheet,
