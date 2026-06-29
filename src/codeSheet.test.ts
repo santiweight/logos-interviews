@@ -868,6 +868,39 @@ def test():
     `);
   });
 
+  it("lowers multiline commented sum types with logos annotations", async () => {
+    const sudokuSyntaxSheet = `type SudokuStrategy =
+  UniqueBoxSolve # there is only one square for a number to go in, in a box
+  | UniqueLineSolve # there is only one square for a number to go in, in a row/column
+  | HiddenDoubleInBox # two numbers
+  | # a row/col is complete except for values in the same box
+    # the same box
+    LineCompleteExceptForBox
+  | HiddenSingle
+type CellAnnotation = Solved(int) | Annotations(list[int])
+
+class SudokuState:
+  grid: list[list[CellAnnotation]]
+
+@logos.debug.print()
+def main():
+  print(UniqueBoxSolve())
+  print(Solved(7))`;
+
+    const lowered = lower(parse(sudokuSyntaxSheet)).source;
+
+    expect(lowered).toContain("class UniqueBoxSolve:");
+    expect(lowered).toContain("class LineCompleteExceptForBox:");
+    expect(lowered).toContain("class Solved:");
+    expect(lowered).not.toContain("type SudokuStrategy");
+    const completed = await runCodeSheet(sudokuSyntaxSheet, "main", { cache: new Map() });
+    expect(completed.completed.source).not.toContain("@logos.debug.print()");
+    expect(simplifyRunResult(completed)).toEqual({
+      ok: true,
+      stdout: ["UniqueBoxSolve()", "Solved(value=7)"],
+    });
+  });
+
   it("lowers tuple type aliases used by parser helpers", () => {
     const parsedSheet = `type Operator = Mul | Div | Add | Sub
 type Expr = Val(int) | Cell(str, int)

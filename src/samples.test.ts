@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runnables } from "./codeSheet";
-import { defaultProjectIds, sampleEvalCases, sampleGroups, samples } from "./samples";
+import { defaultProjectIds, sampleEvalCases, sampleGroups, samples, sampleTemplateGroups } from "./samples";
 
 describe("product samples", () => {
   it("groups every sample exactly once", () => {
@@ -15,6 +15,14 @@ describe("product samples", () => {
 
     expect(defaultProjectIds).toHaveLength(new Set(defaultProjectIds).size);
     expect(defaultProjectIds.every((id) => sampleIds.has(id))).toBe(true);
+  });
+
+  it("loads every sample from the template menu exactly once", () => {
+    const sampleIds = samples.map((sample) => sample.id);
+    const templateIds = sampleTemplateGroups.flatMap((group) => group.sampleIds);
+
+    expect(templateIds).toHaveLength(new Set(templateIds).size);
+    expect(new Set(templateIds)).toEqual(new Set(sampleIds));
   });
 
   it("has runnable eval fixtures for every product sample", () => {

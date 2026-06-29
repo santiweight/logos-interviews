@@ -136,6 +136,15 @@ type TypeAliasDecl = {
   target: string;
 };
 
+type ParsedTypeDeclaration = {
+  name: string;
+  source: string;
+  line: number;
+  startLine: number;
+  endLine: number;
+  target: string;
+};
+
 type FunctionDecl = {
   name: string;
   line: number;
@@ -196,7 +205,8 @@ type SourceRange = {
 export function parse(codeSheet: CodeSheet): ParsedSheet {
   const source = normalizeNewlines(codeSheet);
   const lines = source.split("\n");
-  const sumTypes = lines.flatMap(parseSumTypeLine);
+  const typeDeclarations = collectTypeDeclarations(lines);
+  const sumTypes = parseSumTypeDeclarations(typeDeclarations);
   const classDecls = discoverClassDecls(lines);
   const incomplete = discoverIncompleteSnippets(source);
 
@@ -206,7 +216,7 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
     incompleteSnippets: incomplete,
     declarations: declarations(sumTypes, classDecls, incomplete),
     sumTypes,
-    typeAliases: lines.flatMap(parseTypeAliasLine),
+    typeAliases: parseTypeAliasDeclarations(typeDeclarations),
     classDecls,
     topLevelComments: lines.filter((line) => line.startsWith("#")),
   };
@@ -214,7 +224,8 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
 
 export function lower(parsed: ParsedSheet): LoweredCodeSheet {
   const lines = parsed.source.split("\n");
-  const body = lowerSurfaceSyntax(lines.filter((line) => !isTypeLine(line)).join("\n"));
+  const typeLineIndexes = typeDeclarationLineIndexes(lines);
+  const body = lowerSurfaceSyntax(lines.filter((_, index) => !typeLineIndexes.has(index)).join("\n"));
   const loweredDataclassImport =
     parsed.sumTypes.length > 0 || body.needsDataclass ? "from dataclasses import dataclass" : "";
   const loweredSumTypes = lowerSumTypes(parsed.sumTypes);
@@ -1069,45 +1080,123 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
   return declarations;
 }
 
-function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
-  const match = parseTypeDeclarationLine(line);
-  if (!match || !isSumTypeRhs(match[2])) {
-    return [];
-  }
+function parseSumTypeDeclarations(typeDeclarations: ParsedTypeDeclaration[]): SumTypeDecl[] {
+  return typeDeclarations.flatMap((declaration) => {
+    if (!isSumTypeRhs(declaration.target)) {
+      return [];
+    }
 
-  return [
-    {
-      name: match[1],
-      source: line.trimEnd(),
-      line: index + 1,
-      variants: splitTopLevel(match[2], "|").map(parseVariant),
-    },
-  ];
+    return [
+      {
+        name: declaration.name,
+        source: declaration.source,
+        line: declaration.line,
+        variants: splitTopLevel(declaration.target, "|").map(parseVariant),
+      },
+    ];
+  });
 }
 
-function parseTypeAliasLine(line: string, index: number): TypeAliasDecl[] {
-  const match = parseTypeDeclarationLine(line);
-  if (!match || isSumTypeRhs(match[2]) || !isTypeAliasRhs(match[2])) {
-    return [];
-  }
+function parseTypeAliasDeclarations(typeDeclarations: ParsedTypeDeclaration[]): TypeAliasDecl[] {
+  return typeDeclarations.flatMap((declaration) => {
+    if (isSumTypeRhs(declaration.target) || !isTypeAliasRhs(declaration.target)) {
+      return [];
+    }
 
-  return [
-    {
-      name: match[1],
-      source: line.trimEnd(),
-      line: index + 1,
-      target: match[2].trim(),
-    },
-  ];
+    return [
+      {
+        name: declaration.name,
+        source: declaration.source,
+        line: declaration.line,
+        target: declaration.target,
+      },
+    ];
+  });
 }
 
-function parseTypeDeclarationLine(line: string): RegExpMatchArray | null {
-  const heralded = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+function collectTypeDeclarations(lines: string[]): ParsedTypeDeclaration[] {
+  const declarations: ParsedTypeDeclaration[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const start = parseTypeDeclarationStartLine(lines[index]);
+    if (!start) {
+      continue;
+    }
+
+    const continuationLines: string[] = [];
+    let end = index + 1;
+    if (start.target.trim().length === 0) {
+      while (end < lines.length) {
+        const candidate = lines[end];
+        if (candidate.trim().length > 0 && !/^\s+/.test(candidate)) {
+          break;
+        }
+
+        continuationLines.push(candidate);
+        end += 1;
+      }
+    }
+
+    const target = normalizeTypeDeclarationTarget(start.target, continuationLines);
+    if (target.length === 0) {
+      continue;
+    }
+
+    const sourceLines = lines.slice(index, end);
+    declarations.push({
+      name: start.name,
+      source: trimTrailingBlankLines(sourceLines).join("\n"),
+      line: index + 1,
+      startLine: index + 1,
+      endLine: end,
+      target,
+    });
+    index = Math.max(index, end - 1);
+  }
+
+  return declarations;
+}
+
+function parseTypeDeclarationStartLine(line: string): { name: string; target: string } | null {
+  const heralded = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
   if (heralded) {
-    return heralded;
+    return { name: heralded[1], target: heralded[2] };
   }
 
-  return line.match(/^([A-Z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  const bare = line.match(/^([A-Z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  if (bare) {
+    return { name: bare[1], target: bare[2] };
+  }
+
+  return null;
+}
+
+function normalizeTypeDeclarationTarget(firstTarget: string, continuationLines: string[]): string {
+  return [firstTarget, ...continuationLines]
+    .map((line) => {
+      const trimmed = stripTypeComment(line).trim();
+      return trimmed.startsWith("|") ? trimmed.slice(1).trim() : trimmed;
+    })
+    .filter((line) => line.length > 0)
+    .join(" | ");
+}
+
+function stripTypeComment(source: string): string {
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const previous = source[index - 1];
+    if ((char === "'" || char === '"') && previous !== "\\") {
+      quote = quote === char ? null : quote ?? char;
+      continue;
+    }
+
+    if (char === "#" && quote === null) {
+      return source.slice(0, index);
+    }
+  }
+
+  return source;
 }
 
 function discoverClassDecls(lines: string[]): ClassDecl[] {
@@ -2278,9 +2367,19 @@ function splitTopLevel(source: string, separator: string): string[] {
   return parts;
 }
 
-function isTypeLine(line: string): boolean {
-  const match = parseTypeDeclarationLine(line);
-  return match !== null && (isSumTypeRhs(match[2]) || isTypeAliasRhs(match[2]));
+function typeDeclarationLineIndexes(lines: string[]): Set<number> {
+  const indexes = new Set<number>();
+  for (const declaration of collectTypeDeclarations(lines)) {
+    if (!isSumTypeRhs(declaration.target) && !isTypeAliasRhs(declaration.target)) {
+      continue;
+    }
+
+    for (let line = declaration.startLine - 1; line < declaration.endLine; line += 1) {
+      indexes.add(line);
+    }
+  }
+
+  return indexes;
 }
 
 function normalizeNewlines(source: string): string {

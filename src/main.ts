@@ -23,6 +23,7 @@ import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import {
   defaultProjectIds,
   samples,
+  sampleTemplateGroups,
   type SampleGroup,
   type SampleProgram,
 } from "./samples";
@@ -212,38 +213,7 @@ const shareIcon = `
 `;
 const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
-const templateGroups = createTemplateGroups([
-  {
-    label: "Getting started",
-    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
-  },
-  {
-    label: "Product workflows",
-    sampleIds: ["cart-promotions", "feature-flag-rollout", "calendar-availability"],
-  },
-  {
-    label: "Backend systems",
-    sampleIds: ["notification-retries", "rate-limiter", "job-queue"],
-  },
-  {
-    label: "Modeling and data",
-    sampleIds: [
-      "formula-spreadsheet",
-      "sudoku-state",
-      "annotated-maze",
-    ],
-  },
-  {
-    label: "ASCII art",
-    sampleIds: [
-      "ascii-fractal",
-      "weather-map",
-      "maze-renderer",
-      "julia-set-explorer",
-      "isometric-cube-stack",
-    ],
-  },
-]);
+const templateGroups = createTemplateGroups(sampleTemplateGroups);
 
 function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
   return `

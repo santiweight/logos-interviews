@@ -11,6 +11,11 @@ export type SampleGroup = {
   samples: SampleProgram[];
 };
 
+export type SampleTemplateGroup = {
+  label: string;
+  sampleIds: string[];
+};
+
 export type SampleEvalCase = {
   sampleId: string;
   name: string;
@@ -25,6 +30,104 @@ export type SampleStdoutCheck = {
   description: string;
   matches: (stdout: string[]) => boolean;
 };
+
+const humanSudokuStrategyTemplate = `# Human-style Sudoku strategy evaluator.
+# This is deliberately not a backtracking solver.
+# apply_strategy applies exactly one human rule pass and returns the resulting state.
+# It may solve one cell for UniqueBoxSolve, UniqueLineSolve, or HiddenSingle.
+# It may only remove candidates for HiddenDoubleInBox or LineCompleteExceptForBox.
+# It must not guess, recurse, search, or fill unrelated cells.
+#
+# SudokuState accepts either a 9x9 board of integers, where 0 means unsolved,
+# or a 9x9 grid of CellAnnotation values for tests that need exact candidates.
+# values returns a 9x9 integer board, with 0 for unsolved cells.
+# candidates returns the sorted candidate list for an unsolved cell and [] for solved cells.
+
+type SudokuStrategy =
+  UniqueBoxSolve # there is only one square for a number to go in, in a box
+  | UniqueLineSolve # there is only one square for a number to go in, in a row/column
+  | HiddenDoubleInBox # two numbers appear in the same two cells of a box
+  | # a row/col's possible squares for a number are all in the same box,
+    # so that number can be removed from the rest of that box
+    LineCompleteExceptForBox
+  | HiddenSingle
+type CellAnnotation = Solved(int) | Annotations(list[int])
+
+class SudokuState:
+  grid: list[list[CellAnnotation]]
+
+  def __init__(self, grid: list) -> None
+  def values(self) -> list[list[int]]
+  def candidates(self, row: int, col: int) -> list[int]
+
+def apply_strategy(state: SudokuState, strategy: SudokuStrategy) -> SudokuState
+
+def annotation_grid(values: list[int]) -> list:
+  return [[Annotations(list(values)) for _ in range(9)] for _ in range(9)]
+
+def solved_count(state: SudokuState) -> int:
+  return sum(1 for row in state.values() for value in row if value != 0)
+
+@logos.debug.print()
+def main():
+  line_state = SudokuState([
+    [0, 2, 3, 4, 5, 6, 7, 8, 9],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ])
+  before = solved_count(line_state)
+  line_state = apply_strategy(line_state, UniqueLineSolve())
+  print(line_state.values()[0][0] == 1 and solved_count(line_state) == before + 1)
+
+  box_state = SudokuState([
+    [0, 2, 3, 0, 0, 0, 0, 0, 0],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ])
+  before = solved_count(box_state)
+  box_state = apply_strategy(box_state, UniqueBoxSolve())
+  print(box_state.values()[0][0] == 1 and solved_count(box_state) == before + 1)
+
+  single_state = SudokuState([
+    [0, 2, 3, 4, 5, 6, 7, 8, 9],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ])
+  before = solved_count(single_state)
+  single_state = apply_strategy(single_state, HiddenSingle())
+  print(single_state.values()[0][0] == 1 and solved_count(single_state) == before + 1)
+
+  double_grid = annotation_grid([3, 4, 5, 6, 7, 8, 9])
+  double_grid[0][0] = Annotations([1, 2, 3])
+  double_grid[0][1] = Annotations([1, 2, 4])
+  double_state = apply_strategy(SudokuState(double_grid), HiddenDoubleInBox())
+  print(double_state.values()[0][0] == 0 and double_state.candidates(0, 0) == [1, 2] and double_state.candidates(0, 1) == [1, 2])
+
+  line_box_grid = annotation_grid([2, 3, 4, 5])
+  line_box_grid[0][0] = Annotations([1, 2])
+  line_box_grid[0][1] = Annotations([1, 3])
+  line_box_grid[0][2] = Annotations([1, 4])
+  line_box_grid[1][0] = Annotations([1, 5])
+  line_box_state = apply_strategy(SudokuState(line_box_grid), LineCompleteExceptForBox())
+  print(line_box_state.values()[1][0] == 0 and line_box_state.candidates(1, 0) == [5])`;
 
 export const sampleGroups: SampleGroup[] = [
   {
@@ -635,6 +738,11 @@ def main():
   print the maze, the start and goal, the path length, and the solved maze with the path marked.
   \`\`\``,
       },
+      {
+        id: "sudoku-human-strategies",
+        label: "Human Sudoku strategies",
+        code: humanSudokuStrategyTemplate,
+      },
     ],
   },
 ];
@@ -647,6 +755,35 @@ export const defaultProjectIds = [
   "ascii-fractal",
   "formula-spreadsheet",
   "annotated-maze",
+];
+
+export const sampleTemplateGroups: SampleTemplateGroup[] = [
+  {
+    label: "Getting started",
+    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
+  },
+  {
+    label: "Product workflows",
+    sampleIds: ["cart-promotions", "feature-flag-rollout", "calendar-availability"],
+  },
+  {
+    label: "Backend systems",
+    sampleIds: ["notification-retries", "rate-limiter", "job-queue"],
+  },
+  {
+    label: "Modeling and data",
+    sampleIds: ["formula-spreadsheet", "sudoku-state", "sudoku-human-strategies", "annotated-maze"],
+  },
+  {
+    label: "ASCII art",
+    sampleIds: [
+      "ascii-fractal",
+      "weather-map",
+      "maze-renderer",
+      "julia-set-explorer",
+      "isometric-cube-stack",
+    ],
+  },
 ];
 
 export const sampleEvalCases: SampleEvalCase[] = [
@@ -1168,6 +1305,13 @@ def main():
   print(sheet.eval().eval(c("C1")))`),
     runnable: "test",
     expectedStdout: ["4", "24", "10"],
+  },
+  {
+    sampleId: "sudoku-human-strategies",
+    name: "human sudoku strategy semantics",
+    sheet: sampleById("sudoku-human-strategies").code,
+    runnable: "main",
+    expectedStdout: ["True", "True", "True", "True", "True"],
   },
   {
     sampleId: "sudoku-state",
