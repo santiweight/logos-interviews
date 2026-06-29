@@ -825,14 +825,14 @@ def test():
     name: "logos intro main arithmetic and snippets",
     sheet: sampleById("starter-arithmetic").code,
     runnable: "main",
-    expectedStdout: ["9", "9", "9", "12"],
+    expectedStdout: ["9", "9", "9", "3", "12"],
   },
   {
     sampleId: "starter-arithmetic",
     name: "logos intro main arithmetic and snippets",
     sheet: sampleById("starter-arithmetic").code,
     runnable: "main",
-    expectedStdout: ["9", "9", "9", "12"],
+    expectedStdout: ["9", "9", "9", "3", "12"],
   },
   {
     sampleId: "beyond-basics",
