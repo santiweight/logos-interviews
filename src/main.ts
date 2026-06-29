@@ -153,6 +153,12 @@ const appSettingsStorageKey = "logos-interviews-settings-v1";
 const experimentalCompilationStrategiesStorageKey = "logos.experimentalCompilationStrategies";
 const staleDefaultProjectIdSets = [
   [
+    "starter-arithmetic",
+    "beyond-basics",
+    "formula-spreadsheet",
+    "annotated-maze",
+  ],
+  [
     "notification-retries",
     "feature-flag-rollout",
     "rate-limiter",
@@ -170,6 +176,10 @@ const staleDefaultProjectIdSets = [
     "formula-spreadsheet",
   ],
 ];
+const legacySampleLabels = new Map<string, string[]>([
+  ["annotated-maze", ["Annotated maze"]],
+  ["formula-spreadsheet", ["Formula spreadsheet"]],
+]);
 
 const initialSourceTabState = defaultSourceTabState();
 let sourceTabs = initialSourceTabState.tabs;
@@ -1366,7 +1376,11 @@ function isStaleDefaultSourceTabState(state: SourceTabState): boolean {
 
   return state.tabs.every((tab) => {
     const sample = samples.find((item) => item.id === tab.projectId);
-    return sample !== undefined && tab.title === sample.label && tab.source === sample.code;
+    return (
+      sample !== undefined &&
+      (tab.title === sample.label || (legacySampleLabels.get(sample.id) ?? []).includes(tab.title)) &&
+      tab.source === sample.code
+    );
   });
 }
 
