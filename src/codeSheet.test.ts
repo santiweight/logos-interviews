@@ -16,6 +16,7 @@ import {
   type CompilationEvent,
 } from "./codeSheet";
 import {
+  buildPythonProgram,
   runCodeSheet,
   startInteractiveCodeSheet,
   type InteractivePythonRun,
@@ -260,6 +261,13 @@ def unrelated_public():
       hasPrivateParserHelper: true,
       hasUnrelatedPublicFunction: false,
     });
+  });
+
+  it("executes sheets with postponed annotation evaluation", () => {
+    expect(
+      buildPythonProgram("class AsciiArt:\n  def rotate(self) -> AsciiArt:\n    return self", "main")
+        .startsWith("from __future__ import annotations\n\n"),
+    ).toBe(true);
   });
 
   it("captures run outputs", async () => {
@@ -1552,14 +1560,26 @@ def test():
 
 class Greeter:
   def greet(self, name: str) -> str:
-    return f"{PREFIX}, {name}"`,
+    return Entry(f"{PREFIX}, {name}{SUFFIX}").value
+
+SUFFIX = "!"
+
+class Entry:
+  def __init__(self, value: str):
+    self.value = value
+
+class Unused:
+  pass`,
     );
 
     expect(completed.source).toContain(`PREFIX = "Hello"`);
+    expect(completed.source).toContain(`SUFFIX = "!"`);
+    expect(completed.source).toContain("class Entry:");
     expect(completed.source).toContain("class Greeter:");
+    expect(completed.source).not.toContain("class Unused:");
     expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
       ok: true,
-      stdout: ["Hello, Ada"],
+      stdout: ["Hello, Ada!"],
     });
   });
 

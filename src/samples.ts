@@ -203,6 +203,11 @@ class Clock:
   def __init__(self):
     self.now = 0
 
+class WindowState:
+  def __init__(self, start: int, count: int):
+    self.start = start
+    self.count = count
+
 class RateLimiter:
   clock: Clock
   limit: int
@@ -241,6 +246,14 @@ def test():
 class Clock:
   def __init__(self):
     self.now = 0
+
+class Job:
+  def __init__(self, job_id: str, payload: str):
+    self.job_id = job_id
+    self.payload = payload
+    self.reserved_by = None
+    self.reserved_at = None
+    self.attempts = 0
 
 class JobQueue:
   clock: Clock

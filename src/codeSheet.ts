@@ -1740,7 +1740,11 @@ function normalizeSnippet(
       return unfenced.trimEnd();
     }
 
-    return extractSingleTopLevelDefinition(lines, classIndex);
+    return extractSingleTopLevelDefinition(lines, classIndex, {
+      includeTrailingHelperConstants: true,
+      includeTrailingPrivateHelpers: true,
+      includeTrailingReferencedHelpers: true,
+    });
   }
 
   const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
@@ -1807,7 +1811,11 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
 function extractSingleTopLevelDefinition(
   lines: string[],
   definitionIndex: number,
-  options: { includeTrailingPrivateHelpers?: boolean } = {},
+  options: {
+    includeTrailingHelperConstants?: boolean;
+    includeTrailingPrivateHelpers?: boolean;
+    includeTrailingReferencedHelpers?: boolean;
+  } = {},
 ): string {
   const start = startOfDefinitionWithImportsAndDecorators(lines, definitionIndex);
   const snippet: string[] = [];
@@ -1848,7 +1856,17 @@ function extractSingleTopLevelDefinition(
       continue;
     }
 
-    if (options.includeTrailingPrivateHelpers && isPrivateHelperDefinitionLine(trimmed)) {
+    const includedSource = snippet.join("\n");
+    const trailingHelperName = helperNameFromTopLevelLine(trimmed);
+    if (
+      (options.includeTrailingHelperConstants && isHelperConstant) ||
+      (options.includeTrailingPrivateHelpers && isPrivateHelperDefinitionLine(trimmed)) ||
+      (
+        options.includeTrailingReferencedHelpers &&
+        trailingHelperName !== null &&
+        referencesName(includedSource, trailingHelperName)
+      )
+    ) {
       snippet.push(line.trimEnd());
       continue;
     }
@@ -1857,6 +1875,27 @@ function extractSingleTopLevelDefinition(
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
+function helperNameFromTopLevelLine(trimmed: string): string | null {
+  const functionHeader = parseFunctionHeader(trimmed);
+  if (functionHeader) {
+    return functionHeader.name;
+  }
+
+  return (
+    trimmed.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ??
+    trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*[^=]+)?\s*=/)?.[1] ??
+    null
+  );
+}
+
+function referencesName(source: string, name: string): boolean {
+  return new RegExp(`\\b${escapeRegExp(name)}\\b`).test(source);
+}
+
+function escapeRegExp(source: string): string {
+  return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function isPrivateHelperDefinitionLine(trimmed: string): boolean {
