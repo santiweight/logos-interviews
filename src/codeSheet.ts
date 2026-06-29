@@ -419,11 +419,76 @@ export function renderImplementation(ir: CompilationIR): CodeSheet {
     })
     .join("");
 
+  const rendered = imports.length === 0
+    ? source
+    : `${imports.join("\n")}\n\n${source}`;
+  const stdlibImports = inferredStdlibImports(rendered);
+  return prependImports(rendered, stdlibImports);
+}
+
+function inferredStdlibImports(source: string): string[] {
+  const imports: string[] = [];
+  const dataclassImports = ["dataclass", "field"].filter((name) => {
+    return usesUnqualifiedName(source, name) && !importsNameFromModule(source, "dataclasses", name);
+  });
+  if (dataclassImports.length > 0) {
+    imports.push(`from dataclasses import ${dataclassImports.join(", ")}`);
+  }
+
+  const typingImports = [
+    "Any",
+    "Callable",
+    "Iterable",
+    "Iterator",
+    "Optional",
+    "Sequence",
+    "Tuple",
+    "TypeVar",
+    "Union",
+  ].filter((name) => {
+    return usesUnqualifiedName(source, name) && !importsNameFromModule(source, "typing", name);
+  });
+  if (typingImports.length > 0) {
+    imports.push(`from typing import ${typingImports.join(", ")}`);
+  }
+
+  return imports;
+}
+
+function usesUnqualifiedName(source: string, name: string): boolean {
+  return new RegExp(`(?<![.\\w])${name}(?!\\w)`).test(source);
+}
+
+function importsNameFromModule(source: string, moduleName: string, name: string): boolean {
+  const escapedModule = moduleName.replaceAll(".", "\\.");
+  const fromImport = new RegExp(`^\\s*from\\s+${escapedModule}\\s+import\\s+[^\\n#]*\\b${name}\\b`, "m");
+  const starImport = new RegExp(`^\\s*from\\s+${escapedModule}\\s+import\\s+\\*\\s*(?:#.*)?$`, "m");
+  return fromImport.test(source) || starImport.test(source);
+}
+
+function prependImports(source: string, imports: string[]): string {
   if (imports.length === 0) {
     return source;
   }
 
-  return `${imports.join("\n")}\n\n${source}`;
+  const lines = source.split("\n");
+  let insertAt = 0;
+  while (
+    insertAt < lines.length &&
+    /^from\s+__future__\s+import\s+/.test(lines[insertAt].trim())
+  ) {
+    insertAt += 1;
+  }
+
+  const prefix = lines.slice(0, insertAt);
+  const rest = lines.slice(insertAt);
+  return [
+    ...prefix,
+    ...(prefix.length > 0 ? [""] : []),
+    ...imports,
+    "",
+    ...rest,
+  ].join("\n");
 }
 
 export function definitionReadiness(
@@ -1707,7 +1772,7 @@ function normalizeSnippet(
       return unfenced.trimEnd();
     }
 
-    return extractSingleTopLevelDefinition(lines, classIndex);
+    return extractSingleTopLevelClass(lines, classIndex);
   }
 
   const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
@@ -1770,7 +1835,7 @@ function extractSingleTopLevelDefinition(lines: string[], definitionIndex: numbe
     const isImport = /^(import\s+|from\s+)/.test(trimmed);
     const isDecorator = /^@/.test(trimmed);
     const isDefinition = /^(def\s+|async\s+def\s+|class\s+)/.test(trimmed);
-    const isHelperConstant = /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed);
+    const isHelperConstant = isHelperConstantLine(trimmed);
 
     if (isBlank) {
       snippet.push(line);
@@ -1803,6 +1868,69 @@ function extractSingleTopLevelDefinition(lines: string[], definitionIndex: numbe
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
 }
 
+function extractSingleTopLevelClass(lines: string[], classIndex: number): string {
+  const start = startOfDefinitionWithImportsAndDecorators(lines, classIndex);
+  const snippet: string[] = [];
+  let seenClass = false;
+  let classBlockEnded = false;
+
+  for (let index = start; index < lines.length;) {
+    const line = lines[index];
+    const trimmed = line.trimStart();
+    const isBlank = line.trim().length === 0;
+    const isNested = /^\s+/.test(line);
+    const isImport = /^(import\s+|from\s+)/.test(trimmed);
+    const isDecorator = /^@/.test(trimmed);
+    const isClass = /^class\s+/.test(trimmed);
+    const isHelperConstant = isHelperConstantLine(trimmed);
+
+    if (isBlank) {
+      snippet.push(line);
+      index += 1;
+      continue;
+    }
+
+    if (!seenClass) {
+      if (isImport || isDecorator || isHelperConstant || trimmed.startsWith("#")) {
+        snippet.push(line.trimEnd());
+        index += 1;
+        continue;
+      }
+
+      if (isClass) {
+        seenClass = true;
+        snippet.push(line.trimEnd());
+        index += 1;
+        continue;
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (!classBlockEnded) {
+      if (isNested) {
+        snippet.push(line.trimEnd());
+        index += 1;
+        continue;
+      }
+
+      classBlockEnded = true;
+      continue;
+    }
+
+    if (isImport || isHelperConstant || trimmed.startsWith("#")) {
+      snippet.push(line.trimEnd());
+      index += 1;
+      continue;
+    }
+
+    break;
+  }
+
+  return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
 function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIndex: number): number {
   let start = definitionIndex;
   while (start > 0) {
@@ -1811,7 +1939,7 @@ function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIn
     if (
       previous.trim().length === 0 ||
       /^(import\s+|from\s+|@|#)/.test(trimmed) ||
-      /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
+      isHelperConstantLine(trimmed)
     ) {
       start -= 1;
       continue;
@@ -1827,9 +1955,13 @@ function isTopLevelDefinitionLine(trimmed: string): boolean {
   return (
     /^(@|def\s+|async\s+def\s+|class\s+|import\s+|from\s+)/.test(trimmed) ||
     trimmed.startsWith("#") ||
-    /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed) ||
+    isHelperConstantLine(trimmed) ||
     /^[\]}),]+$/.test(trimmed)
   );
+}
+
+function isHelperConstantLine(trimmed: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed);
 }
 
 function splitTopLevel(source: string, separator: string): string[] {
