@@ -9,6 +9,19 @@ type TestSourceTab = {
   source: string;
 };
 
+type TestRunStatus =
+  | { state: "running" }
+  | { state: "exited"; code: number | null; signal: string | null; error?: string };
+
+type TestRunTab = {
+  id: string;
+  runnable: string;
+  sourceHash: string;
+  terminalText: string;
+  implementation: string;
+  status: TestRunStatus | null;
+};
+
 type TestLoadableSession = {
   sourceTabs: TestSourceTab[];
   activeSourceTabId: string | null;
@@ -22,6 +35,12 @@ type TestLoadableSession = {
     compileVersion: number;
     latestImplementationSource: string;
     selection: unknown;
+  };
+  run: {
+    activeToolTabId: string | null;
+    lastRunLabel: string;
+    lastRunStatusText: string;
+    tabs: TestRunTab[];
   };
 };
 
@@ -107,6 +126,83 @@ describe("run program browser flow", () => {
       expect(interactiveStartRequests).toHaveLength(1);
       expect(runOnceRequests).toEqual([]);
       expect(await isTerminalInputFocused(page)).toBe(false);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("explains restored running sessions instead of rendering a blank terminal", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      let startRequests = 0;
+      await page.route("**/api/run/start", async (route) => {
+        startRequests += 1;
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: false, error: "restored sessions should not autorun" }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+
+      await page.evaluate(async () => {
+        const logosWindow = window as LogosWindow;
+        const session = logosWindow.createLogosSessionBundle?.();
+        if (!session || !logosWindow.loadLogosSession) {
+          throw new Error("Logos session helpers are unavailable");
+        }
+
+        const source = "def main():\n  print('mandelbrot')\n";
+        const activeSourceTabId = session.activeSourceTabId ?? session.sourceTabs[0]?.id ?? "mandelbrot-run";
+        await logosWindow.loadLogosSession({
+          ...session,
+          sourceTabs: [{
+            id: activeSourceTabId,
+            projectId: "mandelbrot-run",
+            title: "Mandelbrot Run",
+            source,
+          }],
+          activeSourceTabId,
+          editor: {
+            ...session.editor,
+            value: source,
+            cursor: { lineNumber: 1, column: 1 },
+            scrollTop: 0,
+            scrollLeft: 0,
+          },
+          compilation: {
+            ...session.compilation,
+            latestImplementationSource: source,
+          },
+          run: {
+            ...session.run,
+            activeToolTabId: "run-main",
+            lastRunLabel: "previously",
+            lastRunStatusText: "Running main · last run previously",
+            tabs: [{
+              id: "run-main",
+              runnable: "main",
+              sourceHash: "mandelbrot-source",
+              terminalText: "",
+              implementation: source,
+              status: { state: "running" },
+            }],
+          },
+        });
+      });
+
+      await expect.poll(async () => {
+        return page.locator(".terminal-output-text").first().textContent();
+      }).toContain("Run was in progress when the session was captured and was not resumed.");
+      await expect.poll(async () => page.locator(".terminal-input").first().isDisabled()).toBe(true);
+      expect(startRequests).toBe(0);
     } finally {
       await context.close();
     }

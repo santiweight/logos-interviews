@@ -385,10 +385,10 @@ def test_magic_square():
         label: "ASCII fractal",
         code: `# Fractal rendering file.
 # Results must be exactly 24 strings, each 64 characters wide.
-# through the middle, and nested coastline or root contours near the ground.
+#
 # Use only these density characters, from empty to bright: " .:-=+*#%@".
+#
 # Keep the background mostly empty, with detail clustered into readable forms.
-# Return a deterministic ASCII mandelbrot fractal.
 
 def mandelbrot() -> list
 
@@ -1039,6 +1039,18 @@ def test():
       " #   #   #   # ",
       "# # # # # # # #",
     ],
+  },
+  {
+    sampleId: "ascii-fractal",
+    name: "ascii mandelbrot sample prints non-empty output",
+    sheet: sampleById("ascii-fractal").code,
+    runnable: "test",
+    stdoutCheck: {
+      description: "prints at least one non-whitespace Mandelbrot character",
+      matches(stdout) {
+        return stdout.some((line) => line.trim().length > 0);
+      },
+    },
   },
   {
     sampleId: "ascii-fractal",
