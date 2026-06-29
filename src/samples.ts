@@ -334,7 +334,7 @@ def test():
     samples: [
       {
         id: "starter-arithmetic",
-        label: "Basics",
+        label: "Intro to Logos",
         code: `# In Logos, LLMs will complete partial code for you.
 # Click \`add\` in the code view to see its implementation.
 def add(x: int, y: int) -> int
