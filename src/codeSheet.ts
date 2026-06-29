@@ -115,6 +115,18 @@ export type CompilationNode =
       state: CompletionState;
     };
 
+type ParallelCompletionItem = {
+  node: Extract<CompilationNode, { kind: "incomplete" }>;
+  hash: SnippetHash;
+  snippet: string;
+  prompt: string;
+  source: CodeSheet;
+};
+
+type ParallelCompletionStreamEvent =
+  | { kind: "token"; index: number; hash: SnippetHash; token: string }
+  | { kind: "complete"; index: number; item: ParallelCompletionItem; replacement: string };
+
 export type Declaration =
   | { kind: "sum-type"; name: string; line: number; source: string }
   | { kind: "class"; name: string; line: number; source: string }
@@ -378,12 +390,7 @@ export async function* compile(
   }
 
   if (compileInParallel(options) && complete) {
-    const missing: Array<{
-      node: Extract<CompilationNode, { kind: "incomplete" }>;
-      hash: SnippetHash;
-      snippet: string;
-      prompt: string;
-    }> = [];
+    const missing: ParallelCompletionItem[] = [];
 
     for (const node of ir.nodes) {
       if (isAborted(options.signal)) {
@@ -420,6 +427,7 @@ export async function* compile(
         completions.push({ hash, snippet, replacement: synthesizedReplacement, cached: false });
         completedSnippets += 1;
         if (emitProgress) {
+          yield { kind: "llm-complete", hash, implementation: synthesizedReplacement };
           yield {
             kind: "implementation",
             source: renderImplementation(ir),
@@ -431,16 +439,18 @@ export async function* compile(
         continue;
       }
 
+      const source = renderImplementation(ir);
       missing.push({
         node,
         hash,
         snippet,
         prompt: buildCompletionPrompt(
-          renderImplementation(ir),
+          source,
           snippet,
           node.snippetKind,
           node.annotationContexts,
         ),
+        source,
       });
     }
 
@@ -450,43 +460,36 @@ export async function* compile(
       }
     }
 
-    const pending = missing.map((item) => {
-      const result = complete(
-        item.prompt,
-        options.abortCurrentCompletion ? { signal: options.signal } : undefined,
-      );
-      return collectCompletionResult(result).then((replacement) => ({
-        ...item,
-        replacement: normalizeSnippet(
-          replacement,
-          item.node.snippetKind,
-          item.snippet,
-          renderImplementation(ir),
-        ),
-      }));
-    });
-
-    for (const item of await Promise.all(pending)) {
-      await cacheImplementation(codeCache, item.hash, item.replacement);
-      item.node.state = {
-        kind: "complete",
-        hash: item.hash,
-        snippet: item.snippet,
-        implementation: item.replacement,
-      };
-      completions.push({
-        hash: item.hash,
-        snippet: item.snippet,
-        replacement: item.replacement,
-        cached: false,
-      });
-      completedSnippets += 1;
+    for await (const completionEvent of streamParallelCompletions(missing, complete, options)) {
       if (isAborted(options.signal)) {
         return;
       }
 
+      if (completionEvent.kind === "token") {
+        if (emitProgress && options.streamTokens !== false) {
+          yield { kind: "llm-token", hash: completionEvent.hash, token: completionEvent.token };
+        }
+        continue;
+      }
+
+      const { item, replacement } = completionEvent;
+      await cacheImplementation(codeCache, item.hash, replacement);
+      item.node.state = {
+        kind: "complete",
+        hash: item.hash,
+        snippet: item.snippet,
+        implementation: replacement,
+      };
+      completions.push({
+        hash: item.hash,
+        snippet: item.snippet,
+        replacement,
+        cached: false,
+      });
+      completedSnippets += 1;
+
       if (emitProgress) {
-        yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
+        yield { kind: "llm-complete", hash: item.hash, implementation: replacement };
         yield {
           kind: "implementation",
           source: renderImplementation(ir),
@@ -865,16 +868,85 @@ function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> 
   return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
 }
 
-async function collectCompletionResult(result: CompleteResult): Promise<string> {
-  if (!isAsyncIterable(result)) {
-    return await result;
+async function* streamParallelCompletions(
+  items: ParallelCompletionItem[],
+  complete: CompleteFunction,
+  options: CompileOptions,
+): AsyncIterable<ParallelCompletionStreamEvent> {
+  const iterators = items.map((item, index) => {
+    return streamParallelCompletion(item, index, complete, options)[Symbol.asyncIterator]();
+  });
+  const pending = new Map<number, Promise<{
+    index: number;
+    result: IteratorResult<ParallelCompletionStreamEvent>;
+  }>>();
+  const readNext = (index: number): Promise<{
+    index: number;
+    result: IteratorResult<ParallelCompletionStreamEvent>;
+  }> => iterators[index].next().then((result) => ({ index, result }));
+
+  for (let index = 0; index < iterators.length; index += 1) {
+    pending.set(index, readNext(index));
   }
 
-  let replacement = "";
-  for await (const token of result) {
-    replacement += token;
+  while (pending.size > 0) {
+    const { index, result } = await Promise.race(pending.values());
+    pending.delete(index);
+
+    if (isAborted(options.signal)) {
+      return;
+    }
+
+    if (result.done) {
+      continue;
+    }
+
+    yield result.value;
+    pending.set(index, readNext(index));
   }
-  return replacement;
+}
+
+async function* streamParallelCompletion(
+  item: ParallelCompletionItem,
+  index: number,
+  complete: CompleteFunction,
+  options: CompileOptions,
+): AsyncIterable<ParallelCompletionStreamEvent> {
+  const result = complete(
+    item.prompt,
+    options.abortCurrentCompletion ? { signal: options.signal } : undefined,
+  );
+  let replacement = "";
+  if (isAsyncIterable(result)) {
+    for await (const token of result) {
+      replacement += token;
+      if (isAborted(options.signal)) {
+        return;
+      }
+
+      if (token.length > 0 && options.streamTokens !== false) {
+        yield { kind: "token", index, hash: item.hash, token };
+      }
+    }
+  } else {
+    replacement = await result;
+  }
+
+  if (isAborted(options.signal)) {
+    return;
+  }
+
+  yield {
+    kind: "complete",
+    index,
+    item,
+    replacement: normalizeSnippet(
+      replacement,
+      item.node.snippetKind,
+      item.snippet,
+      item.source,
+    ),
+  };
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {

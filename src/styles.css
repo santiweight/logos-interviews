@@ -1254,6 +1254,47 @@ h2 {
   white-space: nowrap;
 }
 
+.snippet-status-indicator {
+  display: inline-flex;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+.snippet-status-indicator[data-state="hidden"],
+.snippet-status-indicator[data-state="stub"] {
+  visibility: hidden;
+}
+
+.snippet-status-indicator[data-state="generating"]::before {
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  content: "";
+  border: 2px solid #d6b16f;
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: snippet-status-spin 0.72s linear infinite;
+}
+
+.snippet-status-indicator[data-state="complete"]::before,
+.snippet-status-indicator[data-state="cached"]::before {
+  width: 8px;
+  height: 8px;
+  content: "";
+  border-radius: 999px;
+  background: #2f8f4e;
+  box-shadow: 0 0 0 1px rgba(47, 143, 78, 0.18);
+}
+
+@keyframes snippet-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .snippet-status {
   flex: 0 0 auto;
   border: 1px solid var(--border);

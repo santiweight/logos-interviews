@@ -1623,6 +1623,56 @@ def test():
     expect(renderImplementation(compiled.completed.ir)).toContain("return x * y");
   });
 
+  it("streams tokens from parallel completions before all snippets finish", async () => {
+    const sheetWithTwoSnippets = `def add(x: int, y: int) -> int
+
+def mul(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))
+  print(mul(2, 3))`;
+    const started: string[] = [];
+    const releases: Array<() => void> = [];
+    const events: CompilationEvent[] = [];
+    const compileTask = (async (): Promise<CompilationEvent[]> => {
+      for await (const event of compile(
+        new Map(),
+        sheetWithTwoSnippets,
+        (prompt) => {
+          const target = completionPromptTarget(prompt).includes("def add(") ? "add" : "mul";
+          async function* completion(): AsyncIterable<string> {
+            started.push(target);
+            if (target === "add") {
+              yield "def add(x: int, y: int) -> int:\n";
+            } else {
+              yield "def mul(x: int, y: int) -> int:\n";
+            }
+            await new Promise<void>((resolve) => releases.push(resolve));
+            yield target === "add" ? "  return x + y" : "  return x * y";
+          }
+          return completion();
+        },
+        { strategy: "parallel" },
+      )) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    await eventually(() => expect(events.filter((event) => event.kind === "llm-token")).toHaveLength(2));
+    expect(events.some((event) => event.kind === "llm-complete")).toBe(false);
+
+    for (const release of releases) {
+      release();
+    }
+
+    const finalEvents = await compileTask;
+    expect(finalEvents.filter((event) => event.kind === "llm-token")).toHaveLength(4);
+    expect(finalEvents.filter((event) => event.kind === "llm-complete")).toHaveLength(2);
+    expect(finalEvents.at(-1)?.kind).toBe("compiled");
+  });
+
   it("can compile to a partial implementation when snippets are unresolved", async () => {
     const events: CompilationEvent[] = [];
 
