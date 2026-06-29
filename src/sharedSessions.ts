@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
-import { GetObjectCommand, NoSuchKey, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, NoSuchKey, PutObjectCommand } from "@aws-sdk/client-s3";
+import { createObjectStorageClient, objectStorageConfig } from "./objectStorage";
 
 type SharedSessionPayload = {
   loadableSession?: unknown;
@@ -183,9 +184,9 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
 }
 
 function sharedSessionStore(): SharedSessionStore {
-  const s3Bucket = process.env.SHARED_SESSION_S3_BUCKET ?? process.env.BUCKET_NAME;
-  if (s3Bucket) {
-    return s3SharedSessionStore(s3Bucket);
+  const storageConfig = objectStorageConfig();
+  if (storageConfig) {
+    return s3SharedSessionStore(storageConfig);
   }
 
   return fileSharedSessionStore();
@@ -204,24 +205,20 @@ function fileSharedSessionStore(): SharedSessionStore {
   };
 }
 
-function s3SharedSessionStore(bucket: string): SharedSessionStore {
-  const client = new S3Client({
-    region: process.env.SHARED_SESSION_S3_REGION ?? process.env.AWS_REGION ?? "auto",
-    endpoint: process.env.SHARED_SESSION_S3_ENDPOINT ?? process.env.AWS_ENDPOINT_URL_S3,
-    forcePathStyle: process.env.SHARED_SESSION_S3_FORCE_PATH_STYLE === "true",
-  });
+function s3SharedSessionStore(config: NonNullable<ReturnType<typeof objectStorageConfig>>): SharedSessionStore {
+  const client = createObjectStorageClient(config);
 
   return {
     async read(shareId) {
       const response = await client.send(new GetObjectCommand({
-        Bucket: bucket,
+        Bucket: config.bucket,
         Key: sharedSessionObjectKey(shareId),
       }));
       return await bodyToString(response.Body);
     },
     async write(shareId, record) {
       await client.send(new PutObjectCommand({
-        Bucket: bucket,
+        Bucket: config.bucket,
         Key: sharedSessionObjectKey(shareId),
         Body: JSON.stringify(record),
         ContentType: "application/json",
@@ -231,9 +228,7 @@ function s3SharedSessionStore(bucket: string): SharedSessionStore {
 }
 
 function sharedSessionObjectKey(shareId: string): string {
-  const prefix = process.env.SHARED_SESSION_S3_PREFIX ?? "shared-sessions";
-  const trimmed = prefix.replace(/^\/+|\/+$/g, "");
-  return trimmed.length === 0 ? `${shareId}.json` : `${trimmed}/${shareId}.json`;
+  return `shared-sessions/${shareId}.json`;
 }
 
 async function bodyToString(body: unknown): Promise<string> {

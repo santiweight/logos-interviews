@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import {
+  createObjectStorageClient,
+  objectStorageConfig,
+  type ObjectStorageConfig,
+} from "./objectStorage";
 
 type CaptureKind = "session-events" | "feedback";
 
-type CaptureS3Config = {
-  bucket: string;
-  region: string;
-  endpoint?: string;
-  forcePathStyle: boolean;
+type CaptureObjectStorageConfig = ObjectStorageConfig & {
   prefix: string;
 };
 
@@ -21,9 +22,9 @@ export async function writeSessionCaptureRecords(
   }
 
   const body = records.map((record) => JSON.stringify(record)).join("\n");
-  const s3Config = captureS3Config("session-events");
-  if (s3Config) {
-    await putCaptureObject(s3Config, `${body}\n`, "application/x-ndjson");
+  const storageConfig = captureObjectStorageConfig("session-events");
+  if (storageConfig) {
+    await putCaptureObject(storageConfig, `${body}\n`, "application/x-ndjson");
     return;
   }
 
@@ -36,9 +37,9 @@ export async function writeFeedbackCaptureRecord(
   record: Record<string, unknown>,
 ): Promise<void> {
   const body = `${JSON.stringify(record)}\n`;
-  const s3Config = captureS3Config("feedback");
-  if (s3Config) {
-    await putCaptureObject(s3Config, body, "application/x-ndjson");
+  const storageConfig = captureObjectStorageConfig("feedback");
+  if (storageConfig) {
+    await putCaptureObject(storageConfig, body, "application/x-ndjson");
     return;
   }
 
@@ -51,59 +52,33 @@ export async function writeFeedbackCaptureRecord(
   await appendFile(resolve(logDir, "feedback.jsonl"), body, "utf8");
 }
 
-function captureS3Config(kind: CaptureKind): CaptureS3Config | null {
-  const bucket = kind === "feedback"
-    ? process.env.FEEDBACK_CAPTURE_S3_BUCKET ??
-      process.env.SESSION_CAPTURE_S3_BUCKET ??
-      process.env.CAPTURE_S3_BUCKET ??
-      process.env.BUCKET_NAME
-    : process.env.SESSION_CAPTURE_S3_BUCKET ??
-      process.env.CAPTURE_S3_BUCKET ??
-      process.env.BUCKET_NAME;
-
-  if (!bucket) {
+function captureObjectStorageConfig(kind: CaptureKind): CaptureObjectStorageConfig | null {
+  const config = objectStorageConfig();
+  if (!config) {
     return null;
   }
 
   return {
-    bucket,
-    region: envForKind(kind, "REGION") ?? process.env.AWS_REGION ?? "auto",
-    endpoint: envForKind(kind, "ENDPOINT"),
-    forcePathStyle: envForKind(kind, "FORCE_PATH_STYLE") === "true",
-    prefix: captureS3Prefix(kind),
+    ...config,
+    prefix: captureObjectPrefix(kind),
   };
 }
 
-function envForKind(kind: CaptureKind, suffix: string): string | undefined {
-  const awsSdkEndpoint = suffix === "ENDPOINT" ? process.env.AWS_ENDPOINT_URL_S3 : undefined;
+function captureObjectPrefix(kind: CaptureKind): string {
+  const basePrefix = "session-capture";
   if (kind === "feedback") {
-    return process.env[`FEEDBACK_CAPTURE_S3_${suffix}`] ??
-      process.env[`SESSION_CAPTURE_S3_${suffix}`] ??
-      awsSdkEndpoint;
+    return joinPrefix(basePrefix, "feedback");
   }
 
-  return process.env[`SESSION_CAPTURE_S3_${suffix}`] ?? awsSdkEndpoint;
-}
-
-function captureS3Prefix(kind: CaptureKind): string {
-  const basePrefix = process.env.SESSION_CAPTURE_S3_PREFIX ?? "session-capture";
-  if (kind === "feedback") {
-    return trimSlashes(process.env.FEEDBACK_CAPTURE_S3_PREFIX ?? joinPrefix(basePrefix, "feedback"));
-  }
-
-  return trimSlashes(joinPrefix(basePrefix, "session-events"));
+  return joinPrefix(basePrefix, "session-events");
 }
 
 async function putCaptureObject(
-  config: CaptureS3Config,
+  config: CaptureObjectStorageConfig,
   body: string,
   contentType: string,
 ): Promise<void> {
-  const client = new S3Client({
-    region: config.region,
-    endpoint: config.endpoint,
-    forcePathStyle: config.forcePathStyle,
-  });
+  const client = createObjectStorageClient(config);
 
   await client.send(new PutObjectCommand({
     Bucket: config.bucket,

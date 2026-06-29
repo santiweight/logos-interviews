@@ -9,7 +9,9 @@ describe("feedback capture", () => {
   it("writes a loadable session bundle with feedback records", async () => {
     const logDir = await mkdtemp(join(tmpdir(), "logos-feedback-"));
     const previousDir = process.env.FEEDBACK_CAPTURE_DIR;
+    const previousStorageEnv = snapshotEnv(objectStorageEnvKeys);
     process.env.FEEDBACK_CAPTURE_DIR = logDir;
+    clearEnv(previousStorageEnv);
 
     const server = createServer((req, res) => {
       void handleFeedback(req, res);
@@ -56,20 +58,13 @@ describe("feedback capture", () => {
       } else {
         process.env.FEEDBACK_CAPTURE_DIR = previousDir;
       }
+      restoreEnv(previousStorageEnv);
       await rm(logDir, { recursive: true, force: true });
     }
   });
 
   it("writes feedback records to S3-compatible storage when configured", async () => {
-    const previousEnv = snapshotEnv([
-      "FEEDBACK_CAPTURE_S3_BUCKET",
-      "FEEDBACK_CAPTURE_S3_REGION",
-      "FEEDBACK_CAPTURE_S3_ENDPOINT",
-      "FEEDBACK_CAPTURE_S3_FORCE_PATH_STYLE",
-      "FEEDBACK_CAPTURE_S3_PREFIX",
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-    ]);
+    const previousEnv = snapshotEnv(objectStorageEnvKeys);
     const s3Requests: CapturedRequest[] = [];
     const s3Server = createServer(async (req, res) => {
       s3Requests.push({
@@ -87,11 +82,9 @@ describe("feedback capture", () => {
     try {
       const s3BaseUrl = await listen(s3Server);
       clearEnv(previousEnv);
-      process.env.FEEDBACK_CAPTURE_S3_BUCKET = "capture-bucket";
-      process.env.FEEDBACK_CAPTURE_S3_REGION = "us-east-1";
-      process.env.FEEDBACK_CAPTURE_S3_ENDPOINT = s3BaseUrl;
-      process.env.FEEDBACK_CAPTURE_S3_FORCE_PATH_STYLE = "true";
-      process.env.FEEDBACK_CAPTURE_S3_PREFIX = "feedback-captures";
+      process.env.BUCKET_NAME = "capture-bucket";
+      process.env.AWS_REGION = "us-east-1";
+      process.env.AWS_ENDPOINT_URL_S3 = s3BaseUrl;
       process.env.AWS_ACCESS_KEY_ID = "test-access-key";
       process.env.AWS_SECRET_ACCESS_KEY = "test-secret-key";
 
@@ -113,7 +106,7 @@ describe("feedback capture", () => {
       expect(s3Requests).toHaveLength(1);
       expect(s3Requests[0].method).toBe("PUT");
       expect(s3Requests[0].url).toMatch(
-        /^\/capture-bucket\/feedback-captures\/\d{4}\/\d{2}\/\d{2}\/.+\.jsonl/,
+        /^\/capture-bucket\/session-capture\/feedback\/\d{4}\/\d{2}\/\d{2}\/.+\.jsonl/,
       );
       expect(JSON.parse(s3Requests[0].body.trim())).toMatchObject({
         sessionId: "session-1",
@@ -193,3 +186,11 @@ function clearEnv(previous: Map<string, string | undefined>): void {
     delete process.env[key];
   }
 }
+
+const objectStorageEnvKeys = [
+  "BUCKET_NAME",
+  "AWS_REGION",
+  "AWS_ENDPOINT_URL_S3",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+];

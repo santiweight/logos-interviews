@@ -7,9 +7,9 @@ import {
   ListObjectsV2Command,
   NoSuchKey,
   PutObjectCommand,
-  S3Client,
 } from "@aws-sdk/client-s3";
 import type { CodeCache, SnippetHash } from "./codeSheet";
+import { createObjectStorageClient, objectStorageConfig } from "./objectStorage";
 
 type CodeCacheRecord = {
   hash: SnippetHash;
@@ -75,11 +75,9 @@ class PersistentCodeCache extends Map<SnippetHash, string> implements CodeCache 
 }
 
 function codeCacheStore(): CodeCacheStore {
-  const s3Bucket = process.env.CODE_CACHE_S3_BUCKET ??
-    process.env.SHARED_SESSION_S3_BUCKET ??
-    process.env.BUCKET_NAME;
-  if (s3Bucket) {
-    return s3CodeCacheStore(s3Bucket);
+  const storageConfig = objectStorageConfig();
+  if (storageConfig) {
+    return s3CodeCacheStore(storageConfig);
   }
 
   return fileCodeCacheStore();
@@ -105,31 +103,20 @@ function fileCodeCacheStore(): CodeCacheStore {
   };
 }
 
-function s3CodeCacheStore(bucket: string): CodeCacheStore {
-  const client = new S3Client({
-    region: process.env.CODE_CACHE_S3_REGION ??
-      process.env.SHARED_SESSION_S3_REGION ??
-      process.env.AWS_REGION ??
-      "auto",
-    endpoint: process.env.CODE_CACHE_S3_ENDPOINT ??
-      process.env.SHARED_SESSION_S3_ENDPOINT ??
-      process.env.AWS_ENDPOINT_URL_S3,
-    forcePathStyle:
-      process.env.CODE_CACHE_S3_FORCE_PATH_STYLE === "true" ||
-      process.env.SHARED_SESSION_S3_FORCE_PATH_STYLE === "true",
-  });
+function s3CodeCacheStore(config: NonNullable<ReturnType<typeof objectStorageConfig>>): CodeCacheStore {
+  const client = createObjectStorageClient(config);
 
   return {
     async read(hash) {
       const response = await client.send(new GetObjectCommand({
-        Bucket: bucket,
+        Bucket: config.bucket,
         Key: codeCacheObjectKey(hash),
       }));
       return parseRecord(await bodyToString(response.Body), hash);
     },
     async write(hash, implementation) {
       await client.send(new PutObjectCommand({
-        Bucket: bucket,
+        Bucket: config.bucket,
         Key: codeCacheObjectKey(hash),
         Body: JSON.stringify(record(hash, implementation)),
         ContentType: "application/json",
@@ -139,7 +126,7 @@ function s3CodeCacheStore(bucket: string): CodeCacheStore {
       let continuationToken: string | undefined;
       do {
         const listed = await client.send(new ListObjectsV2Command({
-          Bucket: bucket,
+          Bucket: config.bucket,
           Prefix: codeCacheObjectPrefix(),
           ContinuationToken: continuationToken,
         }));
@@ -148,7 +135,7 @@ function s3CodeCacheStore(bucket: string): CodeCacheStore {
 
         if (objects.length > 0) {
           await client.send(new DeleteObjectsCommand({
-            Bucket: bucket,
+            Bucket: config.bucket,
             Delete: { Objects: objects },
           }));
         }
@@ -196,13 +183,7 @@ function codeCacheObjectKey(hash: SnippetHash): string {
 }
 
 function codeCacheObjectPrefix(): string {
-  const configured = process.env.CODE_CACHE_S3_PREFIX;
-  const rawPrefix = configured === undefined || configured.trim().length === 0
-    ? "code-cache"
-    : configured;
-  const trimmed = rawPrefix.replace(/^\/+|\/+$/g, "");
-  const prefix = trimmed.length === 0 ? "code-cache" : trimmed;
-  return `${prefix}/`;
+  return "code-cache/";
 }
 
 function safeCacheKey(hash: SnippetHash): string {

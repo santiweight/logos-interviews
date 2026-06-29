@@ -8,6 +8,7 @@ import { cachedImplementation, cacheImplementation } from "./codeSheet";
 
 describe("global code cache", () => {
   let previousCodeCacheDir: string | undefined;
+  let previousObjectStorageEnv: Map<string, string | undefined> | null = null;
   let codeCacheDir: string | null = null;
 
   afterEach(async () => {
@@ -20,6 +21,11 @@ describe("global code cache", () => {
       delete process.env.CODE_CACHE_DIR;
     } else {
       process.env.CODE_CACHE_DIR = previousCodeCacheDir;
+    }
+
+    if (previousObjectStorageEnv) {
+      restoreEnv(previousObjectStorageEnv);
+      previousObjectStorageEnv = null;
     }
   });
 
@@ -58,22 +64,7 @@ describe("global code cache", () => {
   });
 
   it("uses Fly/Tigris bucket environment as S3-compatible storage", async () => {
-    const previousEnv = snapshotEnv([
-      "CODE_CACHE_S3_BUCKET",
-      "CODE_CACHE_S3_REGION",
-      "CODE_CACHE_S3_ENDPOINT",
-      "CODE_CACHE_S3_FORCE_PATH_STYLE",
-      "CODE_CACHE_S3_PREFIX",
-      "SHARED_SESSION_S3_BUCKET",
-      "SHARED_SESSION_S3_REGION",
-      "SHARED_SESSION_S3_ENDPOINT",
-      "SHARED_SESSION_S3_FORCE_PATH_STYLE",
-      "BUCKET_NAME",
-      "AWS_REGION",
-      "AWS_ENDPOINT_URL_S3",
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-    ]);
+    const previousEnv = snapshotEnv(objectStorageEnvKeys);
     const objects = new Map<string, string>();
     const requests: CapturedRequest[] = [];
     const s3Server = createServer(async (req, res) => {
@@ -112,7 +103,6 @@ describe("global code cache", () => {
       process.env.BUCKET_NAME = "fly-cache-bucket";
       process.env.AWS_REGION = "us-east-1";
       process.env.AWS_ENDPOINT_URL_S3 = s3BaseUrl;
-      process.env.CODE_CACHE_S3_FORCE_PATH_STYLE = "true";
       process.env.AWS_ACCESS_KEY_ID = "test-access-key";
       process.env.AWS_SECRET_ACCESS_KEY = "test-secret-key";
 
@@ -135,10 +125,20 @@ describe("global code cache", () => {
 
   async function useTempCodeCacheDir(): Promise<void> {
     previousCodeCacheDir = process.env.CODE_CACHE_DIR;
+    previousObjectStorageEnv = snapshotEnv(objectStorageEnvKeys);
+    clearEnv(previousObjectStorageEnv);
     codeCacheDir = await mkdtemp(join(tmpdir(), "logos-code-cache-"));
     process.env.CODE_CACHE_DIR = codeCacheDir;
   }
 });
+
+const objectStorageEnvKeys = [
+  "BUCKET_NAME",
+  "AWS_REGION",
+  "AWS_ENDPOINT_URL_S3",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+];
 
 type CapturedRequest = {
   method: string;

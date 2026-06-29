@@ -18,7 +18,9 @@ describe("session capture", () => {
   it("writes posted session events as JSONL records", async () => {
     logDir = await mkdtemp(join(tmpdir(), "logos-session-capture-"));
     const previousDir = process.env.SESSION_CAPTURE_DIR;
+    const previousStorageEnv = snapshotEnv(objectStorageEnvKeys);
     process.env.SESSION_CAPTURE_DIR = logDir;
+    clearEnv(previousStorageEnv);
 
     try {
       const server = createServer((req, res) => {
@@ -72,21 +74,12 @@ describe("session capture", () => {
       } else {
         process.env.SESSION_CAPTURE_DIR = previousDir;
       }
+      restoreEnv(previousStorageEnv);
     }
   });
 
   it("writes session event batches to S3-compatible storage when configured", async () => {
-    const previousEnv = snapshotEnv([
-      "SESSION_CAPTURE_S3_BUCKET",
-      "SESSION_CAPTURE_S3_REGION",
-      "SESSION_CAPTURE_S3_ENDPOINT",
-      "SESSION_CAPTURE_S3_FORCE_PATH_STYLE",
-      "SESSION_CAPTURE_S3_PREFIX",
-      "AWS_ENDPOINT_URL_S3",
-      "AWS_ACCESS_KEY_ID",
-      "AWS_SECRET_ACCESS_KEY",
-      "BUCKET_NAME",
-    ]);
+    const previousEnv = snapshotEnv(objectStorageEnvKeys);
     const s3Requests: CapturedRequest[] = [];
     const s3Server = createServer(async (req, res) => {
       s3Requests.push({
@@ -104,13 +97,11 @@ describe("session capture", () => {
     try {
       const s3BaseUrl = await listen(s3Server);
       clearEnv(previousEnv);
-      process.env.SESSION_CAPTURE_S3_REGION = "us-east-1";
+      process.env.BUCKET_NAME = "capture-bucket";
+      process.env.AWS_REGION = "us-east-1";
       process.env.AWS_ENDPOINT_URL_S3 = s3BaseUrl;
-      process.env.SESSION_CAPTURE_S3_FORCE_PATH_STYLE = "true";
-      process.env.SESSION_CAPTURE_S3_PREFIX = "captures";
       process.env.AWS_ACCESS_KEY_ID = "test-access-key";
       process.env.AWS_SECRET_ACCESS_KEY = "test-secret-key";
-      process.env.BUCKET_NAME = "capture-bucket";
 
       const appBaseUrl = await listen(appServer);
       const response = await fetch(`${appBaseUrl}/api/session-events`, {
@@ -126,7 +117,7 @@ describe("session capture", () => {
       expect(s3Requests).toHaveLength(1);
       expect(s3Requests[0].method).toBe("PUT");
       expect(s3Requests[0].url).toMatch(
-        /^\/capture-bucket\/captures\/session-events\/\d{4}\/\d{2}\/\d{2}\/.+\.jsonl/,
+        /^\/capture-bucket\/session-capture\/session-events\/\d{4}\/\d{2}\/\d{2}\/.+\.jsonl/,
       );
       expect(JSON.parse(s3Requests[0].body.trim())).toMatchObject({
         sessionId: "session-1",
@@ -205,3 +196,11 @@ function clearEnv(previous: Map<string, string | undefined>): void {
     delete process.env[key];
   }
 }
+
+const objectStorageEnvKeys = [
+  "BUCKET_NAME",
+  "AWS_REGION",
+  "AWS_ENDPOINT_URL_S3",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+];
