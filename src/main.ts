@@ -95,6 +95,9 @@ export type LoadableSession = {
     activeToolTabId: string | null;
     lastRunLabel: string;
     lastRunStatusText: string;
+    lastRunCompletedAtMs?: number | null;
+    lastRunStatusPrefix?: string;
+    lastRunStatusState?: string;
     lastRunDefinitionHash: string | null;
     runStatus: { text: string; state: string };
     tabs: LoadableSessionRunTab[];
@@ -369,8 +372,8 @@ app.innerHTML = `
       ></div>
 
       <section id="output-pane" class="output-pane" aria-label="Program output panel">
-        <div class="tool-tabs">
-          <div id="tool-tabs-list" class="tabs" role="tablist" aria-label="Run output views">
+        <div class="source-tabs-bar output-tabs-bar">
+          <div id="tool-tabs-list" class="source-tabs output-tabs" role="tablist" aria-label="Run output views">
           </div>
           <span id="run-status" class="status"></span>
           ${renderFeedbackControls("output")}
@@ -413,6 +416,9 @@ const agentInput = requiredQuery<HTMLTextAreaElement>("#agent-input");
 const agentSend = requiredQuery<HTMLButtonElement>("#agent-send");
 let lastRunLabel = "never";
 let lastRunStatusText = "";
+let lastRunCompletedAtMs: number | null = null;
+let lastRunStatusPrefix = "";
+let lastRunStatusState = "";
 let lastRunDefinitionHash: string | null = null;
 let agentMessages: AgentChatMessage[] = [];
 let agentExpanded = false;
@@ -869,20 +875,23 @@ shellResizeObserver.observe(shell);
 shellResizeObserver.observe(agentSidebar);
 shellResizeObserver.observe(codePane);
 shellResizeObserver.observe(outputPane);
+window.setInterval(() => {
+  updateRunStaleness();
+}, 1000);
 
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
   const runnable = requestedRunnable ?? firstRunnable(source);
   if (!runnable) {
     sessionCapture.track("run_blocked", { reason: "no_runnable" }, true);
-    runStatus.textContent = `No runnable · last run ${lastRunLabel}`;
+    runStatus.textContent = `No runnable · last run ${lastRunAgeLabel()}`;
     runStatus.dataset.state = "error";
     return;
   }
 
   const runTab = createRunTab(runnable, definitionHash(source));
   sessionCapture.track("run_requested", { runnable, source }, true);
-  runStatus.textContent = `Running ${runnable} · last run ${lastRunLabel}`;
+  runStatus.textContent = `Running ${runnable} · last run ${lastRunAgeLabel()}`;
   runStatus.dataset.state = "";
   setActiveTab(runTab.id);
   renderRunTabs();
@@ -897,11 +906,9 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   if (!result.ok) {
-    lastRunLabel = formatRunTime(new Date());
+    markLastRunCompleted();
     lastRunDefinitionHash = definitionHash(source);
-    lastRunStatusText = `Error · last run ${lastRunLabel}`;
-    runStatus.textContent = lastRunStatusText;
-    runStatus.dataset.state = "error";
+    setLastRunStatus("Error", "error");
     currentTab.terminalText = result.error;
     currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
     renderRunTab(currentTab);
@@ -1085,6 +1092,9 @@ function applyActiveSourceTab(): void {
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
+  lastRunCompletedAtMs = null;
+  lastRunStatusPrefix = "";
+  lastRunStatusState = "";
   lastRunStatusText = active ? "" : "No open file";
   lastRunDefinitionHash = null;
   runStatus.textContent = lastRunStatusText;
@@ -1455,17 +1465,24 @@ function hashString(source: string): string {
 }
 
 function updateRunStaleness(source = editor.getValue()): void {
+  lastRunLabel = lastRunAgeLabel();
   const stale = lastRunDefinitionHash !== null && definitionHash(source) !== lastRunDefinitionHash;
 
-  if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error")) {
-    runStatus.textContent = `Stale · last run ${lastRunLabel}`;
+  if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error" || runStatus.dataset.state === "stale")) {
+    runStatus.textContent = `Run is out of date · last run ${lastRunLabel}`;
     runStatus.dataset.state = "stale";
     return;
   }
 
   if (!stale && runStatus.dataset.state === "stale") {
-    runStatus.textContent = lastRunStatusText;
-    runStatus.dataset.state = lastRunStatusText.startsWith("Error") ? "error" : "ok";
+    refreshLastRunStatus();
+  } else if (
+    !stale &&
+    lastRunStatusPrefix &&
+    runStatus.textContent === lastRunStatusText &&
+    (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error")
+  ) {
+    refreshLastRunStatus();
   }
 }
 
@@ -2615,12 +2632,57 @@ function firstRunnable(source: string): Runnable | null {
   return runnables(source)[0]?.name ?? null;
 }
 
-function formatRunTime(date: Date): string {
-  return date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+function markLastRunCompleted(): void {
+  lastRunCompletedAtMs = Date.now();
+  lastRunLabel = lastRunAgeLabel();
+}
+
+function lastRunAgeLabel(nowMs = Date.now()): string {
+  if (lastRunCompletedAtMs === null) {
+    return lastRunLabel === "never" ? "never" : "previously";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - lastRunCompletedAtMs) / 1000));
+  if (elapsedSeconds < 10) {
+    return "just now";
+  }
+
+  if (elapsedSeconds < 60) {
+    return `${elapsedSeconds} ${elapsedSeconds === 1 ? "second" : "seconds"} ago`;
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  return `${elapsedMinutes} ${elapsedMinutes === 1 ? "minute" : "minutes"} ago`;
+}
+
+function setLastRunStatus(prefix: string, state: "ok" | "error"): void {
+  lastRunStatusPrefix = prefix;
+  lastRunStatusState = state;
+  refreshLastRunStatus();
+}
+
+function refreshLastRunStatus(): void {
+  if (!lastRunStatusPrefix) {
+    lastRunStatusText = "";
+    return;
+  }
+
+  lastRunLabel = lastRunAgeLabel();
+  lastRunStatusText = `${lastRunStatusPrefix} · last run ${lastRunLabel}`;
+  runStatus.textContent = lastRunStatusText;
+  runStatus.dataset.state = lastRunStatusState;
+}
+
+function runStatusPrefixFromText(text: string): string {
+  return text.split(" · last run ")[0] ?? text;
+}
+
+function runStatusStateFromPrefix(prefix: string): string {
+  if (!prefix) {
+    return "";
+  }
+
+  return prefix.startsWith("Ran ") ? "ok" : "error";
 }
 
 function createRunTab(runnable: Runnable, sourceHash: string): RunTab {
@@ -2645,21 +2707,21 @@ function renderRunTabs(): void {
 
   for (const tab of runTabs) {
     const shell = document.createElement("div");
-    shell.className = "tool-tab-shell";
+    shell.className = "source-tab-shell output-tab-shell";
     shell.dataset.runTabShellId = tab.id;
 
     const button = document.createElement("button");
     button.id = runTabButtonId(tab.id);
-    button.className = `tab${activeToolTabId === tab.id ? " active" : ""}`;
+    button.className = `source-tab output-tab${activeToolTabId === tab.id ? " active" : ""}`;
     button.type = "button";
     button.role = "tab";
     button.dataset.runTabId = tab.id;
     button.setAttribute("aria-selected", String(activeToolTabId === tab.id));
     button.setAttribute("aria-controls", runPanelId(tab.id));
-    button.textContent = `Run \`${tab.runnable}\``;
+    button.textContent = `Run ${tab.runnable}`;
 
     const close = document.createElement("button");
-    close.className = "tool-tab-close";
+    close.className = "source-tab-close output-tab-close";
     close.type = "button";
     close.dataset.closeRunTabId = tab.id;
     close.setAttribute("aria-label", `Close run ${tab.runnable}`);
@@ -2847,11 +2909,9 @@ async function pollRunTab(runTabId: string): Promise<void> {
 
   if (!result.ok) {
     currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
-    lastRunLabel = formatRunTime(new Date());
+    markLastRunCompleted();
     lastRunDefinitionHash = currentTab.sourceHash;
-    lastRunStatusText = `Error · last run ${lastRunLabel}`;
-    runStatus.textContent = lastRunStatusText;
-    runStatus.dataset.state = "error";
+    setLastRunStatus("Error", "error");
     appendTerminalChunks(currentTab, [{ stream: "stderr", text: `\n${result.error}\n` }]);
     updateRunStaleness();
     renderRunTabs();
@@ -2877,13 +2937,11 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   tab.implementation = implementation;
   latestImplementationSource = implementation;
   renderSnippetPanel();
-  lastRunLabel = formatRunTime(new Date());
+  markLastRunCompleted();
   lastRunDefinitionHash = tab.sourceHash;
 
   if (status.state === "exited" && status.code === 0) {
-    lastRunStatusText = `Ran ${tab.runnable} · last run ${lastRunLabel}`;
-    runStatus.textContent = lastRunStatusText;
-    runStatus.dataset.state = "ok";
+    setLastRunStatus(`Ran ${tab.runnable}`, "ok");
     sessionCapture.track(
       "run_completed",
       { runnable: tab.runnable, output: tab.terminalText, implementation },
@@ -2891,9 +2949,7 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
     );
   } else {
     const stopped = status.state === "exited" && status.signal === "SIGTERM";
-    lastRunStatusText = `${stopped ? "Stopped" : "Error"} · last run ${lastRunLabel}`;
-    runStatus.textContent = lastRunStatusText;
-    runStatus.dataset.state = "error";
+    setLastRunStatus(stopped ? "Stopped" : "Error", "error");
     if (status.state === "exited" && status.error) {
       appendTerminalChunks(tab, [{ stream: "stderr", text: `\n${status.error}\n` }]);
     }
@@ -3586,6 +3642,9 @@ export function createLoadableSession(): LoadableSession {
       activeToolTabId,
       lastRunLabel,
       lastRunStatusText,
+      lastRunCompletedAtMs,
+      lastRunStatusPrefix,
+      lastRunStatusState,
       lastRunDefinitionHash,
       runStatus: {
         text: runStatus.textContent ?? "",
@@ -3638,11 +3697,18 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     editor.setValue(active?.source ?? session.editor.value);
     latestImplementationSource = session.compilation.latestImplementationSource || editor.getValue();
     compileVersion = Math.max(compileVersion + 1, session.compilation.compileVersion);
-    lastRunLabel = session.run.lastRunLabel;
-    lastRunStatusText = session.run.lastRunStatusText;
+    lastRunCompletedAtMs = typeof session.run.lastRunCompletedAtMs === "number"
+      ? session.run.lastRunCompletedAtMs
+      : null;
+    lastRunLabel = lastRunCompletedAtMs === null
+      ? (session.run.lastRunLabel === "never" ? "never" : "previously")
+      : lastRunAgeLabel();
+    lastRunStatusPrefix = session.run.lastRunStatusPrefix ?? runStatusPrefixFromText(session.run.lastRunStatusText);
+    lastRunStatusState = session.run.lastRunStatusState ?? runStatusStateFromPrefix(lastRunStatusPrefix);
+    lastRunStatusText = lastRunStatusPrefix ? `${lastRunStatusPrefix} · last run ${lastRunLabel}` : "";
     lastRunDefinitionHash = session.run.lastRunDefinitionHash;
-    runStatus.textContent = session.run.runStatus.text;
-    runStatus.dataset.state = session.run.runStatus.state;
+    runStatus.textContent = lastRunStatusText || session.run.runStatus.text;
+    runStatus.dataset.state = lastRunStatusState;
     agentMessages = session.agent.messages.map((message) => ({ ...message }));
     agentInput.value = session.agent.input;
     setAgentExpanded(session.agent.expanded);

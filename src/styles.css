@@ -867,26 +867,9 @@ h2 {
   min-height: 0;
 }
 
-.tool-tabs {
-  display: none;
-  align-items: flex-end;
-  justify-content: space-between;
-  flex: 0 0 32px;
-  min-width: 0;
-  gap: 6px;
-  border-bottom: 1px solid var(--border);
-  background: var(--paper-pressed);
-  padding: 4px 6px 0;
-}
-
-.output-pane:has(.tool-tab-shell) .tool-tabs,
-.output-pane:has(.status:not(:empty)) .tool-tabs {
-  display: flex;
-}
-
-.tool-tabs .status {
+.output-tabs-bar .status {
   align-self: center;
-  margin-bottom: 4px;
+  margin: 0 6px 0 0;
 }
 
 .feedback-controls {
@@ -916,8 +899,7 @@ h2 {
   padding: 2px 5px;
 }
 
-.source-tabs-bar > .feedback-controls,
-.tool-tabs > .feedback-controls {
+.source-tabs-bar > .feedback-controls {
   align-self: center;
   margin-bottom: 4px;
 }
@@ -1083,100 +1065,6 @@ h2 {
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
-}
-
-.tabs {
-  display: flex;
-  align-items: end;
-  min-width: 0;
-  gap: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.tool-tab-shell {
-  position: relative;
-  flex: 0 0 auto;
-  min-width: 116px;
-  max-width: 190px;
-  height: 28px;
-  margin-right: -1px;
-}
-
-.tab {
-  position: relative;
-  height: 28px;
-  min-width: 104px;
-  border: 1px solid var(--border);
-  border-bottom-color: var(--border);
-  border-radius: 5px 5px 0 0;
-  background: var(--paper-soft);
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.78rem;
-  font-weight: 780;
-  margin-right: -1px;
-  padding: 0 12px;
-  text-align: left;
-}
-
-.tool-tab-shell .tab {
-  width: 100%;
-  min-width: 0;
-  margin-right: 0;
-  overflow: hidden;
-  padding-right: 28px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tool-tab-close {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  z-index: 2;
-  display: grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
-  padding: 0;
-}
-
-.tool-tab-shell .tab.active + .tool-tab-close {
-  color: var(--muted);
-}
-
-.tool-tab-close:hover {
-  background: var(--accent-hover-soft);
-  color: var(--accent);
-}
-
-.tab:hover {
-  background: var(--paper);
-  color: var(--ink);
-}
-
-.tab.active {
-  z-index: 1;
-  border-color: var(--border);
-  border-bottom-color: var(--paper);
-  background: var(--paper);
-  color: var(--ink);
-  box-shadow: inset 0 2px 0 var(--accent);
-}
-
-.tab.active::before {
-  content: none;
 }
 
 .tool-panels {
@@ -1428,8 +1316,8 @@ h2 {
 
 .agent-input:focus,
 .terminal-input:focus,
-.tab:focus-visible,
-.tool-tab-close:focus-visible,
+.source-tab:focus-visible,
+.source-tab-close:focus-visible,
 .feedback-button:focus-visible,
 .code-run-resize-handle:focus-visible,
 .run-button:focus-visible,
