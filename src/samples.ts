@@ -334,7 +334,7 @@ def test():
     samples: [
       {
         id: "starter-arithmetic",
-        label: "Intro to Logos",
+        label: "Basics",
         code: `# In Logos, LLMs will complete partial code for you.
 # Click \`add\` in the code view to see its implementation.
 def add(x: int, y: int) -> int
@@ -354,19 +354,23 @@ def main():
   added = \`add 1 and 2\`
   product = \`mul 3 and 4\`
   print(added)
-  print(product)`,
+  \`print product\``,
       },
       {
         id: "beyond-basics",
         label: "Beyond Basics",
-        code: `# You can also define classes, even if they're not complete!
-# Notice how the agent internally generates a field for tracking the grid.
+        code: `# Logos supports classes, even if incomplete.
+#
+# Click MagicSquare, and notice how the agent's implementations
+# compare to the stub we provided.
 
 class MagicSquare:
   size: int
 
   def gen() -> MagicSquare
-  def pretty() -> str
+  def grid(self) -> [[int]]
+
+  def pretty(self) -> str
 
 def test_magic_square():
   # Logos also support multi-line snippets.
