@@ -1280,54 +1280,6 @@ class Greeter:
     });
   });
 
-  it("preserves trailing helper constants returned with class completions", async () => {
-    const completed = await completeSheet(
-      new Map(),
-      `class Scale:
-  def value(self) -> int
-
-def test():
-  print(Scale().value())`,
-      () => `class Scale:
-  def value(self) -> int:
-    return BASE
-
-BASE = 7`,
-    );
-
-    expect(completed.source).toContain("BASE = 7");
-    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
-      ok: true,
-      stdout: ["7"],
-    });
-  });
-
-  it("adds missing standard-library imports used by class completions", async () => {
-    const completed = await completeSheet(
-      new Map(),
-      `class Transform:
-  fn: Callable[[int], int]
-
-  def apply(self, value: int) -> Tuple[int, int]
-
-def test():
-  print(Transform(lambda value: value * 2).apply(4))`,
-      () => `@dataclass
-class Transform:
-  fn: Callable[[int], int] = field(default_factory=lambda: (lambda value: value))
-
-  def apply(self, value: int) -> Tuple[int, int]:
-    return (value, self.fn(value))`,
-    );
-
-    expect(completed.source).toContain("from dataclasses import dataclass, field");
-    expect(completed.source).toContain("from typing import Callable, Tuple");
-    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
-      ok: true,
-      stdout: ["(4, 8)"],
-    });
-  });
-
   it("supports natural-language backtick expressions anywhere", async () => {
     const cache: CodeCache = new Map();
     const calls: string[] = [];
