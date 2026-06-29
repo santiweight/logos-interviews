@@ -20,6 +20,8 @@ for _ in $(seq 1 30); do
 done
 
 curl -fsS "${base_url}/healthz" >/dev/null
+./scripts/smoke-deployment.sh "$base_url"
+
 capture_response="$(
   curl -fsS \
     -X POST "${base_url}/api/session-events" \
