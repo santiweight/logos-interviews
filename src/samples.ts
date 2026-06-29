@@ -1240,12 +1240,12 @@ function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {
 }
 
 function padTrailingBlankAsciiRows(stdout: string[], rows: number, cols: number): string[] {
-  if (stdout.length > rows || stdout.some((row) => row.length !== cols)) {
+  if (stdout.length > rows || stdout.some((row) => row.length > cols)) {
     return stdout;
   }
 
   return [
-    ...stdout,
+    ...stdout.map((row) => row.padEnd(cols, " ")),
     ...Array.from({ length: rows - stdout.length }, () => " ".repeat(cols)),
   ];
 }

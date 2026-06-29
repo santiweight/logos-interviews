@@ -50,6 +50,7 @@ describe("product samples", () => {
     const rotated = Array.from({ length: 20 }, (_, index) => {
       return index < 12 ? "@%#*+=-:.".repeat(2).padStart(32, " ").padEnd(64, " ") : blank;
     });
+    rotated[11] = rotated[11].trimEnd();
 
     expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
   });
