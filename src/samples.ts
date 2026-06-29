@@ -1222,10 +1222,10 @@ function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {
     return false;
   }
 
-  const normal = stdout.slice(0, blankIndex);
-  const rotated = stdout.slice(blankIndex + 1);
+  const normal = padTrailingBlankAsciiRows(stdout.slice(0, blankIndex), 24, 64);
+  const rotated = padTrailingBlankAsciiRows(stdout.slice(blankIndex + 1), 24, 64);
   const overlapRows = normal.reduce((total, row, index) => {
-    return total + (row === rotated[index] ? 1 : 0);
+    return total + (row.trim().length > 0 && row === rotated[index] ? 1 : 0);
   }, 0);
 
   return (
@@ -1237,6 +1237,17 @@ function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {
     normal.join("\n") !== rotated.join("\n") &&
     overlapRows <= 10
   );
+}
+
+function padTrailingBlankAsciiRows(stdout: string[], rows: number, cols: number): string[] {
+  if (stdout.length > rows || stdout.some((row) => row.length !== cols)) {
+    return stdout;
+  }
+
+  return [
+    ...stdout,
+    ...Array.from({ length: rows - stdout.length }, () => " ".repeat(cols)),
+  ];
 }
 
 function isVisibleAsciiFractalFrame(stdout: string[]): boolean {

@@ -36,4 +36,21 @@ describe("product samples", () => {
       }
     }
   });
+
+  it("accepts ASCII fractal output with trailing blank rows trimmed by stdout capture", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "mandelbrot render and rotate natural snippet");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    const blank = " ".repeat(64);
+    const visible = ".:-=+*#%@".repeat(2).padStart(38, " ").padEnd(64, " ");
+    const normal = Array.from({ length: 24 }, (_, index) => (index % 2 === 0 ? visible : blank));
+    const rotated = Array.from({ length: 20 }, (_, index) => {
+      return index < 12 ? "@%#*+=-:.".repeat(2).padStart(32, " ").padEnd(64, " ") : blank;
+    });
+
+    expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
+  });
 });
