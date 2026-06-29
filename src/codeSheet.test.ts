@@ -388,6 +388,13 @@ def test():
       When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
       Use only Python's standard library and code already present in the sheet; do not import third-party packages.
       For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
+      When generating visible output, prefer self-explanatory printing over raw value dumps:
+      - Prefer labels and prefixes such as print("Total:", total) over print(total) when the value is not obvious from the output alone.
+      - For multi-section output, print a clear section header, then a blank line before that section's content, and print a blank line between sections.
+      - For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing Python lists or object reprs.
+      - For tables, include column headers and row labels when they help the user understand the data; keep enough spacing between columns for values and formulas to scan cleanly.
+      - Use ANSI colors sparingly to clarify terminal drawings, status, or validation, while keeping the output readable without color.
+      - Do not assume helper methods such as pretty(), render(), or __str__ exist unless the sheet declares them or you implement them inside the requested class.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -418,6 +425,13 @@ def test():
       When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
       Use only Python's standard library and code already present in the sheet; do not import third-party packages.
       For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
+      When generating visible output, prefer self-explanatory printing over raw value dumps:
+      - Prefer labels and prefixes such as print("Total:", total) over print(total) when the value is not obvious from the output alone.
+      - For multi-section output, print a clear section header, then a blank line before that section's content, and print a blank line between sections.
+      - For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing Python lists or object reprs.
+      - For tables, include column headers and row labels when they help the user understand the data; keep enough spacing between columns for values and formulas to scan cleanly.
+      - Use ANSI colors sparingly to clarify terminal drawings, status, or validation, while keeping the output readable without color.
+      - Do not assume helper methods such as pretty(), render(), or __str__ exist unless the sheet declares them or you implement them inside the requested class.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -456,6 +470,13 @@ def test():
       When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
       Use only Python's standard library and code already present in the sheet; do not import third-party packages.
       For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
+      When generating visible output, prefer self-explanatory printing over raw value dumps:
+      - Prefer labels and prefixes such as print("Total:", total) over print(total) when the value is not obvious from the output alone.
+      - For multi-section output, print a clear section header, then a blank line before that section's content, and print a blank line between sections.
+      - For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing Python lists or object reprs.
+      - For tables, include column headers and row labels when they help the user understand the data; keep enough spacing between columns for values and formulas to scan cleanly.
+      - Use ANSI colors sparingly to clarify terminal drawings, status, or validation, while keeping the output readable without color.
+      - Do not assume helper methods such as pretty(), render(), or __str__ exist unless the sheet declares them or you implement them inside the requested class.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -1933,6 +1954,13 @@ def main():
       If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
       Use only Python's standard library and code already present in the sheet; do not import third-party packages.
       For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
+      When generating visible output, prefer self-explanatory printing over raw value dumps:
+      - Prefer labels and prefixes such as print("Total:", total) over print(total) when the value is not obvious from the output alone.
+      - For multi-section output, print a clear section header, then a blank line before that section's content, and print a blank line between sections.
+      - For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing Python lists or object reprs.
+      - For tables, include column headers and row labels when they help the user understand the data; keep enough spacing between columns for values and formulas to scan cleanly.
+      - Use ANSI colors sparingly to clarify terminal drawings, status, or validation, while keeping the output readable without color.
+      - Do not assume helper methods such as pretty(), render(), or __str__ exist unless the sheet declares them or you implement them inside the requested class.
       Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
           "\`multiply 3 and 4\`
@@ -1942,6 +1970,13 @@ def main():
       If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
       Use only Python's standard library and code already present in the sheet; do not import third-party packages.
       For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
+      When generating visible output, prefer self-explanatory printing over raw value dumps:
+      - Prefer labels and prefixes such as print("Total:", total) over print(total) when the value is not obvious from the output alone.
+      - For multi-section output, print a clear section header, then a blank line before that section's content, and print a blank line between sections.
+      - For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing Python lists or object reprs.
+      - For tables, include column headers and row labels when they help the user understand the data; keep enough spacing between columns for values and formulas to scan cleanly.
+      - Use ANSI colors sparingly to clarify terminal drawings, status, or validation, while keeping the output readable without color.
+      - Do not assume helper methods such as pretty(), render(), or __str__ exist unless the sheet declares them or you implement them inside the requested class.
       Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
         ],
