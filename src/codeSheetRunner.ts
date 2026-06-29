@@ -270,7 +270,7 @@ async function compileAndRunAgenticMethods(
 
   const parsed = parse(codeSheet);
   let currentSource = renderImplementation(buildCompilationIR(parsed));
-  const tasks = buildMethodAgentTasks(codeSheet, runnable, currentSource, parsed.incompleteSnippets.map((snippet) => snippet.snippet));
+  const tasks = buildMethodAgentTasks(codeSheet, runnable, parsed.incompleteSnippets.map((snippet) => snippet.snippet));
   if (tasks.length === 0) {
     return compileAndRunAgentically(cache, codeSheet, runnable, options);
   }
@@ -361,19 +361,19 @@ function completedAgenticSheet(
 function buildMethodAgentTasks(
   codeSheet: CodeSheet,
   runnable: Runnable,
-  currentSource: string,
   snippets: string[],
 ): MethodAgentTask[] {
   const classNames = classNamesFromSnippets(snippets);
   return snippets.flatMap((snippet) => {
     if (snippet.trimStart().startsWith("class ")) {
-      return methodHeadersFromClassSnippet(snippet).map((methodSnippet) => ({
+      const methodSnippets = methodHeadersFromClassSnippet(snippet);
+      return methodSnippets.map((methodSnippet) => ({
         snippet: methodSnippet,
         prompt: buildMethodAgentPrompt({
           codeSheet,
           runnable,
-          currentSource,
           targetSnippet: methodSnippet,
+          siblingSnippets: methodSnippets.filter((sibling) => sibling !== methodSnippet),
           targetKind: "method",
         }),
       }));
@@ -387,8 +387,8 @@ function buildMethodAgentTasks(
             prompt: buildMethodAgentPrompt({
               codeSheet,
               runnable,
-              currentSource,
               targetSnippet: snippet,
+              siblingSnippets: snippets.filter((sibling) => sibling !== snippet),
               targetKind: "snippet",
             }),
           }
@@ -426,23 +426,30 @@ function synthesizeAgenticFactory(snippet: string, classNames: Set<string>): str
 function buildMethodAgentPrompt(options: {
   codeSheet: CodeSheet;
   runnable: Runnable;
-  currentSource: string;
   targetSnippet: string;
+  siblingSnippets: string[];
   targetKind: "method" | "snippet";
 }): string {
   return `You are one of several parallel coding agents compiling a Python worksheet.
 
-Return exactly one JSON object: {"replacement":"<complete Python code that replaces the target snippet>"}.
+Return exactly one JSON object and no other text: {"replacement":"<complete Python code that replaces the target snippet>"}.
+The first character of your response must be "{" and the last character must be "}". Do not include markdown, prose, notes, or reasoning.
 
 Rules:
+- You own exactly the target snippet and no other declaration.
 - Replace only the exact target snippet.
+- Do not implement, redefine, restate, or include any sibling method, class, top-level function, runnable, or test.
+- If another declaration is needed, assume it will be implemented separately and only call it by its declared name.
 - Preserve the public behavior required by the runnable/test function.
 - Use only the Python standard library.
 - Keep the replacement concise.
 - For class methods, the replacement is inserted inside the existing class at the same indentation as the target method.
 - For class methods, return only the requested method definition and its nested local helpers. Do not include sibling methods, the class header, or top-level functions.
+- Helpers are allowed only when nested inside the requested declaration.
 - For classes without __init__, methods must work with no-argument construction. Use getattr defaults and dynamic attributes rather than requiring constructor arguments.
 - Parallel agents may complete sibling methods independently, so do not depend on a sibling method adding hidden state during construction.
+- If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
+- When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
 - Do not include an if __name__ == "__main__" block.
 
 Runnable to satisfy: ${options.runnable}
@@ -453,9 +460,9 @@ Worksheet:
 ${options.codeSheet}
 \`\`\`
 
-Current file:
+Sibling declarations for context only. Do not implement these:
 \`\`\`python
-${options.currentSource}
+${options.siblingSnippets.join("\n")}
 \`\`\`
 
 Target snippet:
