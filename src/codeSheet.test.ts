@@ -1583,6 +1583,46 @@ class Unused:
     });
   });
 
+  it("preserves top-level imports returned before unrelated class completion helpers", async () => {
+    const result = await runCodeSheet(
+      `class Store:
+  def __init__(self) -> None
+  def set(self, key: str, value: int) -> None
+  def get(self, key: str) -> int | None
+
+def test():
+  store = Store()
+  store.set("a", 7)
+  print(store.get("a"))`,
+      "test",
+      {
+        complete() {
+          return `from collections import defaultdict
+
+def unrelated_helper():
+  return "extra"
+
+class Store:
+  def __init__(self) -> None:
+    self.values = defaultdict(lambda: None)
+
+  def set(self, key: str, value: int) -> None:
+    self.values[key] = value
+
+  def get(self, key: str) -> int | None:
+    return self.values[key]`;
+        },
+      },
+    );
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["7"],
+    });
+    expect(result.completed.source).toContain("from collections import defaultdict");
+    expect(result.completed.source).not.toContain("def unrelated_helper");
+  });
+
   it("supports natural-language backtick expressions anywhere", async () => {
     const cache: CodeCache = new Map();
     const calls: string[] = [];

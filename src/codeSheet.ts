@@ -1740,11 +1740,16 @@ function normalizeSnippet(
       return unfenced.trimEnd();
     }
 
-    return extractSingleTopLevelDefinition(lines, classIndex, {
+    const classDefinition = extractSingleTopLevelDefinition(lines, classIndex, {
       includeTrailingHelperConstants: true,
       includeTrailingPrivateHelpers: true,
       includeTrailingReferencedHelpers: true,
     });
+    const classDefinitionLines = new Set(classDefinition.split("\n"));
+    return [
+      ...leadingImportLines(lines).filter((line) => !classDefinitionLines.has(line)),
+      classDefinition,
+    ].filter((part) => part.trim().length > 0).join("\n\n");
   }
 
   const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
@@ -1773,6 +1778,22 @@ function requestedFunctionNames(snippet: string): string[] {
     .split("\n")
     .map((line) => parseFunctionHeader(line.trimStart())?.name)
     .filter((name): name is string => name !== undefined);
+}
+
+function leadingImportLines(lines: string[]): string[] {
+  const imports: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trimStart();
+    if (/^(import\s+|from\s+)/.test(trimmed)) {
+      imports.push(line.trimEnd());
+      continue;
+    }
+
+    if (line.trim().length > 0 && !trimmed.startsWith("#")) {
+      break;
+    }
+  }
+  return imports;
 }
 
 function dedentLines(lines: string[]): string[] {
