@@ -34,8 +34,26 @@ jobs:
         run: |
           test -n "$FLY_API_TOKEN" || { echo "Missing FLY_API_TOKEN repository or environment secret"; exit 1; }
           test -n "$FLY_APP_NAME" || { echo "Missing FLY_APP_NAME dev environment variable"; exit 1; }
+          flyctl secrets list --json --app "$FLY_APP_NAME" \
+            | node -e 'const secrets = JSON.parse(require("node:fs").readFileSync(0, "utf8")); const names = secrets.map((secret) => secret.Name ?? secret.name); if (!names.includes("ANTHROPIC_API_KEY")) { console.error("Missing ANTHROPIC_API_KEY Fly secret on dev app"); process.exit(1); }'
       - name: Deploy dev to Fly.io
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
         run: flyctl deploy --remote-only --ha=false --app "$FLY_APP_NAME"
+
+  smoke-dev:
+    name: Smoke dev
+    needs: deploy-dev
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Smoke dev deployment
+        env:
+          FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
+          SMOKE_ANTHROPIC_E2E: "true"
+        run: ./scripts/smoke-deployment.sh "https://${FLY_APP_NAME}.fly.dev"
