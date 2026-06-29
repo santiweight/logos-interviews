@@ -9,18 +9,20 @@ import {
   type CompilationStrategy,
   type Runnable,
 } from "./codeSheet";
-import { compileAndRunAgentically } from "./compilationStrategies/agenticFile";
-import { compileAndRunAgenticMethods } from "./compilationStrategies/agenticMethods";
-import { compileAndRunParallel } from "./compilationStrategies/parallel";
-import { compileAndRunParallelMethods } from "./compilationStrategies/parallelMethods";
-import { compileAndRunSequential } from "./compilationStrategies/sequential";
+import { compilationStrategies } from "./compilationStrategies";
 import {
   buildPythonProgram,
   type RunResult,
   type StrategyRunOptions,
 } from "./compilationStrategies/shared";
+import {
+  legacyAutoStrategyOrder,
+  type CompilationMode,
+  type RunnerStrategy,
+} from "./compilationStrategies/types";
 
 export type { RunResult } from "./compilationStrategies/shared";
+export type { CompilationMode, RunnerStrategy } from "./compilationStrategies/types";
 export { buildPythonProgram } from "./compilationStrategies/shared";
 
 export type RunOptions = StrategyRunOptions & {
@@ -29,10 +31,6 @@ export type RunOptions = StrategyRunOptions & {
   compilationStrategy?: CompilationMode;
   experimentalParallelCompletions?: boolean;
 };
-
-export type MethodStrategy = "parallel-methods" | "agentic-methods";
-export type CompilationMode = CompilationStrategy | MethodStrategy | "auto";
-type RunnerStrategy = Exclude<CompilationMode, "auto">;
 
 export type RunChunk = {
   stream: "stdout" | "stderr";
@@ -98,36 +96,12 @@ function compileAndRunStrategy(
   options: RunOptions,
   strategy: RunnerStrategy,
 ): Promise<RunResult> {
-  switch (strategy) {
-    case "sequential":
-      return compileAndRunSequential(cache, codeSheet, runnable, options);
-    case "parallel":
-      return compileAndRunParallel(cache, codeSheet, runnable, options);
-    case "agentic":
-      return compileAndRunAgentically(
-        cache,
-        codeSheet,
-        runnable,
-        options,
-        () => compileAndRunStrategy(cache, codeSheet, runnable, options, "sequential"),
-      );
-    case "parallel-methods":
-      return compileAndRunParallelMethods(
-        cache,
-        codeSheet,
-        runnable,
-        options,
-        () => compileAndRunStrategy(cache, codeSheet, runnable, options, "parallel"),
-      );
-    case "agentic-methods":
-      return compileAndRunAgenticMethods(
-        cache,
-        codeSheet,
-        runnable,
-        options,
-        () => compileAndRunStrategy(cache, codeSheet, runnable, options, "agentic"),
-      );
-  }
+  const definition = compilationStrategies[strategy];
+  const fallbackStrategy = "fallback" in definition ? definition.fallback : undefined;
+  const fallback = fallbackStrategy === undefined
+    ? () => Promise.reject(new Error(`Strategy ${strategy} has no fallback`))
+    : () => compileAndRunStrategy(cache, codeSheet, runnable, options, fallbackStrategy);
+  return definition.run({ cache, codeSheet, runnable, options }, fallback);
 }
 
 function compileOptions(options: RunOptions, strategy: CompilationStrategy): CompileOptions {
@@ -154,7 +128,7 @@ function interactiveStrategy(options: RunOptions): CompilationStrategy {
 }
 
 function strategyOrder(): RunnerStrategy[] {
-  return ["parallel", "sequential", "agentic"];
+  return [...legacyAutoStrategyOrder];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {

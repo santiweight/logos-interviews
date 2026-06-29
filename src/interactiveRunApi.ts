@@ -11,6 +11,7 @@ import {
   type InteractivePythonRun,
   type InteractiveRunStatus,
 } from "./codeSheetRunner";
+import { isCompilationMode } from "./compilationStrategies/types";
 
 type InteractiveRunRecord = {
   session: InteractivePythonRun;
@@ -179,14 +180,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
 }
 
 function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
-  if (
-    strategy === "auto" ||
-    strategy === "parallel" ||
-    strategy === "parallel-methods" ||
-    strategy === "sequential" ||
-    strategy === "agentic" ||
-    strategy === "agentic-methods"
-  ) {
+  if (isCompilationMode(strategy)) {
     return strategy;
   }
 

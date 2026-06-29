@@ -7,6 +7,7 @@ import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
 import { runCodeSheet, type CompilationMode } from "./codeSheetRunner";
+import { isCompilationMode } from "./compilationStrategies/types";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
@@ -145,14 +146,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
 }
 
 function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
-  if (
-    strategy === "auto" ||
-    strategy === "parallel" ||
-    strategy === "parallel-methods" ||
-    strategy === "sequential" ||
-    strategy === "agentic" ||
-    strategy === "agentic-methods"
-  ) {
+  if (isCompilationMode(strategy)) {
     return strategy;
   }
 

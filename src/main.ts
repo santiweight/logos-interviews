@@ -149,6 +149,7 @@ const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
 const workspaceIdStorageKey = "logos-interviews-workspace-id";
 const appSettingsStorageKey = "logos-interviews-settings-v1";
+const experimentalCompilationStrategiesStorageKey = "logos.experimentalCompilationStrategies";
 const staleDefaultProjectIdSets = [
   [
     "notification-retries",
@@ -342,12 +343,7 @@ app.innerHTML = `
                   <span class="settings-toggle-description">Auto tries fast generation first, then falls back when needed.</span>
                 </span>
                 <select id="compilation-strategy-select" class="settings-select">
-                  <option value="auto"${appSettings.compilationStrategy === "auto" ? " selected" : ""}>Auto</option>
-                  <option value="parallel"${appSettings.compilationStrategy === "parallel" ? " selected" : ""}>Parallel</option>
-                  <option value="parallel-methods"${appSettings.compilationStrategy === "parallel-methods" ? " selected" : ""}>Parallel methods</option>
-                  <option value="sequential"${appSettings.compilationStrategy === "sequential" ? " selected" : ""}>Sequential</option>
-                  <option value="agentic"${appSettings.compilationStrategy === "agentic" ? " selected" : ""}>Agentic</option>
-                  <option value="agentic-methods"${appSettings.compilationStrategy === "agentic-methods" ? " selected" : ""}>Agentic methods</option>
+                  ${renderCompilationStrategyOptions(appSettings.compilationStrategy)}
                 </select>
               </label>
               <div class="menu-separator" role="separator"></div>
@@ -4178,6 +4174,31 @@ function defaultAppSettings(): AppSettings {
   };
 }
 
+function renderCompilationStrategyOptions(selected: CompilationMode): string {
+  const stableOptions: Array<{ value: CompilationMode; label: string }> = [
+    { value: "auto", label: "Auto" },
+    { value: "parallel", label: "Parallel" },
+    { value: "sequential", label: "Sequential" },
+    { value: "agentic", label: "Agentic" },
+  ];
+  const experimentalOptions: Array<{ value: CompilationMode; label: string }> = [
+    { value: "parallel-methods", label: "Parallel methods" },
+    { value: "agentic-methods", label: "Agentic methods" },
+  ];
+  const options = shouldShowExperimentalCompilationStrategies(selected)
+    ? [...stableOptions, ...experimentalOptions]
+    : stableOptions;
+  return options.map((option) => {
+    return `<option value="${option.value}"${selected === option.value ? " selected" : ""}>${option.label}</option>`;
+  }).join("");
+}
+
+function shouldShowExperimentalCompilationStrategies(selected: CompilationMode): boolean {
+  return isExperimentalCompilationMode(selected) || window.localStorage.getItem(
+    experimentalCompilationStrategiesStorageKey,
+  ) === "true";
+}
+
 function compilationMode(value: unknown): CompilationMode {
   return value === "parallel" ||
     value === "parallel-methods" ||
@@ -4187,6 +4208,10 @@ function compilationMode(value: unknown): CompilationMode {
     value === "auto"
     ? value
     : "auto";
+}
+
+function isExperimentalCompilationMode(value: CompilationMode): boolean {
+  return value === "parallel-methods" || value === "agentic-methods";
 }
 
 window.loadLogosSession = loadSession;

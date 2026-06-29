@@ -6,6 +6,10 @@ import {
   type CompilationStrategy,
   type CompleteFunction,
 } from "./codeSheet";
+import {
+  isExperimentalCompilationStrategy,
+  isStableCompilationStrategy,
+} from "./compilationStrategies/types";
 
 export async function handleCompileStream(
   req: IncomingMessage,
@@ -59,16 +63,12 @@ export async function handleCompileStream(
 }
 
 function compileStrategy(strategy: unknown, experimentalParallelCompletions: unknown): CompilationStrategy {
-  if (strategy === "parallel" || strategy === "sequential" || strategy === "agentic") {
+  if (isStableCompilationStrategy(strategy)) {
     return strategy;
   }
 
-  if (strategy === "parallel-methods") {
-    return "parallel";
-  }
-
-  if (strategy === "agentic-methods") {
-    return "agentic";
+  if (isExperimentalCompilationStrategy(strategy)) {
+    return experimentalCompilePreviewStrategy(strategy);
   }
 
   if (strategy === "auto" || experimentalParallelCompletions === true) {
@@ -76,6 +76,10 @@ function compileStrategy(strategy: unknown, experimentalParallelCompletions: unk
   }
 
   return "sequential";
+}
+
+function experimentalCompilePreviewStrategy(strategy: "parallel-methods" | "agentic-methods"): CompilationStrategy {
+  return strategy === "agentic-methods" ? "agentic" : "parallel";
 }
 
 function toWireEvent(event: CompilationEvent): Record<string, unknown> {
