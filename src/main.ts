@@ -1694,8 +1694,8 @@ function registerLogosPythonLanguage(): void {
 function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
   const firstLine = snippet.snippet.trim().split("\n")[0] ?? "";
   if (snippet.kind === "natural") {
-    const inner = firstLine.replace(/^`|`$/g, "").trim();
-    return inner.length > 0 ? truncateLabel(inner) : "backtick snippet";
+    const inner = naturalSnippetLabelText(snippet.snippet);
+    return inner.length > 0 ? inner : "backtick snippet";
   }
 
   const functionMatch = firstLine.match(/^(?:async\s+)?(?:def|fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)/);
@@ -1709,6 +1709,24 @@ function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
   }
 
   return snippet.kind === "class" ? "class snippet" : "function snippet";
+}
+
+function naturalSnippetLabelText(snippet: string): string {
+  const body = snippet.trim().replace(/^```|```$/g, "").replace(/^`|`$/g, "");
+  const lines = body
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  const previewLines = lines
+    .slice(0, 2)
+    .map((line) => truncateText(line, 28));
+  const suffix = lines.length > previewLines.length ? "..." : "";
+  return truncateLabel(`${previewLines.join(", ")}${suffix}`);
 }
 
 function exactIncompleteSnippetForPosition(
@@ -1872,6 +1890,10 @@ function offsetToEditorPosition(lineStarts: number[], offset: number): { line: n
 
 function truncateLabel(label: string): string {
   return label.length <= 44 ? label : `${label.slice(0, 41)}...`;
+}
+
+function truncateText(text: string, maxLength: number): string {
+  return text.length <= maxLength ? text : `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function beginCodeRunResize(event: PointerEvent): void {

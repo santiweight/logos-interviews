@@ -546,7 +546,7 @@ h2 {
   position: relative;
   flex: 0 1 auto;
   width: max-content;
-  min-width: 118px;
+  min-width: 0;
   max-width: 190px;
   height: 29px;
   margin-right: 0;
@@ -624,6 +624,7 @@ h2 {
   position: absolute;
   top: 5px;
   right: 5px;
+  z-index: 3;
   display: grid;
   width: 18px;
   height: 18px;
@@ -641,6 +642,7 @@ h2 {
 }
 
 .source-tab-shell:hover .source-tab-close,
+.source-tab-shell:focus-within .source-tab-close,
 .source-tab-close:focus-visible {
   opacity: 1;
   pointer-events: auto;
@@ -655,8 +657,10 @@ h2 {
   color: var(--ink);
 }
 
-.source-tab:hover {
-  background: var(--paper);
+.source-tab-shell:hover .source-tab:not(.active),
+.source-tab-shell:focus-within .source-tab:not(.active) {
+  background: linear-gradient(180deg, #f4f1e9 0%, #ebe6db 100%);
+  color: var(--ink);
 }
 
 .source-tab-close:hover {
@@ -1395,7 +1399,7 @@ h2 {
 
 .monaco-editor .natural-snippet-inline {
   border-radius: 2px;
-  background-color: rgba(236, 78, 2, 0.018) !important;
+  background-color: transparent !important;
   cursor: pointer;
 }
 
