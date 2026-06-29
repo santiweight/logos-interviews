@@ -414,6 +414,11 @@ function stats(values: number[]): { min: number; mean: number; max: number } {
 }
 
 function completionTarget(prompt: string): string {
+  const agenticMarker = "Your job is to compile this worksheet into one complete Python file.";
+  if (prompt.includes(agenticMarker)) {
+    return "agentic file";
+  }
+
   const implementationMarker = "Your job is to finish the implementation of:";
   const naturalMarker = "Your job is to replace this natural-language Python fragment with valid Python code:";
   const marker = prompt.includes(implementationMarker) ? implementationMarker : naturalMarker;

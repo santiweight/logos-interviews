@@ -350,6 +350,22 @@ export async function* compile(
         continue;
       }
 
+      const synthesizedReplacement = synthesizeTopLevelClassFactory(parsed, snippet);
+      if (synthesizedReplacement !== null) {
+        codeCache.set(hash, synthesizedReplacement);
+        node.state = { kind: "complete", hash, snippet, implementation: synthesizedReplacement };
+        completions.push({ hash, snippet, replacement: synthesizedReplacement, cached: false });
+        completedSnippets += 1;
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+        continue;
+      }
+
       missing.push({
         node,
         hash,
@@ -741,6 +757,38 @@ async function collectCompletionResult(result: CompleteResult): Promise<string> 
 
 function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted ?? false;
+}
+
+function synthesizeTopLevelClassFactory(parsed: ParsedSheet, snippet: string): string | null {
+  const header = parseFunctionHeader(snippet.split("\n")[0]);
+  if (
+    header === null ||
+    header.indent.length > 0 ||
+    header.params.trim().length > 0 ||
+    header.returnType === undefined
+  ) {
+    return null;
+  }
+
+  const returnType = header.returnType.trim();
+  if (!/^[A-Z][A-Za-z0-9_]*$/.test(returnType)) {
+    return null;
+  }
+
+  const classDecl = parsed.classDecls.find((decl) => decl.name === returnType);
+  if (!classDecl || classDeclaresConstructor(classDecl)) {
+    return null;
+  }
+
+  const keyword = header.keyword ?? "def";
+  return `${header.indent}${header.asyncPrefix}${keyword} ${header.name}(${header.params}) -> ${returnType}:\n  return ${returnType}()`;
+}
+
+function classDeclaresConstructor(classDecl: ClassDecl): boolean {
+  return classDecl.snippet.split("\n").some((line) => {
+    const header = parseFunctionHeader(line);
+    return header !== null && header.indent.length > 0 && header.name === "__init__";
+  });
 }
 
 function incompleteSymbols(parsed: ParsedSheet, codeCache: CodeCache): Set<string> {
@@ -1819,6 +1867,8 @@ For a requested class, return only that class definition and its members. For a 
 Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
 Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
 Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
+When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
+When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
 Use normal Python. Prefer dataclasses and match statements for sum types.
 Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;

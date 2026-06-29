@@ -383,6 +383,8 @@ def test():
       Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
       Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
+      When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
+      When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -409,6 +411,8 @@ def test():
       Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
       Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
+      When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
+      When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -443,6 +447,8 @@ def test():
       Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
       Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
+      When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
+      When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -2417,6 +2423,87 @@ def gen_magic_square():
       ok: true,
       stdout: ["2"],
     });
+  });
+
+  it("agentic strategy edits the whole file and retries after runtime feedback", async () => {
+    const prompts: string[] = [];
+    const result = await runCodeSheet(sheet, "test", {
+      compilationStrategy: "agentic",
+      agenticMaxIterations: 3,
+      complete(prompt) {
+        prompts.push(prompt);
+        if (prompts.length === 1) {
+          return JSON.stringify({
+            tool: "replace_file",
+            source: `def add(x: int, y: int) -> int:
+  raise RuntimeError("bad draft")
+
+def test():
+  print(add(1, 2))`,
+          });
+        }
+
+        return JSON.stringify({
+          tool: "replace_file",
+          source: `def add(x: int, y: int) -> int:
+  return x + y
+
+def test():
+  print(add(1, 2))`,
+        });
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["3"],
+    });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("bad draft");
+  });
+
+  it("synthesizes zero-argument class factories without skipping parameterized factories", async () => {
+    const factorySheet = `class IsoScene:
+  def render(self) -> str
+
+def cube_stack() -> IsoScene
+
+def julia(seed: str = "dragon") -> IsoScene
+
+def test():
+  print(cube_stack().render())
+  print(julia().render())`;
+    const targets: string[] = [];
+    const completed = await completeSheet(
+      new Map(),
+      factorySheet,
+      (prompt) => {
+        const target = completionPromptTarget(prompt);
+        if (target.includes("def cube_stack(")) {
+          throw new Error("zero-argument factory should be synthesized");
+        }
+
+        if (target.includes("class IsoScene:")) {
+          targets.push("class");
+          return `class IsoScene:
+  def render(self) -> str:
+    return "ok"`;
+        }
+
+        if (target.includes("def julia(")) {
+          targets.push("julia");
+          return `def julia(seed: str = "dragon") -> IsoScene:
+  return IsoScene()`;
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+      { strategy: "parallel" },
+    );
+
+    expect([...targets].sort()).toEqual(["class", "julia"]);
+    expect(completed.source).toContain(`def cube_stack() -> IsoScene:
+  return IsoScene()`);
   });
 
   it("auto strategy commits only the first successful strategy cache fork", async () => {
