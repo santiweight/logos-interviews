@@ -122,7 +122,7 @@ async function completeOpenAICompatible(options: {
     },
     body: JSON.stringify({
       model: options.model,
-      temperature: 0,
+      ...temperatureParams(options.model),
       ...(usesMaxCompletionTokens(options.model)
         ? { max_completion_tokens: 4096 }
         : { max_tokens: 4096 }),
@@ -161,7 +161,7 @@ async function completeOpenAIResponses(options: {
     body: JSON.stringify({
       model: options.model,
       input: options.prompt,
-      temperature: 0,
+      ...temperatureParams(options.model),
       max_output_tokens: 4096,
     }),
   });
@@ -203,6 +203,10 @@ function isProviderKind(value: string): value is ProviderKind {
 
 function usesMaxCompletionTokens(model: string): boolean {
   return /^(?:gpt-5|o[0-9])/.test(model);
+}
+
+function temperatureParams(model: string): { temperature?: number } {
+  return /^(?:gpt-5|o[0-9])/.test(model) ? {} : { temperature: 0 };
 }
 
 function splitOnce(source: string, delimiter: string): [string, string | undefined] {
