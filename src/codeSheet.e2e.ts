@@ -517,6 +517,157 @@ def test():
 });
 
 describe("codeSheet definition syntax evals", () => {
+  it("runs the rendered formula spreadsheet sample without crashing", async () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "formula spreadsheet strings and rendering");
+    expect(testCase).toBeDefined();
+    if (!testCase) {
+      return;
+    }
+    const stdoutCheck = testCase.stdoutCheck;
+    expect(stdoutCheck).toBeDefined();
+    if (!stdoutCheck) {
+      return;
+    }
+
+    const result = await runCodeSheet(testCase.sheet, testCase.runnable, {
+      complete(prompt) {
+        if (prompt.includes("Your job is to finish the implementation of:")) {
+          const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+          if (target.includes("def parse_expr")) {
+            return `def parse_expr(source) -> Expr | None:
+  source = source.strip()
+  if source.endswith(")") and source.count(")") > source.count("("):
+    source = source[:-1].strip()
+  if source.isdigit():
+    return Val(int(source))
+  if source == "2 + 3":
+    return BinOp(Add(), Val(2), Val(3))
+  if source == "(B1 + A1) * 4":
+    return BinOp(Mul(), BinOp(Add(), Cell("B", 1), Cell("A", 1)), Val(4))
+  if source and source[0].isalpha():
+    col, row = c(source)
+    return Cell(col, row)
+  return None`;
+          }
+
+          if (target.includes("def pretty_expr")) {
+            return `def pretty_expr(expr) -> str:
+  if expr is None:
+    return ""
+  if isinstance(expr, Val):
+    return str(expr.value)
+  if isinstance(expr, Cell):
+    return f"{expr.col}{expr.row}"
+  symbol = {Add: "+", Sub: "-", Mul: "*", Div: "/"}[type(expr.op)]
+  return f"({pretty_expr(expr.left)} {symbol} {pretty_expr(expr.right)})"`;
+          }
+
+          if (target.includes("def c")) {
+            return `def c(source) -> CellAddress:
+  source = source.strip().upper()
+  col = "".join(ch for ch in source if ch.isalpha())
+  row = int("".join(ch for ch in source if ch.isdigit()))
+  return (col, row)`;
+          }
+
+          if (target.includes("class SpreadsheetResult:")) {
+            return `class SpreadsheetResult:
+  sheet: Spreadsheet
+  cache: [[int]]
+
+  def __init__(self, sheet: Spreadsheet) -> None:
+    self.sheet = sheet
+    self.cache = {}
+
+  def eval(self, cell: CellAddress) -> int | EvalError | None:
+    return self.eval_inner([], cell)
+
+  def eval_inner(self, stack: list, cell: CellAddress) -> int | EvalError | None:
+    if cell in self.cache:
+      return self.cache[cell]
+    if cell in stack:
+      return RecursiveError(stack + [cell])
+    expr = self.sheet.get(cell)
+    if expr is None:
+      return None
+    value = self._eval_expr(expr, stack + [cell])
+    if isinstance(value, (RecursiveError, DivByZero)):
+      return value
+    self.cache[cell] = value
+    return value
+
+  def _eval_expr(self, expr, stack):
+    if isinstance(expr, Val):
+      return expr.value
+    if isinstance(expr, Cell):
+      return self.eval_inner(stack, (expr.col, expr.row))
+    left = self._eval_expr(expr.left, stack)
+    if isinstance(left, (RecursiveError, DivByZero)):
+      return left
+    right = self._eval_expr(expr.right, stack)
+    if isinstance(right, (RecursiveError, DivByZero)):
+      return right
+    if isinstance(expr.op, Add):
+      return left + right
+    if isinstance(expr.op, Sub):
+      return left - right
+    if isinstance(expr.op, Mul):
+      return left * right
+    if right == 0:
+      return DivByZero()
+    return left // right`;
+          }
+
+          if (target.includes("class Spreadsheet:")) {
+            return `class Spreadsheet:
+  cells: [[Expr]]
+
+  def __init__(self) -> None:
+    self.cells = {}
+
+  def get(self, cell: CellAddress) -> Expr | None:
+    col, row = cell
+    return self.cells.get(col, {}).get(row)
+
+  def set(self, cell: CellAddress, expr: str) -> None:
+    col, row = cell
+    parsed = parse_expr(expr)
+    if parsed is not None:
+      self.cells.setdefault(col, {})[row] = parsed
+
+  def eval(self) -> SpreadsheetResult:
+    return SpreadsheetResult(self)`;
+          }
+        }
+
+        if (prompt.includes("unevaluated expressions")) {
+          return `print("+------+----------------+")
+print("| cell | expr           |")
+for col in sorted(sheet.cells):
+  for row in sorted(sheet.cells[col]):
+    print(f"| {col}{row}   | {pretty_expr(sheet.cells[col][row]):<14} |")
+print("+------+----------------+")
+print("+------+-------+")
+print("| cell | value |")
+result = sheet.eval()
+for col in sorted(sheet.cells):
+  for row in sorted(sheet.cells[col]):
+    print(f"| {col}{row}   | {result.eval((col, row)):<5} |")
+print("+------+-------+")`;
+        }
+
+        return `print("+-------+")
+print("| empty |")
+print("+-------+")`;
+      },
+    });
+
+    if (!result.ok) {
+      throw new Error(`${result.error}\n\n${result.completed.source}`);
+    }
+    expect(stdoutCheck.matches(result.stdout)).toBe(true);
+  });
+
   it("documents the current broken behavior when a natural snippet names a class generically", async () => {
     const sheet = `class MagicSquare:
   size: int

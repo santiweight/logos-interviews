@@ -534,6 +534,9 @@ type EvalError = RecursiveError(list) | DivByZero
 type CellAddress = (str, int)
 
 def parse_expr(str) -> Expr | None
+
+def pretty_expr(expr) -> str
+
 def c(str) -> CellAddress
 
 class Spreadsheet:
@@ -554,13 +557,19 @@ class SpreadsheetResult:
 
 def test():
   sheet = Spreadsheet()
+  \`render + print sheet\`
   print(sheet.get(c("A1")))
   sheet.set(c("A1"), "7")
   print(sheet.get(c("A1")))
   sheet.set(c("B1"), "2 + 3")
   print(sheet.eval().eval(c("B1")))
   sheet.set(c("C1"), "(B1 + A1) * 4)")
-  print(sheet.eval().eval(c("C1")))`,
+  print(sheet.eval().eval(c("C1")))
+  \`\`\`
+  render + print sheet as unevaluated expressions and then as an excel-like table
+  print as pretty tables
+  use pretty_expr
+  \`\`\``,
       },
       {
         id: "sudoku-state",
@@ -1121,10 +1130,14 @@ def main():
   },
   {
     sampleId: "formula-spreadsheet",
-    name: "formula spreadsheet strings",
+    name: "formula spreadsheet strings and rendering",
     sheet: sampleById("formula-spreadsheet").code,
     runnable: "test",
-    expectedStdout: ["None", "Val(value=7)", "5", "48"],
+    stdoutCheck: {
+      description:
+        "prints the core spreadsheet results and at least one rendered table-like view with cell addresses",
+      matches: isRenderedSpreadsheetStdout,
+    },
   },
   {
     sampleId: "formula-spreadsheet",
@@ -1209,6 +1222,27 @@ function withMain(sampleId: string, mainSource: string): CodeSheet {
   }
 
   return `${code.slice(0, markerIndex)}\n\n${mainSource}`;
+}
+
+function isRenderedSpreadsheetStdout(stdout: string[]): boolean {
+  const coreOutputs = ["None", /^Val\b.*7/, "5", "48"];
+  let cursor = 0;
+  for (const line of stdout) {
+    if (cursor >= coreOutputs.length) {
+      break;
+    }
+    const expected = coreOutputs[cursor];
+    if (typeof expected === "string" ? line === expected : expected.test(line)) {
+      cursor += 1;
+    }
+  }
+
+  const joined = stdout.join("\n");
+  const hasFormulaCells = ["A1", "B1", "C1"].every((address) => joined.includes(address));
+  const hasPrettyFormula = /2\s*\+\s*3/.test(joined) && /B1\s*\+\s*A1/.test(joined);
+  const tableLikeRows = stdout.filter((line) => /[|+]/.test(line) && /\S/.test(line)).length;
+
+  return cursor === coreOutputs.length && hasFormulaCells && hasPrettyFormula && tableLikeRows >= 2;
 }
 
 function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {

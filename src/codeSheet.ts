@@ -1753,7 +1753,18 @@ function normalizeSnippet(
     return fallbackIndex < 0 ? unfenced.trimEnd() : extractTopLevelDefinitions(lines, fallbackIndex);
   }
 
+  if (requestedFunctionNames(requestedSnippet).length > 1) {
+    return extractTopLevelDefinitions(lines, startOfDefinitionWithImportsAndDecorators(lines, definitionIndex));
+  }
+
   return extractSingleTopLevelDefinition(lines, definitionIndex);
+}
+
+function requestedFunctionNames(snippet: string): string[] {
+  return snippet
+    .split("\n")
+    .map((line) => parseFunctionHeader(line.trimStart())?.name)
+    .filter((name): name is string => name !== undefined);
 }
 
 function dedentLines(lines: string[]): string[] {
