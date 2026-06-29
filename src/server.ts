@@ -9,6 +9,7 @@ import type { CodeCache } from "./codeSheet";
 import { runCodeSheet } from "./codeSheetRunner";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
+import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 const codeCache: CodeCache = new Map();
@@ -85,6 +86,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/feedback") {
       await handleFeedback(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/shared-sessions" || url.pathname.startsWith("/api/shared-sessions/")) {
+      await handleSharedSessions(req, res);
       return;
     }
 

@@ -57,6 +57,63 @@ type RunStatus =
   | { state: "running" }
   | { state: "exited"; code: number | null; signal: string | null; error?: string };
 
+export type LoadableSessionSourceTab = SourceTab;
+
+export type LoadableSessionRunTab = {
+  id: string;
+  runnable: Runnable;
+  sourceHash: string;
+  terminalText: string;
+  implementation: string;
+  status: RunStatus | null;
+};
+
+export type LoadableSessionSelection =
+  | { kind: "snippet"; hash: string | null }
+  | { kind: "definition"; line: number; name: string; targetKind: "function" | "class" }
+  | { kind: "whole-file" }
+  | { kind: "none" };
+
+export type LoadableSession = {
+  schemaVersion: 1;
+  capturedAt: string;
+  sessionId: string;
+  workspaceId: string;
+  sourceTabs: LoadableSessionSourceTab[];
+  activeSourceTabId: string | null;
+  editor: {
+    value: string;
+    cursor: { lineNumber: number; column: number } | null;
+    scrollTop: number;
+    scrollLeft: number;
+  };
+  compilation: {
+    compileVersion: number;
+    latestImplementationSource: string;
+    selection: LoadableSessionSelection;
+  };
+  run: {
+    activeToolTabId: string | null;
+    lastRunLabel: string;
+    lastRunStatusText: string;
+    lastRunDefinitionHash: string | null;
+    runStatus: { text: string; state: string };
+    tabs: LoadableSessionRunTab[];
+  };
+  agent: {
+    expanded: boolean;
+    input: string;
+    messages: AgentChatMessage[];
+  };
+};
+
+declare global {
+  interface Window {
+    loadLogosSession?: (session: LoadableSession) => Promise<void>;
+    createLogosSessionBundle?: () => LoadableSession;
+  }
+}
+
 type InteractiveRunStartResponse = {
   ok: true;
   sessionId: string;
@@ -78,6 +135,7 @@ const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
+const workspaceIdStorageKey = "logos-interviews-workspace-id";
 const staleDefaultProjectIdSets = [
   [
     "notification-retries",
@@ -132,13 +190,25 @@ const thumbDownIcon = `
     <path d="M6.2 4.8h6.7c.8 0 1.5.5 1.7 1.3l1.1 4.9c.2.9-.5 1.7-1.4 1.7h-3.1v3.2c0 .9-1.2 1.2-1.6.4l-3.4-6.3z" />
   </svg>
 `;
+const shareIcon = `
+  <svg class="feedback-icon share-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M7.3 10.6 5.8 12c-1 1-1 2.7 0 3.7s2.7 1 3.7 0l2-2" />
+    <path d="M12.7 9.4 14.2 8c1-1 1-2.7 0-3.7s-2.7-1-3.7 0l-2 2" />
+    <path d="m8 12 4-4" />
+  </svg>
+`;
 const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
 
-function renderFeedbackControls(panel: string): string {
+function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
   return `
     <div class="feedback-controls" data-feedback-controls="${panel}" aria-label="${panel} feedback">
       <span class="feedback-receipt" data-feedback-receipt aria-live="polite"></span>
+      ${options.includeShare
+        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share current session" title="Share">
+          ${shareIcon}
+        </button>`
+        : ""}
       <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="up" aria-label="Mark ${panel} helpful" title="Helpful">
         ${thumbUpIcon}
       </button>
@@ -219,7 +289,7 @@ app.innerHTML = `
         </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
         <div class="code-feedback-overlay">
-          ${renderFeedbackControls("code")}
+          ${renderFeedbackControls("code", { includeShare: true })}
         </div>
         <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
           <div
@@ -486,8 +556,13 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
 
 const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
 let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
+let isLoadingSession = false;
 
 editor.onDidChangeModelContent(() => {
+  if (isLoadingSession) {
+    return;
+  }
+
   const active = activeSourceTab();
   if (active) {
     active.source = editor.getValue();
@@ -571,8 +646,15 @@ resetWorkspaceButton.addEventListener("click", () => {
   void resetWorkspace();
 });
 app.addEventListener("click", (event) => {
-  const button = (event.target instanceof Element)
-    ? event.target.closest<HTMLButtonElement>("[data-feedback-rating]")
+  const target = event.target instanceof Element ? event.target : null;
+  const shareButton = target?.closest<HTMLButtonElement>("[data-share-session]") ?? null;
+  if (shareButton) {
+    void shareCurrentSessionFromButton(shareButton);
+    return;
+  }
+
+  const button = target
+    ? target.closest<HTMLButtonElement>("[data-feedback-rating]")
     : null;
   if (!button) {
     return;
@@ -696,7 +778,7 @@ renderSourceTabs();
 renderAgentLog();
 updateShellResizeHandles();
 scheduleCompilation(0);
-void hydrateSourceTabsFromDatabase();
+void bootWorkspace();
 
 const shellResizeObserver = new ResizeObserver(() => {
   updateShellResizeHandles();
@@ -991,6 +1073,11 @@ async function hydrateSourceTabsFromDatabase(): Promise<void> {
   activeSourceTabId = loadedState.activeTabId;
   applyActiveSourceTab();
   renderSourceTabs();
+}
+
+async function bootWorkspace(): Promise<void> {
+  await hydrateSourceTabsFromDatabase();
+  await loadSharedSessionFromUrl();
 }
 
 async function loadSourceTabState(): Promise<SourceTabState> {
@@ -2378,13 +2465,7 @@ async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void
     ? Array.from(controls.querySelectorAll<HTMLButtonElement>("[data-feedback-rating]"))
     : [button];
   const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
-  if (controls) {
-    const existingTimer = feedbackResetTimers.get(controls);
-    if (existingTimer !== undefined) {
-      window.clearTimeout(existingTimer);
-      feedbackResetTimers.delete(controls);
-    }
-  }
+  clearFeedbackResetTimer(controls);
   buttons.forEach((item) => {
     item.disabled = true;
     item.dataset.state = item === button ? "sent" : "";
@@ -2435,15 +2516,85 @@ async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void
   }
 }
 
+async function shareCurrentSessionFromButton(button: HTMLButtonElement): Promise<void> {
+  if (button.disabled) {
+    return;
+  }
+
+  const controls = button.closest<HTMLElement>("[data-feedback-controls]");
+  const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
+  clearFeedbackResetTimer(controls);
+  button.disabled = true;
+  button.dataset.state = "sending";
+  if (receipt) {
+    receipt.textContent = "Sharing";
+    receipt.dataset.state = "sending";
+  }
+
+  sessionCapture.track("share_session_requested", undefined, true);
+
+  try {
+    const result = await sendSharedSessionViaDevApi();
+    const shareUrl = shareUrlForId(result.shareId);
+    await copyTextToClipboard(shareUrl);
+    button.disabled = false;
+    button.dataset.state = "sent";
+    button.title = "Share link copied";
+    if (receipt) {
+      receipt.textContent = "Link copied";
+      receipt.dataset.state = "sent";
+    }
+
+    const resetTimer = window.setTimeout(() => {
+      button.dataset.state = "";
+      button.title = "Share";
+      if (receipt) {
+        receipt.textContent = "";
+        receipt.dataset.state = "";
+      }
+      if (controls) {
+        feedbackResetTimers.delete(controls);
+      }
+    }, 3600);
+    if (controls) {
+      feedbackResetTimers.set(controls, resetTimer);
+    }
+
+    sessionCapture.track("share_session_created", { shareId: result.shareId, url: shareUrl }, true);
+  } catch (error) {
+    button.disabled = false;
+    button.dataset.state = "error";
+    button.title = error instanceof Error ? error.message : "Share failed";
+    if (receipt) {
+      receipt.textContent = "Share failed";
+      receipt.dataset.state = "error";
+    }
+  }
+}
+
+function clearFeedbackResetTimer(controls: HTMLElement | null | undefined): void {
+  if (!controls) {
+    return;
+  }
+
+  const existingTimer = feedbackResetTimers.get(controls);
+  if (existingTimer !== undefined) {
+    window.clearTimeout(existingTimer);
+    feedbackResetTimers.delete(controls);
+  }
+}
+
 async function sendFeedbackViaDevApi(
   panel: string,
   rating: "up" | "down",
 ): Promise<{ ok: true; feedbackId: string }> {
+  const loadableSession = createLoadableSession();
   const body = {
     sessionId: sessionCapture.sessionId,
     panel,
     rating,
     url: window.location.href,
+    loadableSession,
     state: appSnapshot(),
   };
 
@@ -2463,6 +2614,56 @@ async function sendFeedbackViaDevApi(
   }
 
   return { ok: true, feedbackId: payload.feedbackId };
+}
+
+async function sendSharedSessionViaDevApi(): Promise<{ ok: true; shareId: string }> {
+  const response = await fetch("/api/shared-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ loadableSession: createLoadableSession() }),
+  });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    shareId?: string;
+    error?: string;
+  };
+
+  if (!response.ok || payload.ok !== true || typeof payload.shareId !== "string") {
+    throw new Error(payload.error ?? "Share request failed");
+  }
+
+  return { ok: true, shareId: payload.shareId };
+}
+
+function shareUrlForId(shareId: string): string {
+  const url = new URL(window.location.href);
+  url.searchParams.set("session", shareId);
+  url.hash = "";
+  return url.toString();
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the selection-based copy path below.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) {
+    throw new Error("Could not copy share link");
+  }
 }
 
 async function startInteractiveRunViaDevApi(
@@ -2837,6 +3038,301 @@ function setActiveTab(tab: ToolTabId): void {
   activeToolTabId = tab && runTabById(tab) ? tab : null;
   renderRunTabs();
 }
+
+export function createLoadableSession(): LoadableSession {
+  syncActiveSourceTab();
+  const position = editor.getPosition();
+
+  return {
+    schemaVersion: 1,
+    capturedAt: new Date().toISOString(),
+    sessionId: sessionCapture.sessionId,
+    workspaceId: getOrCreateWorkspaceId(),
+    sourceTabs: sourceTabs.map((tab) => ({ ...tab })),
+    activeSourceTabId,
+    editor: {
+      value: editor.getValue(),
+      cursor: position === null
+        ? null
+        : {
+            lineNumber: position.lineNumber,
+            column: position.column,
+          },
+      scrollTop: editor.getScrollTop(),
+      scrollLeft: editor.getScrollLeft(),
+    },
+    compilation: {
+      compileVersion,
+      latestImplementationSource,
+      selection: currentLoadableSelection(),
+    },
+    run: {
+      activeToolTabId,
+      lastRunLabel,
+      lastRunStatusText,
+      lastRunDefinitionHash,
+      runStatus: {
+        text: runStatus.textContent ?? "",
+        state: runStatus.dataset.state ?? "",
+      },
+      tabs: runTabs.map((tab) => ({
+        id: tab.id,
+        runnable: tab.runnable,
+        sourceHash: tab.sourceHash,
+        terminalText: tab.terminalText,
+        implementation: tab.implementation,
+        status: tab.status,
+      })),
+    },
+    agent: {
+      expanded: agentExpanded,
+      input: agentInput.value,
+      messages: agentMessages.map((message) => ({ ...message })),
+    },
+  };
+}
+
+export async function loadSession(session: LoadableSession): Promise<void> {
+  if (!isLoadableSession(session)) {
+    throw new Error("Invalid loadable session");
+  }
+
+  isLoadingSession = true;
+  try {
+    compileController?.abort();
+    compileController = null;
+    if (compileTimer) {
+      clearTimeout(compileTimer);
+      compileTimer = null;
+    }
+    if (editorCaptureTimer) {
+      clearTimeout(editorCaptureTimer);
+      editorCaptureTimer = null;
+    }
+
+    closeAllRunTabs();
+    const restoredState = normalizeSourceTabState({
+      tabs: session.sourceTabs.map((tab) => ({ ...tab })),
+      activeTabId: session.activeSourceTabId,
+    });
+    sourceTabs = restoredState.tabs;
+    activeSourceTabId = restoredState.activeTabId;
+
+    const active = activeSourceTab();
+    editor.setValue(active?.source ?? session.editor.value);
+    latestImplementationSource = session.compilation.latestImplementationSource || editor.getValue();
+    compileVersion = Math.max(compileVersion + 1, session.compilation.compileVersion);
+    lastRunLabel = session.run.lastRunLabel;
+    lastRunStatusText = session.run.lastRunStatusText;
+    lastRunDefinitionHash = session.run.lastRunDefinitionHash;
+    runStatus.textContent = session.run.runStatus.text;
+    runStatus.dataset.state = session.run.runStatus.state;
+    agentMessages = session.agent.messages.map((message) => ({ ...message }));
+    agentInput.value = session.agent.input;
+    setAgentExpanded(session.agent.expanded);
+
+    runTabs = session.run.tabs.map((tab) => ({
+      id: tab.id,
+      runnable: tab.runnable,
+      sessionId: null,
+      sourceHash: tab.sourceHash,
+      terminalText: tab.terminalText,
+      implementation: tab.implementation,
+      status: restoredRunStatus(tab.status),
+      pollTimer: null,
+    }));
+    activeToolTabId = runTabs.some((tab) => tab.id === session.run.activeToolTabId)
+      ? session.run.activeToolTabId
+      : runTabs[0]?.id ?? null;
+
+    renderSourceTabs();
+    renderRunTabs();
+    updateEditorAvailability();
+    updateActiveProjectMenuItem();
+    updateTypeCheckMarkers([]);
+    updateReadinessDecorations(localReadiness(editor.getValue()));
+    updateRunStaleness(editor.getValue());
+    refreshIncompleteSnippets(editor.getValue());
+    restoreLoadableSelection(session.compilation.selection);
+    renderSnippetPanel();
+    renderAgentLog("Session loaded");
+
+    if (session.editor.cursor) {
+      editor.setPosition(session.editor.cursor);
+      editor.revealPositionInCenterIfOutsideViewport(session.editor.cursor);
+    }
+    editor.setScrollTop(session.editor.scrollTop);
+    editor.setScrollLeft(session.editor.scrollLeft);
+    scheduleSaveSourceTabs();
+
+    sessionCapture.track("load_session", {
+      restoredSessionId: session.sessionId,
+      workspaceId: session.workspaceId,
+      capturedAt: session.capturedAt,
+    }, true);
+  } finally {
+    isLoadingSession = false;
+  }
+}
+
+async function loadSharedSessionFromUrl(): Promise<void> {
+  const shareId = new URLSearchParams(window.location.search).get("session");
+  if (!shareId) {
+    return;
+  }
+
+  try {
+    const session = await fetchSharedSessionViaDevApi(shareId);
+    await loadSession(session);
+    sessionCapture.track("shared_session_loaded", { shareId }, true);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runStatus.textContent = `Could not load shared session: ${message}`;
+    runStatus.dataset.state = "error";
+    sessionCapture.track("shared_session_load_failed", { shareId, error: message }, true);
+  }
+}
+
+async function fetchSharedSessionViaDevApi(shareId: string): Promise<LoadableSession> {
+  const response = await fetch(`/api/shared-sessions/${encodeURIComponent(shareId)}`);
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    loadableSession?: unknown;
+    error?: string;
+  };
+
+  if (!response.ok || payload.ok !== true || !isLoadableSession(payload.loadableSession)) {
+    throw new Error(payload.error ?? "Shared session request failed");
+  }
+
+  return payload.loadableSession;
+}
+
+function currentLoadableSelection(): LoadableSessionSelection {
+  if (selectedDefinitionTarget !== null) {
+    return {
+      kind: "definition",
+      line: selectedDefinitionTarget.line,
+      name: selectedDefinitionTarget.name,
+      targetKind: selectedDefinitionTarget.kind,
+    };
+  }
+
+  if (selectedWholeFileImplementation) {
+    return { kind: "whole-file" };
+  }
+
+  if (selectedSnippetHash !== null) {
+    return { kind: "snippet", hash: selectedSnippetHash };
+  }
+
+  return { kind: "none" };
+}
+
+function restoreLoadableSelection(selection: LoadableSessionSelection): void {
+  selectedDefinitionTarget = null;
+  selectedWholeFileImplementation = false;
+  selectedSnippetHash = null;
+
+  if (selection.kind === "snippet" && selection.hash && incompleteSnippetByHash.has(selection.hash)) {
+    selectedSnippetHash = selection.hash;
+  } else if (selection.kind === "whole-file") {
+    selectedWholeFileImplementation = true;
+  } else if (selection.kind === "definition") {
+    const target = implementationTargetAtLine(editor.getValue(), selection.line);
+    if (
+      target !== null &&
+      target.kind === selection.targetKind &&
+      target.name === selection.name
+    ) {
+      selectedDefinitionTarget = target;
+    }
+  }
+
+  updateSelectedDefinitionDecorations();
+  updateIncompleteSnippetDecorations();
+}
+
+function restoredRunStatus(status: RunStatus | null): RunStatus | null {
+  if (status?.state !== "running") {
+    return status;
+  }
+
+  return {
+    state: "exited",
+    code: null,
+    signal: null,
+    error: "Run was in progress when the session was captured and was not resumed.",
+  };
+}
+
+function isLoadableSession(value: unknown): value is LoadableSession {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const session = value as LoadableSession;
+  return (
+    session.schemaVersion === 1 &&
+    typeof session.capturedAt === "string" &&
+    typeof session.sessionId === "string" &&
+    typeof session.workspaceId === "string" &&
+    Array.isArray(session.sourceTabs) &&
+    isSourceTabState({ tabs: session.sourceTabs, activeTabId: session.activeSourceTabId }) &&
+    typeof session.editor === "object" &&
+    session.editor !== null &&
+    typeof session.editor.value === "string" &&
+    typeof session.compilation === "object" &&
+    session.compilation !== null &&
+    typeof session.compilation.latestImplementationSource === "string" &&
+    isLoadableSessionSelection(session.compilation.selection) &&
+    typeof session.run === "object" &&
+    session.run !== null &&
+    Array.isArray(session.run.tabs) &&
+    typeof session.agent === "object" &&
+    session.agent !== null &&
+    Array.isArray(session.agent.messages)
+  );
+}
+
+function isLoadableSessionSelection(value: unknown): value is LoadableSessionSelection {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const selection = value as LoadableSessionSelection;
+  return (
+    selection.kind === "none" ||
+    selection.kind === "whole-file" ||
+    (selection.kind === "snippet" && (typeof selection.hash === "string" || selection.hash === null)) ||
+    (
+      selection.kind === "definition" &&
+      typeof selection.line === "number" &&
+      typeof selection.name === "string" &&
+      (selection.targetKind === "function" || selection.targetKind === "class")
+    )
+  );
+}
+
+function getOrCreateWorkspaceId(): string {
+  try {
+    const existing = window.localStorage.getItem(workspaceIdStorageKey);
+    if (existing) {
+      return existing;
+    }
+
+    const next = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem(workspaceIdStorageKey, next);
+    return next;
+  } catch {
+    return `workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+window.loadLogosSession = loadSession;
+window.createLogosSessionBundle = createLoadableSession;
 
 function appSnapshot(): JsonObject {
   const position = editor.getPosition();

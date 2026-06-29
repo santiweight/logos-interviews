@@ -8,6 +8,7 @@ type FeedbackPayload = {
   panel?: unknown;
   rating?: unknown;
   url?: unknown;
+  loadableSession?: unknown;
   state?: unknown;
 };
 
@@ -88,6 +89,7 @@ function normalizePayload(
     panel: payload.panel,
     rating: payload.rating,
     url: typeof payload.url === "string" ? payload.url : null,
+    loadableSession: sanitizeJson(payload.loadableSession),
     request: {
       userAgent: req.headers["user-agent"] ?? null,
       forwardedFor: req.headers["x-forwarded-for"] ?? null,
