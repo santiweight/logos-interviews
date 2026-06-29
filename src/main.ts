@@ -19,6 +19,7 @@ import {
   type Runnable,
   type SnippetHash,
 } from "./codeSheet";
+import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import {
   defaultProjectIds,
@@ -2874,7 +2875,7 @@ function renderRunTab(tab: RunTab): void {
   panel.classList.toggle("active", activeToolTabId === tab.id);
   panel.classList.toggle("terminal-running", running);
   if (output) {
-    output.textContent = tab.terminalText;
+    renderAnsiTerminalText(output, tab.terminalText);
   }
   if (form) {
     form.hidden = !running;

@@ -981,6 +981,21 @@ def test():
   },
   {
     sampleId: "starter-arithmetic",
+    name: "ansi green terminal output",
+    sheet: `def main():
+  \`\`\`
+  print a green 8
+  \`\`\``,
+    runnable: "main",
+    stdoutCheck: {
+      description: "prints 8 wrapped in an ANSI green SGR sequence",
+      matches(stdout) {
+        return stdout.length === 1 && /^\x1b\[(?:0;)?(?:32|92)m8\x1b\[0m$/.test(stdout[0] ?? "");
+      },
+    },
+  },
+  {
+    sampleId: "starter-arithmetic",
     name: "starter arithmetic definitions and natural snippets",
     sheet: `def add(x: int, y: int) -> int
 

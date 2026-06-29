@@ -191,6 +191,9 @@ export type LogosAnnotationContext = {
   promptGuidance: string;
 };
 
+const pythonCompletionRuntimePolicy = `Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.`;
+
 export type ClassDecl = {
   name: string;
   line: number;
@@ -2032,6 +2035,7 @@ ${snippet}
 Return only the replacement code for the fragment, without backticks or fences.
 ${naturalPolicy}${annotationBlock}
 If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+${pythonCompletionRuntimePolicy}
 Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
   }
 
@@ -2050,6 +2054,7 @@ Do not add sibling top-level definitions that are not already in the requested s
 For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
 Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
 Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
+${pythonCompletionRuntimePolicy}
 Use normal Python. Prefer dataclasses and match statements for sum types.
 ${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
