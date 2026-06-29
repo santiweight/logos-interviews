@@ -1616,6 +1616,62 @@ class Unused:
     });
   });
 
+  it("preserves top-level helper functions returned with class completions", async () => {
+    const completed = await completeSheet(
+      new Map(),
+      `class Greeter:
+  def greet(self, name: str) -> str
+
+def test():
+  print(Greeter().greet("Ada"))
+  print(shout("bye"))`,
+      () => `def prefix() -> str:
+  return "Hello"
+
+class Greeter:
+  def greet(self, name: str) -> str:
+    return f"{prefix()}, {name}"
+
+def shout(message: str) -> str:
+  return message.upper()`,
+    );
+
+    expect(completed.source).toContain("def prefix() -> str:");
+    expect(completed.source).toContain("class Greeter:");
+    expect(completed.source).toContain("def shout(message: str) -> str:");
+    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
+      ok: true,
+      stdout: ["Hello, Ada", "BYE"],
+    });
+  });
+
+  it("preserves top-level helper functions returned with function completions", async () => {
+    const completed = await completeSheet(
+      new Map(),
+      `def greet(name: str) -> str
+
+def test():
+  print(greet("Ada"))
+  print(shout("bye"))`,
+      () => `def prefix() -> str:
+  return "Hello"
+
+def greet(name: str) -> str:
+  return f"{prefix()}, {name}"
+
+def shout(message: str) -> str:
+  return message.upper()`,
+    );
+
+    expect(completed.source).toContain("def prefix() -> str:");
+    expect(completed.source).toContain("def greet(name: str) -> str:");
+    expect(completed.source).toContain("def shout(message: str) -> str:");
+    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
+      ok: true,
+      stdout: ["Hello, Ada", "BYE"],
+    });
+  });
+
   it("supports natural-language backtick expressions anywhere", async () => {
     const cache: CodeCache = new Map();
     const calls: string[] = [];
@@ -1792,6 +1848,106 @@ math.sqrt(5)`;
         print(sum(candidate for candidate in range(2, 50) if all(candidate % divisor != 0 for divisor in range(2, candidate))))",
       }
     `);
+  });
+
+  it("injects logos debug print annotation context into natural block completion prompts", async () => {
+    const calls: string[] = [];
+    const annotatedSheet = [
+      "@logos.debug.print()",
+      "def test():",
+      "  ```",
+      "  define a sheet",
+      "  A1 -> None",
+      "  A1 = 7",
+      "  A1 -> 7",
+      "  ```",
+    ].join("\n");
+
+    const completed = await completeSheet(new Map(), annotatedSheet, (prompt) => {
+      calls.push(prompt);
+      expect(prompt).toContain("This is a triple-backtick natural-language block.");
+      expect(prompt).toContain("Apply these Logos annotation contexts while generating the replacement:");
+      expect(prompt).toContain(
+        "logos.debug.print(): when generating code, make sure to add thoughtful and reasonable print statements",
+      );
+      expect(prompt).not.toContain("@logos.debug.print()");
+      return [
+        "sheet = {}",
+        'print("A1 ->", sheet.get("A1"))',
+        'sheet["A1"] = 7',
+        'print("A1 ->", sheet.get("A1"))',
+      ].join("\n");
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(completed.source).not.toContain("@logos");
+    expect(completed.source).toMatchInlineSnapshot(`
+      "def test():
+        sheet = {}
+        print("A1 ->", sheet.get("A1"))
+        sheet["A1"] = 7
+        print("A1 ->", sheet.get("A1"))"
+    `);
+  });
+
+  it("includes logos annotation contexts in natural snippet completion hashes", () => {
+    const plainSheet = [
+      "def test():",
+      "  ```",
+      "  define a sheet",
+      "  A1 -> None",
+      "  ```",
+    ].join("\n");
+    const annotatedSheet = [
+      "@logos.debug.print()",
+      "def test():",
+      "  ```",
+      "  define a sheet",
+      "  A1 -> None",
+      "  ```",
+    ].join("\n");
+    const plainParsed = parse(plainSheet);
+    const annotatedParsed = parse(annotatedSheet);
+    const plainSnippet = plainParsed.incompleteSnippets[0];
+    const annotatedSnippet = annotatedParsed.incompleteSnippets[0];
+
+    expect(annotatedSnippet?.annotationContexts).toEqual([
+      expect.objectContaining({
+        annotation: "logos.debug.print()",
+        cacheKey: "logos.debug.print-v1",
+      }),
+    ]);
+    expect(plainSnippet?.snippet).toBe(annotatedSnippet?.snippet);
+    expect(
+      hashCompletionInput(plainParsed, plainSnippet?.snippet ?? "", plainSnippet?.annotationContexts),
+    ).not.toBe(
+      hashCompletionInput(
+        annotatedParsed,
+        annotatedSnippet?.snippet ?? "",
+        annotatedSnippet?.annotationContexts,
+      ),
+    );
+  });
+
+  it("strips logos annotations from runnable functions without snippets", async () => {
+    const completed = await runCodeSheet(
+      `@logos.debug.print()
+def test():
+  print("ready")`,
+      "test",
+    );
+
+    expect({
+      source: completed.completed.source,
+      run: simplifyRunResult(completed),
+    }).toEqual({
+      source: `def test():
+  print("ready")`,
+      run: {
+        ok: true,
+        stdout: ["ready"],
+      },
+    });
   });
 
   it("supports natural-language backtick statements anywhere", async () => {

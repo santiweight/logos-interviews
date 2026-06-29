@@ -107,6 +107,7 @@ export type CompilationNode =
       kind: "incomplete";
       line: number;
       snippetKind: IncompleteSnippet["kind"];
+      annotationContexts: LogosAnnotationContext[];
       indent: string;
       state: CompletionState;
     };
@@ -171,7 +172,14 @@ export type IncompleteSnippet = {
   line: number;
   column?: number;
   snippet: string;
+  annotationContexts?: LogosAnnotationContext[];
   range?: SourceRange;
+};
+
+export type LogosAnnotationContext = {
+  annotation: string;
+  cacheKey: string;
+  promptGuidance: string;
 };
 
 export type ClassDecl = {
@@ -249,11 +257,12 @@ export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
       kind: "incomplete",
       line: item.line,
       snippetKind: item.kind,
+      annotationContexts: item.annotationContexts ?? [],
       indent: indentationAt(lowered.source, start),
       state: {
         kind: "partial",
         snippet: item.snippet,
-        hash: hashCompletionInput(parsed, item.snippet),
+        hash: hashCompletionInput(parsed, item.snippet, item.annotationContexts),
       },
     });
 
@@ -463,7 +472,12 @@ export async function* compile(
     if (emitProgress) {
       yield { kind: "llm-start", hash, snippet };
     }
-    const prompt = buildCompletionPrompt(renderImplementation(ir), snippet, node.snippetKind);
+    const prompt = buildCompletionPrompt(
+      renderImplementation(ir),
+      snippet,
+      node.snippetKind,
+      node.annotationContexts,
+    );
     let replacement = "";
     const result = complete(
       prompt,
@@ -481,7 +495,12 @@ export async function* compile(
       replacement = await result;
     }
 
-    replacement = normalizeSnippet(replacement, node.snippetKind, snippet);
+    replacement = normalizeSnippet(
+      replacement,
+      node.snippetKind,
+      snippet,
+      renderImplementation(ir),
+    );
     codeCache.set(hash, replacement);
     node.state = { kind: "complete", hash, snippet, implementation: replacement };
     completions.push({ hash, snippet, replacement, cached: false });
@@ -527,7 +546,7 @@ export function renderImplementation(ir: CompilationIR): CodeSheet {
   const source = ir.nodes
     .map((node) => {
       if (node.kind === "source") {
-        return node.source;
+        return stripLogosAnnotationLines(node.source);
       }
 
       if (node.state.kind !== "complete") {
@@ -683,7 +702,11 @@ export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
   return hashText("snippet", incompleteCodeSnippet);
 }
 
-export function hashCompletionInput(parsed: ParsedSheet, incompleteCodeSnippet: string): SnippetHash {
+export function hashCompletionInput(
+  parsed: ParsedSheet,
+  incompleteCodeSnippet: string,
+  annotationContexts: LogosAnnotationContext[] = [],
+): SnippetHash {
   const naturalPolicy = naturalSnippetPolicy(incompleteCodeSnippet);
   return hashText(
     "completion",
@@ -696,6 +719,13 @@ export function hashCompletionInput(parsed: ParsedSheet, incompleteCodeSnippet: 
         : [
             "--- natural-language policy ---",
             naturalPolicy.cacheKey,
+            "",
+          ]),
+      ...(annotationContexts.length === 0
+        ? []
+        : [
+            "--- annotation contexts ---",
+            ...annotationContexts.map((context) => context.cacheKey),
             "",
           ]),
       "--- dependencies ---",
@@ -767,7 +797,7 @@ function incompleteSymbols(parsed: ParsedSheet, codeCache: CodeCache): Set<strin
   const result = new Set<string>();
 
   for (const snippet of parsed.incompleteSnippets) {
-    if (codeCache.has(hashCompletionInput(parsed, snippet.snippet))) {
+    if (codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts))) {
       continue;
     }
 
@@ -797,7 +827,7 @@ function hasUncachedNaturalSnippet(
     return (
       snippet.kind === "natural" &&
       source.includes(snippet.snippet) &&
-      !codeCache.has(hashCompletionInput(parsed, snippet.snippet))
+      !codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts))
     );
   });
 }
@@ -1276,11 +1306,13 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
         start: lineStarts[index],
         end: lineStarts[index] + snippet.length,
       };
+      const annotationContexts = logosAnnotationContextsForDeclaration(lines, index);
 
       snippets.push(snippetWithRange({
         kind: "class",
         line: index + 1,
         snippet,
+        ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
       }, range));
       coveredRanges.push(range);
 
@@ -1315,11 +1347,13 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
       start: lineStarts[start],
       end: lineStarts[start] + snippet.length,
     };
+    const annotationContexts = logosAnnotationContextsForDeclaration(lines, start);
 
     snippets.push(snippetWithRange({
       kind: "function",
       line: start + 1,
       snippet,
+      ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
     }, range));
     coveredRanges.push(range);
     index = end - 1;
@@ -1593,11 +1627,13 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
       if (inner.length > 0) {
         const line = lineForOffset(lineStarts, start);
         const lineStart = lineStarts[line - 1] ?? 0;
+        const annotationContexts = logosAnnotationContextsForNaturalSnippet(source, line);
         snippets.push(snippetWithRange({
           kind: "natural",
           line,
           column: start - lineStart + 1,
           snippet: source.slice(start, end + 3),
+          ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
         }, { start, end: end + 3 }));
       }
 
@@ -1614,11 +1650,13 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
     if (inner.length > 0) {
       const line = lineForOffset(lineStarts, start);
       const lineStart = lineStarts[line - 1] ?? 0;
+      const annotationContexts = logosAnnotationContextsForNaturalSnippet(source, line);
       snippets.push(snippetWithRange({
         kind: "natural",
         line,
         column: start - lineStart + 1,
         snippet: source.slice(start, end + 1),
+        ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
       }, { start, end: end + 1 }));
     }
 
@@ -1626,6 +1664,80 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
   }
 
   return snippets;
+}
+
+function logosAnnotationContextsForNaturalSnippet(
+  source: string,
+  lineNumber: number,
+): LogosAnnotationContext[] {
+  const lines = source.split("\n");
+  const targetLine = lines[lineNumber - 1] ?? "";
+  const targetIndent = indentWidth(targetLine);
+
+  for (let index = lineNumber - 2; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    const header = parseFunctionHeader(line);
+    if (header && header.hasColon && indentWidth(line) < targetIndent) {
+      return logosAnnotationContextsForDeclaration(lines, index);
+    }
+  }
+
+  return [];
+}
+
+function logosAnnotationContextsForDeclaration(
+  lines: string[],
+  declarationIndex: number,
+): LogosAnnotationContext[] {
+  const declarationIndent = indentWidth(lines[declarationIndex] ?? "");
+  const contexts: LogosAnnotationContext[] = [];
+
+  for (let index = declarationIndex - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) {
+      break;
+    }
+
+    const context = logosAnnotationContextForLine(line, declarationIndent);
+    if (!context) {
+      break;
+    }
+
+    contexts.unshift(context);
+  }
+
+  return contexts;
+}
+
+function logosAnnotationContextForLine(
+  line: string,
+  expectedIndent: number,
+): LogosAnnotationContext | null {
+  if (indentWidth(line) !== expectedIndent) {
+    return null;
+  }
+
+  const trimmed = line.trim();
+  const match = trimmed.match(/^@logos((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*(?:\([^)]*\))?\s*$/);
+  if (!match) {
+    return null;
+  }
+
+  const annotation = `logos${match[1]}`;
+  if (annotation !== "logos.debug.print") {
+    return null;
+  }
+
+  return {
+    annotation: `${annotation}()`,
+    cacheKey: "logos.debug.print-v1",
+    promptGuidance:
+      "when generating code, make sure to add thoughtful and reasonable print statements to help the user understand how the code evaluated. consider the user's snippet and make sure that you are outputting important values at key moments",
+  };
 }
 
 function isInPythonLineComment(source: string, offset: number): boolean {
@@ -1797,11 +1909,25 @@ function splitNaturalReplacement(source: string): { imports: string[]; body: str
   };
 }
 
+function stripLogosAnnotationLines(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !isLogosAnnotationLine(line))
+    .join("\n");
+}
+
+function isLogosAnnotationLine(line: string): boolean {
+  return /^\s*@logos(?:\.|\s*\(|\s*$)/.test(line);
+}
+
 function buildCompletionPrompt(
   sheet: CodeSheet,
   snippet: string,
   kind: IncompleteSnippet["kind"],
+  annotationContexts: LogosAnnotationContext[] = [],
 ): string {
+  const annotationGuidance = annotationPromptGuidance(annotationContexts);
+  const annotationBlock = annotationGuidance.length === 0 ? "" : `\n${annotationGuidance}`;
   if (kind === "natural") {
     const naturalPolicy = naturalSnippetPolicy(snippet)?.promptGuidance ?? "";
     return `You are an expert software engineer building programs.
@@ -1815,7 +1941,7 @@ Your job is to replace this natural-language Python fragment with valid Python c
 ${snippet}
 
 Return only the replacement code for the fragment, without backticks or fences.
-${naturalPolicy}
+${naturalPolicy}${annotationBlock}
 If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
 Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
   }
@@ -1836,8 +1962,19 @@ For a requested class, return only that class definition and its members. For a 
 Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
 Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
 Use normal Python. Prefer dataclasses and match statements for sum types.
-Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
+}
+
+function annotationPromptGuidance(contexts: LogosAnnotationContext[]): string {
+  if (contexts.length === 0) {
+    return "";
+  }
+
+  return [
+    "Apply these Logos annotation contexts while generating the replacement:",
+    ...contexts.map((context) => `- ${context.annotation}: ${context.promptGuidance}`),
+  ].join("\n");
 }
 
 function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidance: string } | null {
@@ -1865,11 +2002,14 @@ function normalizeSnippet(
   source: string,
   kind: IncompleteSnippet["kind"],
   requestedSnippet = "",
+  contextSheet = "",
 ): string {
   const trimmed = source.trim();
   const fence = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   const unfenced = fence?.[1] ?? trimmed;
   const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
+  const duplicateDefinitions = existingDefinitionsToDrop(contextSheet, requestedSnippet);
+  const requestedDefinitions = requestedDefinitionNames(requestedSnippet);
 
   if (kind === "natural") {
     return extractNaturalPythonLines(lines).join("\n").trim();
@@ -1885,11 +2025,12 @@ function normalizeSnippet(
       return unfenced.trimEnd();
     }
 
-    return extractSingleTopLevelDefinition(lines, classIndex, {
-      includeTrailingHelperConstants: true,
-      includeTrailingPrivateHelpers: true,
-      includeTrailingReferencedHelpers: true,
-    });
+    return pruneTopLevelDefinitions(
+      extractTopLevelDefinitions(lines, firstTopLevelCodeIndex(lines, classIndex)),
+      duplicateDefinitions,
+      requestedDefinitions,
+      contextSheet,
+    );
   }
 
   const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
@@ -1901,16 +2042,22 @@ function normalizeSnippet(
     const fallbackIndex = lines.findIndex((line) => {
       return /^(class\s+|def\s+|async\s+def\s+|@|import\s+|from\s+)/.test(line.trimStart());
     });
-    return fallbackIndex < 0 ? unfenced.trimEnd() : extractTopLevelDefinitions(lines, fallbackIndex);
+    return fallbackIndex < 0
+      ? unfenced.trimEnd()
+      : pruneTopLevelDefinitions(
+          extractTopLevelDefinitions(lines, fallbackIndex),
+          duplicateDefinitions,
+          requestedDefinitions,
+          contextSheet,
+        );
   }
 
-  if (requestedFunctionNames(requestedSnippet).length > 1) {
-    return extractTopLevelDefinitions(lines, startOfDefinitionWithImportsAndDecorators(lines, definitionIndex));
-  }
-
-  return extractSingleTopLevelDefinition(lines, definitionIndex, {
-    includeTrailingPrivateHelpers: true,
-  });
+  return pruneTopLevelDefinitions(
+    extractTopLevelDefinitions(lines, firstTopLevelCodeIndex(lines, definitionIndex)),
+    duplicateDefinitions,
+    requestedDefinitions,
+    contextSheet,
+  );
 }
 
 function extractNaturalPythonLines(lines: string[]): string[] {
@@ -1934,13 +2081,6 @@ function isLikelyPythonNaturalLine(line: string): boolean {
     /^[A-Za-z_][A-Za-z0-9_.]*\s*\(/.test(line) ||
     /^[\[{('"0-9-]/.test(line)
   );
-}
-
-function requestedFunctionNames(snippet: string): string[] {
-  return snippet
-    .split("\n")
-    .map((line) => parseFunctionHeader(line.trimStart())?.name)
-    .filter((name): name is string => name !== undefined);
 }
 
 function dedentLines(lines: string[]): string[] {
@@ -1976,86 +2116,122 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
 }
 
-function extractSingleTopLevelDefinition(
-  lines: string[],
-  definitionIndex: number,
-  options: {
-    includeTrailingHelperConstants?: boolean;
-    includeTrailingPrivateHelpers?: boolean;
-    includeTrailingReferencedHelpers?: boolean;
-  } = {},
-): string {
-  const start = startOfDefinitionWithImportsAndDecorators(lines, definitionIndex);
-  const snippet: string[] = [];
-  let seenRequestedDefinition = false;
-
-  for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index];
+function firstTopLevelCodeIndex(lines: string[], fallback: number): number {
+  const firstCodeIndex = lines.findIndex((line) => {
     const trimmed = line.trimStart();
-    const isBlank = line.trim().length === 0;
-    const isNested = /^\s+/.test(line);
-    const isImport = /^(import\s+|from\s+)/.test(trimmed);
-    const isDecorator = /^@/.test(trimmed);
-    const isDefinition = /^(def\s+|async\s+def\s+|class\s+)/.test(trimmed);
-    const isHelperConstant = /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed);
+    return (
+      /^(import\s+|from\s+|@|def\s+|async\s+def\s+|class\s+)/.test(trimmed) ||
+      /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
+    );
+  });
 
-    if (isBlank) {
-      snippet.push(line);
-      continue;
-    }
-
-    if (!seenRequestedDefinition) {
-      if (isImport || isDecorator || isHelperConstant || trimmed.startsWith("#")) {
-        snippet.push(line.trimEnd());
-        continue;
-      }
-
-      if (isDefinition) {
-        seenRequestedDefinition = true;
-        snippet.push(line.trimEnd());
-        continue;
-      }
-
-      continue;
-    }
-
-    if (isNested) {
-      snippet.push(line.trimEnd());
-      continue;
-    }
-
-    const includedSource = snippet.join("\n");
-    const trailingHelperName = helperNameFromTopLevelLine(trimmed);
-    if (
-      (options.includeTrailingHelperConstants && isHelperConstant) ||
-      (options.includeTrailingPrivateHelpers && isPrivateHelperDefinitionLine(trimmed)) ||
-      (
-        options.includeTrailingReferencedHelpers &&
-        trailingHelperName !== null &&
-        referencesName(includedSource, trailingHelperName)
-      )
-    ) {
-      snippet.push(line.trimEnd());
-      continue;
-    }
-
-    break;
-  }
-
-  return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+  return firstCodeIndex < 0 ? fallback : firstCodeIndex;
 }
 
-function helperNameFromTopLevelLine(trimmed: string): string | null {
-  const functionHeader = parseFunctionHeader(trimmed);
-  if (functionHeader) {
-    return functionHeader.name;
+function existingDefinitionsToDrop(contextSheet: string, requestedSnippet: string): Set<string> {
+  if (contextSheet.trim().length === 0) {
+    return new Set();
   }
 
-  return (
-    trimmed.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ??
-    trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*[^=]+)?\s*=/)?.[1] ??
-    null
-  );
+  const requested = requestedDefinitionNames(requestedSnippet);
+  const existing = new Set([
+    ...discoverClassDecls(contextSheet.split("\n")).map((decl) => decl.name),
+    ...discoverTopLevelFunctionBlocks(contextSheet).map((decl) => decl.name),
+  ]);
+
+  for (const name of requested) {
+    existing.delete(name);
+  }
+
+  return existing;
+}
+
+function requestedDefinitionNames(source: string): Set<string> {
+  const names = new Set<string>();
+
+  for (const line of source.split("\n")) {
+    const className = line.trimStart().match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+    if (className) {
+      names.add(className);
+      continue;
+    }
+
+    const functionName = parseFunctionHeader(line.trimStart())?.name;
+    if (functionName) {
+      names.add(functionName);
+    }
+  }
+
+  return names;
+}
+
+function pruneTopLevelDefinitions(
+  source: string,
+  namesToDrop: Set<string>,
+  requestedDefinitions: Set<string>,
+  contextSheet: string,
+): string {
+  const lines = source.split("\n");
+  const output: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const definitionName = topLevelDefinitionName(line);
+    if (!definitionName) {
+      output.push(line);
+      index += 1;
+      continue;
+    }
+
+    const blockEnd = topLevelDefinitionBlockEnd(lines, index);
+    const referenceSource = [
+      output.join("\n"),
+      lines.slice(blockEnd).join("\n"),
+      contextSheet,
+    ].join("\n");
+    const shouldDrop =
+      namesToDrop.has(definitionName) ||
+      (
+        !requestedDefinitions.has(definitionName) &&
+        !definitionName.startsWith("_") &&
+        !referencesName(referenceSource, definitionName)
+      );
+
+    if (!shouldDrop) {
+      output.push(...lines.slice(index, blockEnd));
+      index = blockEnd;
+      continue;
+    }
+
+    while (output.length > 0 && /^@/.test(output[output.length - 1].trimStart())) {
+      output.pop();
+    }
+    index = blockEnd;
+  }
+
+  return trimOuterBlankLines(output).join("\n").trimEnd();
+}
+
+function topLevelDefinitionBlockEnd(lines: string[], start: number): number {
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (line.trim().length === 0 || /^\s+/.test(line)) {
+      end += 1;
+      continue;
+    }
+    break;
+  }
+  return end;
+}
+
+function topLevelDefinitionName(line: string): string | null {
+  if (/^\s/.test(line)) {
+    return null;
+  }
+
+  return line.match(/^(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ?? null;
 }
 
 function referencesName(source: string, name: string): boolean {
@@ -2064,35 +2240,6 @@ function referencesName(source: string, name: string): boolean {
 
 function escapeRegExp(source: string): string {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isPrivateHelperDefinitionLine(trimmed: string): boolean {
-  const header = parseFunctionHeader(trimmed);
-  if (header && header.name.startsWith("_")) {
-    return true;
-  }
-
-  return /^class\s+_[A-Za-z_][A-Za-z0-9_]*/.test(trimmed);
-}
-
-function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIndex: number): number {
-  let start = definitionIndex;
-  while (start > 0) {
-    const previous = lines[start - 1];
-    const trimmed = previous.trimStart();
-    if (
-      previous.trim().length === 0 ||
-      /^(import\s+|from\s+|@|#)/.test(trimmed) ||
-      /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
-    ) {
-      start -= 1;
-      continue;
-    }
-
-    break;
-  }
-
-  return start;
 }
 
 function isTopLevelDefinitionLine(trimmed: string): boolean {

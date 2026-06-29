@@ -230,6 +230,7 @@ const templateGroups = createTemplateGroups([
     sampleIds: [
       "formula-spreadsheet",
       "sudoku-state",
+      "annotated-maze",
     ],
   },
   {

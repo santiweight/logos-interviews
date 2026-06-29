@@ -600,6 +600,41 @@ def main():
   print("Solution:")
   state.pretty_print()`,
       },
+      {
+        id: "annotated-maze",
+        label: "Annotated maze",
+        code: `# Maze.grid is a rectangular list of rows.
+# Use "#" for walls, "." for open cells, "S" for start, and "G" for goal.
+# start and goal are (row, col) coordinates.
+# MazeGenerator.gen returns a deterministic, solvable maze of the configured size.
+# astar_solve returns a shortest path from start to goal, including both endpoints.
+
+class Maze(grid: list[list[str]], start: tuple[int, int], goal: tuple[int, int])
+
+def maze_is_solvable(maze: Maze) -> bool
+
+@logos.debug.print()
+class MazeGenerator:
+  size: int = 8
+
+  # Generates a solvable maze using classical graph techniques.
+  # Start with a connected grid graph, choose two opposing reachable nodes,
+  # and remove enough edges or cells to make the route interesting while
+  # preserving at least one path between start and goal.
+  # Use maze_is_solvable for validation rather than undeclared helpers.
+  def gen(self) -> Maze
+
+def astar_solve(maze: Maze) -> list[tuple[int, int]]
+
+@logos.debug.print()
+def main():
+  \`\`\`
+  build a 10x10 maze using MazeGenerator, and then solve it using A*.
+  only generate solvable mazes.
+  use maze_is_solvable to check the generated maze before solving it.
+  print the maze, the start and goal, the path length, and the solved maze with the path marked.
+  \`\`\``,
+      },
     ],
   },
 ];
@@ -611,6 +646,7 @@ export const defaultProjectIds = [
   "beyond-basics",
   "ascii-fractal",
   "formula-spreadsheet",
+  "annotated-maze",
 ];
 
 export const sampleEvalCases: SampleEvalCase[] = [
@@ -1171,6 +1207,17 @@ def main():
       "[3, 4, 5, 2, 8, 6, 1, 7, 9]",
     ],
   },
+  {
+    sampleId: "annotated-maze",
+    name: "annotated maze generation and astar debug output",
+    sheet: sampleById("annotated-maze").code,
+    runnable: "main",
+    stdoutCheck: {
+      description:
+        "prints maze generation/debug details, a visible maze, and an A* path length",
+      matches: isMazeDebugStdout,
+    },
+  },
 ];
 
 function sampleById(id: string): SampleProgram {
@@ -1281,5 +1328,20 @@ function isVisibleAsciiFractalFrame(stdout: string[]): boolean {
     filled <= 700 &&
     used.size >= 5 &&
     stdout.some((row) => /[#%@]/.test(row))
+  );
+}
+
+function isMazeDebugStdout(stdout: string[]): boolean {
+  const joined = stdout.join("\n");
+  const mazeRows = stdout.filter((row) => /^[#.*SG ]{6,}$/.test(row));
+  const pathLength = stdout.some((row) => /path\s*(length|len)?\D+\d+/i.test(row));
+
+  return (
+    stdout.length >= 6 &&
+    mazeRows.length >= 4 &&
+    /start/i.test(joined) &&
+    /goal/i.test(joined) &&
+    /(?:a\*|astar|path)/i.test(joined) &&
+    pathLength
   );
 }
