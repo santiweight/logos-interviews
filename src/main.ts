@@ -434,6 +434,8 @@ let compileController: AbortController | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
 let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let compilationPending = false;
+let latestReadinessDefinitions: DefinitionReadiness[] = [];
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
 let incompleteSnippetDecorations: string[] = [];
@@ -454,6 +456,7 @@ type RunnableState = {
   name: Runnable;
   ready: boolean;
   blockingDependencies: string[];
+  compiling: boolean;
 };
 
 type ToolTabId = string | null;
@@ -698,7 +701,9 @@ editor.onMouseDown((event) => {
   );
 
   if (!runnable.ready) {
-    runStatus.textContent = `${runnable.name} is blocked`;
+    runStatus.textContent = compilationPending
+      ? "Dependencies still compiling"
+      : `${runnable.name} is blocked`;
     runStatus.dataset.state = "error";
     return;
   }
@@ -1033,6 +1038,7 @@ function scheduleCompilation(delayMs: number): void {
 
   compileController?.abort();
   compileController = null;
+  compilationPending = true;
   latestImplementationSource = source;
   refreshIncompleteSnippets(source);
   updateTypeCheckMarkers([]);
@@ -1442,6 +1448,10 @@ async function streamImplementation(source: string, version: number): Promise<vo
   } finally {
     if (compileController === controller) {
       compileController = null;
+    }
+    if (version === compileVersion) {
+      compilationPending = false;
+      updateReadinessDecorations(latestReadinessDefinitions);
     }
   }
 }
@@ -2639,26 +2649,113 @@ function setSnippetPanelHeight(height: number): void {
 }
 
 function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
+  latestReadinessDefinitions = definitions;
   const runnableStates = runnableStatesFor(editor.getValue(), definitions);
   const runnableLines = new Set(runnableStates.map((runnable) => runnable.line));
-  const decorations = definitions
-    .filter((definition) => !definition.ready && !runnableLines.has(definition.line))
-    .map((definition) => ({
-      range: new monaco.Range(definition.line, 1, definition.line, 1),
+  const decorations = aggregatedReadinessDecorations(definitions, runnableLines)
+    .map((item) => ({
+      range: new monaco.Range(item.line, 1, item.line, 1),
       options: {
-        glyphMarginClassName: "not-ready-glyph-dot",
-        hoverMessage: {
-          value:
-            definition.reason === "implementation"
-              ? `${definition.name} is waiting for its implementation.`
-              : `${definition.name} is waiting for ${definition.blockingDependencies.join(", ")}.`,
-        },
+        glyphMarginClassName: "not-ready-glyph-spinner",
+        hoverMessage: { value: item.hoverMessage },
       },
     }));
 
   readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
   updateRunnableDecorations(runnableStates);
   updateToolbarRunState(runnableStates);
+}
+
+type ReadinessDecoration = {
+  line: number;
+  hoverMessage: string;
+};
+
+function aggregatedReadinessDecorations(
+  definitions: DefinitionReadiness[],
+  runnableLines: Set<number>,
+): ReadinessDecoration[] {
+  const pending = definitions.filter((definition) => !definition.ready && !runnableLines.has(definition.line));
+  const pendingMethodsByClass = new Map<string, DefinitionReadiness[]>();
+
+  for (const definition of pending) {
+    const className = classNameForMethodDefinition(definition);
+    if (className === null) {
+      continue;
+    }
+
+    pendingMethodsByClass.set(className, [
+      ...(pendingMethodsByClass.get(className) ?? []),
+      definition,
+    ]);
+  }
+
+  const aggregatedClassLines = classLinesForAggregatedMethods(pendingMethodsByClass);
+  const aggregatedClassNames = new Set(aggregatedClassLines.keys());
+
+  return [
+    ...Array.from(aggregatedClassLines, ([className, line]) => ({
+      line,
+      hoverMessage: aggregatedClassHoverMessage(className, pendingMethodsByClass.get(className) ?? []),
+    })),
+    ...pending.flatMap((definition) => {
+      const className = classNameForMethodDefinition(definition);
+      if (className !== null && aggregatedClassNames.has(className)) {
+        return [];
+      }
+
+      return [{
+        line: definition.line,
+        hoverMessage: definitionHoverMessage(definition),
+      }];
+    }),
+  ].sort((left, right) => left.line - right.line);
+}
+
+function classLinesForAggregatedMethods(
+  pendingMethodsByClass: Map<string, DefinitionReadiness[]>,
+): Map<string, number> {
+  let classDecls: Array<{ name: string; line: number }> = [];
+  try {
+    classDecls = parse(editor.getValue()).classDecls.map((decl) => ({
+      name: decl.name,
+      line: decl.line,
+    }));
+  } catch {
+    return new Map();
+  }
+
+  const classLineByName = new Map(classDecls.map((decl) => [decl.name, decl.line]));
+  const aggregated = new Map<string, number>();
+
+  for (const [className, methods] of pendingMethodsByClass) {
+    const classLine = classLineByName.get(className);
+    if (methods.length > 1 && classLine !== undefined) {
+      aggregated.set(className, classLine);
+    }
+  }
+
+  return aggregated;
+}
+
+function classNameForMethodDefinition(definition: DefinitionReadiness): string | null {
+  if (definition.kind !== "method") {
+    return null;
+  }
+
+  const separator = definition.name.indexOf(".");
+  return separator === -1 ? null : definition.name.slice(0, separator);
+}
+
+function definitionHoverMessage(definition: DefinitionReadiness): string {
+  return definition.reason === "implementation"
+    ? `${definition.name} is waiting for its implementation.`
+    : `${definition.name} is waiting for ${definition.blockingDependencies.join(", ")}.`;
+}
+
+function aggregatedClassHoverMessage(className: string, methods: DefinitionReadiness[]): string {
+  const methodNames = methods.map((method) => method.name).join(", ");
+  return `${className} has ${methods.length} pending methods: ${methodNames}.`;
 }
 
 function runnableStatesFor(
@@ -2674,6 +2771,7 @@ function runnableStatesFor(
       line: runnable.line,
       ready: readiness?.ready ?? true,
       blockingDependencies: readiness?.blockingDependencies ?? [],
+      compiling: compilationPending,
     };
   });
 }
@@ -2686,6 +2784,7 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
         name: runnable.name,
         ready: runnable.ready,
         blockingDependencies: runnable.blockingDependencies,
+        compiling: compilationPending,
       },
     ]),
   );
@@ -2701,11 +2800,23 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
         glyphMarginHoverMessage: {
           value: runnable.ready
             ? `Run ${runnable.name}`
-            : `${runnable.name} is waiting for ${runnable.blockingDependencies.join(", ")}.`,
+            : disabledRunnableHoverMessage(runnable),
         },
       },
     })),
   );
+}
+
+function disabledRunnableHoverMessage(runnable: RunnableState): string {
+  if (runnable.compiling) {
+    return "Dependencies still compiling.";
+  }
+
+  if (runnable.blockingDependencies.length > 0) {
+    return `${runnable.name} is waiting for ${runnable.blockingDependencies.join(", ")}.`;
+  }
+
+  return `${runnable.name} is waiting for its implementation.`;
 }
 
 function updateToolbarRunState(runnablesState: Array<RunnableState & { line: number }>): void {
@@ -3869,6 +3980,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       clearTimeout(compileTimer);
       compileTimer = null;
     }
+    compilationPending = false;
     if (editorCaptureTimer) {
       clearTimeout(editorCaptureTimer);
       editorCaptureTimer = null;
