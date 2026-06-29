@@ -129,7 +129,19 @@ If the class has no declared __init__, the method must work on a no-argument ins
 Use getattr defaults for optional state.
 If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
 When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
-Do not require undeclared attributes such as _cubes, _points, _width, or _height to exist before this method is called.`;
+Do not require undeclared attributes such as _cubes, _points, _width, or _height to exist before this method is called.
+${renderMethodGuidance(methodSnippet)}`;
+}
+
+function renderMethodGuidance(methodSnippet: string): string {
+  if (!/^\s*def\s+render\s*\(/.test(methodSnippet)) {
+    return "";
+  }
+
+  return `For render methods, prefer one compact deterministic implementation over a general rendering engine.
+If the worksheet specifies a fixed canvas size, use a small list-of-lists canvas or explicit string templates.
+Avoid exploratory comments, alternate implementations, painter's algorithms, 3D geometry engines, and unused helper functions unless the tests require them.
+Keep the returned method under roughly 80 lines when a direct fixed-size ASCII drawing can satisfy the contract.`;
 }
 
 function normalizeParallelMethodReplacement(raw: string, task: ParallelMethodTask): string {
