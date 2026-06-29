@@ -24,6 +24,9 @@ type CompletionTrace = {
   elapsedMs: number;
   ok: boolean;
   error?: string;
+  tracePath?: string;
+  promptPath?: string;
+  responsePath?: string;
 };
 
 type StrategyAttempt = {
@@ -66,6 +69,7 @@ const describeIfEnabled = enabled ? describe : describe.skip;
 const attempts = numericEnv("BENCH_ATTEMPTS", 1);
 const warmCache = process.env.BENCH_CACHE === "warm";
 const saveSources = process.env.BENCH_SAVE_SOURCES === "true";
+const saveTraces = process.env.BENCH_SAVE_TRACES === "true";
 const artifactDir = process.env.BENCH_ARTIFACT_DIR ?? ".strategy-benchmark";
 const concurrency = numericEnv("BENCH_CONCURRENCY", 1);
 const cases = selectedCases();
@@ -80,6 +84,7 @@ describeIfEnabled("strategy benchmark", () => {
         event: "benchmark-start",
         attempts,
         warmCache,
+        saveTraces,
         concurrency,
         models: providers.map((provider) => provider.id),
         modes,
@@ -190,26 +195,58 @@ async function runStrategyAttempt(
   const complete: CompleteFunction = async (prompt) => {
     completionCount += 1;
     const index = completionCount;
+    const target = completionTarget(prompt);
     const started = nowMs();
+    const startedAt = new Date();
     try {
       const replacement = await collectCompletionResult(provider.complete(prompt));
+      const elapsedMs = roundMs(nowMs() - started);
+      const endedAt = new Date();
+      const tracePaths = saveCompletionTrace({
+        context,
+        strategy,
+        index,
+        target,
+        prompt,
+        response: replacement,
+        startedAt,
+        endedAt,
+        elapsedMs,
+        ok: true,
+      });
       completions.push({
         index,
-        target: completionTarget(prompt),
+        target,
         promptChars: prompt.length,
         completionChars: replacement.length,
-        elapsedMs: roundMs(nowMs() - started),
+        elapsedMs,
         ok: true,
+        ...tracePaths,
       });
       return replacement;
     } catch (error) {
+      const elapsedMs = roundMs(nowMs() - started);
+      const endedAt = new Date();
+      const tracePaths = saveCompletionTrace({
+        context,
+        strategy,
+        index,
+        target,
+        prompt,
+        error: errorMessage(error),
+        startedAt,
+        endedAt,
+        elapsedMs,
+        ok: false,
+      });
       completions.push({
         index,
-        target: completionTarget(prompt),
+        target,
         promptChars: prompt.length,
-        elapsedMs: roundMs(nowMs() - started),
+        elapsedMs,
         ok: false,
         error: errorMessage(error),
+        ...tracePaths,
       });
       throw error;
     }
@@ -274,6 +311,72 @@ function saveCompletedSource(
   const path = join(artifactDir, `${filename}.py`);
   writeFileSync(path, source);
   return path;
+}
+
+type CompletionTraceArtifact = {
+  context: ArtifactContext;
+  strategy: CompilationMode;
+  index: number;
+  target: string;
+  prompt: string;
+  response?: string;
+  error?: string;
+  startedAt: Date;
+  endedAt: Date;
+  elapsedMs: number;
+  ok: boolean;
+};
+
+function saveCompletionTrace(
+  artifact: CompletionTraceArtifact,
+): Pick<CompletionTrace, "tracePath" | "promptPath" | "responsePath"> {
+  if (!saveTraces) {
+    return {};
+  }
+
+  mkdirSync(artifactDir, { recursive: true });
+  const basename = [
+    slug(artifact.context.model),
+    slug(artifact.context.caseName),
+    artifact.context.mode,
+    `attempt-${artifact.context.attempt}`,
+    artifact.strategy,
+    `completion-${artifact.index}`,
+    slug(artifact.target).slice(0, 80) || "unknown",
+  ].join("__");
+  const promptPath = join(artifactDir, `${basename}.prompt.txt`);
+  let responsePath: string | undefined;
+  const tracePath = join(artifactDir, `${basename}.trace.json`);
+
+  writeFileSync(promptPath, artifact.prompt);
+  if (artifact.response !== undefined) {
+    responsePath = join(artifactDir, `${basename}.response.txt`);
+    writeFileSync(responsePath, artifact.response);
+  }
+  writeFileSync(tracePath, `${JSON.stringify({
+    case: artifact.context.caseName,
+    model: artifact.context.model,
+    mode: artifact.context.mode,
+    strategy: artifact.strategy,
+    attempt: artifact.context.attempt,
+    index: artifact.index,
+    target: artifact.target,
+    ok: artifact.ok,
+    promptPath,
+    responsePath,
+    promptChars: artifact.prompt.length,
+    responseChars: artifact.response?.length,
+    elapsedMs: artifact.elapsedMs,
+    startedAt: artifact.startedAt.toISOString(),
+    endedAt: artifact.endedAt.toISOString(),
+    ...(artifact.error === undefined ? {} : { error: artifact.error }),
+  }, null, 2)}\n`);
+
+  return {
+    tracePath,
+    promptPath,
+    ...(responsePath === undefined ? {} : { responsePath }),
+  };
 }
 
 function slug(source: string): string {
