@@ -375,9 +375,11 @@ class MagicSquare:
 def test_magic_square():
   # Logos also support multi-line snippets.
   \`\`\`
-  generate a MagicSquare
-  pretty print it
-  check the MagicSquare is valid, and show the work
+  Generate a MagicSquare.
+
+  Pretty print it, including the sums of columns/rows.
+
+  Check the MagicSquare is valid, and show the work.
   \`\`\``,
       },
       {
