@@ -45,6 +45,15 @@ describe("product samples", () => {
     }
   });
 
+  it("keeps the reverse CLI sample as an interactive natural-language prompt", () => {
+    const sample = samples.find((item) => item.id === "interactive-reverse");
+
+    expect(sample?.code).toBe(`def main():
+  \`\`\`
+  A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
+  \`\`\``);
+  });
+
   it("accepts ASCII fractal output with trailing blank rows trimmed by stdout capture", () => {
     const testCase = sampleEvalCases.find((item) => item.name === "mandelbrot render and rotate natural snippet");
     expect(testCase?.stdoutCheck).toBeDefined();
