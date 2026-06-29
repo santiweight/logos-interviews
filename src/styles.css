@@ -268,6 +268,7 @@ textarea:disabled {
 }
 
 .code-pane {
+  position: relative;
   flex: var(--code-pane-grow) 1 var(--code-pane-basis);
   min-width: 460px;
   border-right: 1px solid var(--border);
@@ -526,10 +527,9 @@ h2 {
 .source-tabs {
   display: flex;
   align-items: stretch;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   gap: 0;
   width: auto;
-  max-width: calc(100% - 76px);
   height: 100%;
   min-width: 0;
   overflow-x: auto;
@@ -822,10 +822,10 @@ h2 {
   justify-content: space-between;
   flex: 0 0 32px;
   min-width: 0;
-  gap: 0;
+  gap: 6px;
   border-bottom: 1px solid var(--border);
   background: var(--paper-pressed);
-  padding: 4px 88px 0 6px;
+  padding: 4px 6px 0;
 }
 
 .output-pane:has(.tool-tab-shell) .tool-tabs,
@@ -836,6 +836,158 @@ h2 {
 .tool-tabs .status {
   align-self: center;
   margin-bottom: 4px;
+}
+
+.feedback-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.code-feedback-overlay {
+  position: absolute;
+  top: 37px;
+  right: 8px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.code-feedback-overlay .feedback-controls {
+  pointer-events: auto;
+  border-radius: 999px;
+  background: rgba(252, 252, 252, 0.78);
+  box-shadow:
+    0 1px 2px rgba(14, 21, 37, 0.08),
+    0 12px 28px rgba(14, 21, 37, 0.12);
+  backdrop-filter: blur(10px);
+  padding: 3px;
+}
+
+.source-tabs-bar > .feedback-controls,
+.tool-tabs > .feedback-controls {
+  align-self: center;
+  margin-bottom: 4px;
+}
+
+.agent-content > .feedback-controls {
+  align-self: flex-end;
+  margin-bottom: 6px;
+}
+
+.snippet-panel-header > .feedback-controls {
+  margin-left: auto;
+}
+
+.feedback-receipt {
+  display: none;
+  max-width: 150px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+  margin-right: 3px;
+  padding: 4px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedback-receipt[data-state="sent"],
+.feedback-receipt[data-state="error"] {
+  display: inline-flex;
+}
+
+.feedback-receipt[data-state="sent"] {
+  border-color: #a7c2a8;
+  background: #eef7ec;
+  color: #2f6844;
+}
+
+.feedback-receipt[data-state="error"] {
+  border-color: #e2a5a0;
+  background: #fff2ef;
+  color: #8f3029;
+}
+
+.feedback-button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.72;
+  padding: 0;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.feedback-button:hover {
+  border-color: transparent;
+  background: rgba(14, 21, 37, 0.055);
+  color: var(--ink);
+  opacity: 0.96;
+}
+
+.feedback-button[data-state="sending"] {
+  border-color: transparent;
+  background: transparent;
+  color: #805617;
+  opacity: 1;
+}
+
+.feedback-button[data-state="sent"] {
+  border-color: transparent;
+  background: transparent;
+  color: #28a745;
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.feedback-button[data-feedback-rating="down"][data-state="sent"] {
+  color: #d92d20;
+}
+
+.feedback-button[data-state="error"] {
+  border-color: transparent;
+  background: transparent;
+  color: #8f3029;
+  opacity: 1;
+}
+
+.feedback-icon {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.feedback-button[data-state="sent"] .feedback-icon,
+.feedback-button[data-state="error"] .feedback-icon {
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 0;
+}
+
+.feedback-button[data-state="sent"] .feedback-icon {
+  filter: drop-shadow(0 1px 2px rgba(40, 167, 69, 0.3));
+}
+
+.feedback-button[data-feedback-rating="down"][data-state="sent"] .feedback-icon,
+.feedback-button[data-state="error"] .feedback-icon {
+  filter: drop-shadow(0 1px 2px rgba(180, 35, 24, 0.28));
 }
 
 .tabs {
@@ -1176,6 +1328,8 @@ h2 {
 .terminal-input:focus,
 .tab:focus-visible,
 .tool-tab-close:focus-visible,
+.feedback-button:focus-visible,
+.code-run-resize-handle:focus-visible,
 .run-button:focus-visible,
 .secondary-button:focus-visible,
 .send-button:focus-visible,

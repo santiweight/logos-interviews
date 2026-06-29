@@ -7,6 +7,7 @@ import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
 import { runCodeSheet } from "./codeSheetRunner";
+import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
@@ -79,6 +80,11 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/session-events") {
       await handleSessionEvents(req, res);
+      return;
+    }
+
+    if (url.pathname === "/api/feedback") {
+      await handleFeedback(req, res);
       return;
     }
 

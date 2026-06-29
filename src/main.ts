@@ -122,7 +122,32 @@ const workspaceMenuIcon = `
     <circle cx="12" cy="12.5" r="1.4" />
   </svg>
 `;
+const thumbUpIcon = `
+  <svg class="feedback-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M6.2 15.2h6.7c.8 0 1.5-.5 1.7-1.3L15.7 9c.2-.9-.5-1.7-1.4-1.7h-3.1V4.1c0-.9-1.2-1.2-1.6-.4L6.2 10z" />
+  </svg>
+`;
+const thumbDownIcon = `
+  <svg class="feedback-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M6.2 4.8h6.7c.8 0 1.5.5 1.7 1.3l1.1 4.9c.2.9-.5 1.7-1.4 1.7h-3.1v3.2c0 .9-1.2 1.2-1.6.4l-3.4-6.3z" />
+  </svg>
+`;
 const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
+const feedbackResetTimers = new WeakMap<HTMLElement, number>();
+
+function renderFeedbackControls(panel: string): string {
+  return `
+    <div class="feedback-controls" data-feedback-controls="${panel}" aria-label="${panel} feedback">
+      <span class="feedback-receipt" data-feedback-receipt aria-live="polite"></span>
+      <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="up" aria-label="Mark ${panel} helpful" title="Helpful">
+        ${thumbUpIcon}
+      </button>
+      <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="down" aria-label="Mark ${panel} not helpful" title="Not helpful">
+        ${thumbDownIcon}
+      </button>
+    </div>
+  `;
+}
 
 function renderSampleGroup(group: SampleGroup): string {
   return `
@@ -151,6 +176,7 @@ app.innerHTML = `
           ${lambdaMark}
         </button>
         <div id="agent-content" class="agent-content">
+          ${renderFeedbackControls("agent")}
           <div id="agent-log" class="agent-log" aria-live="polite"></div>
           <form id="agent-form" class="agent-form">
             <textarea id="agent-input" class="agent-input" rows="3" placeholder="Describe a change"></textarea>
@@ -192,6 +218,9 @@ app.innerHTML = `
           </details>
         </div>
         <div id="editor" class="editor" aria-label="Code editor"></div>
+        <div class="code-feedback-overlay">
+          ${renderFeedbackControls("code")}
+        </div>
         <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
           <div
             id="snippet-resize-handle"
@@ -203,6 +232,7 @@ app.innerHTML = `
           ></div>
           <header class="snippet-panel-header">
             <h2 id="snippet-title">Compilation View</h2>
+            ${renderFeedbackControls("compilation")}
           </header>
           <pre id="snippet-preview" class="output snippet-preview"></pre>
         </section>
@@ -222,6 +252,7 @@ app.innerHTML = `
           <div id="tool-tabs-list" class="tabs" role="tablist" aria-label="Run output views">
           </div>
           <span id="run-status" class="status"></span>
+          ${renderFeedbackControls("output")}
         </div>
         <div id="tool-panels" class="tool-panels">
           <pre id="run-placeholder" class="output run-placeholder tab-panel active" aria-live="polite">Runs will appear here.</pre>
@@ -445,6 +476,16 @@ resetWorkspaceButton.addEventListener("click", () => {
 
   sessionCapture.track("reset_workspace_requested", undefined, true);
   void resetWorkspace();
+});
+app.addEventListener("click", (event) => {
+  const button = (event.target instanceof Element)
+    ? event.target.closest<HTMLButtonElement>("[data-feedback-rating]")
+    : null;
+  if (!button) {
+    return;
+  }
+
+  void submitFeedbackFromButton(button);
 });
 toolTabsList.addEventListener("click", (event) => {
   const target = event.target;
@@ -2228,6 +2269,105 @@ function cssEscape(value: string): string {
     : value.replaceAll(/["\\]/g, "\\$&");
 }
 
+async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void> {
+  const panel = button.dataset.feedbackPanel;
+  const rating = button.dataset.feedbackRating;
+  if (!panel || (rating !== "up" && rating !== "down") || button.disabled) {
+    return;
+  }
+
+  const controls = button.closest<HTMLElement>("[data-feedback-controls]");
+  const buttons = controls
+    ? Array.from(controls.querySelectorAll<HTMLButtonElement>("[data-feedback-rating]"))
+    : [button];
+  const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
+  if (controls) {
+    const existingTimer = feedbackResetTimers.get(controls);
+    if (existingTimer !== undefined) {
+      window.clearTimeout(existingTimer);
+      feedbackResetTimers.delete(controls);
+    }
+  }
+  buttons.forEach((item) => {
+    item.disabled = true;
+    item.dataset.state = item === button ? "sent" : "";
+  });
+
+  sessionCapture.track("feedback_submitted", { panel, rating }, true);
+
+  try {
+    const result = await sendFeedbackViaDevApi(panel, rating);
+    buttons.forEach((item) => {
+      item.disabled = false;
+      item.dataset.state = item === button ? "sent" : "";
+    });
+    button.dataset.state = "sent";
+    button.title = `Feedback sent: ${result.feedbackId}`;
+    if (receipt) {
+      receipt.textContent = "Feedback received";
+      receipt.dataset.state = "sent";
+    }
+    const resetTimer = window.setTimeout(() => {
+      buttons.forEach((item) => {
+        item.dataset.state = "";
+      });
+      if (receipt) {
+        receipt.textContent = "";
+        receipt.dataset.state = "";
+      }
+      if (controls) {
+        feedbackResetTimers.delete(controls);
+      }
+    }, 3600);
+    if (controls) {
+      feedbackResetTimers.set(controls, resetTimer);
+    }
+  } catch (error) {
+    buttons.forEach((item) => {
+      item.disabled = false;
+      if (item !== button) {
+        item.dataset.state = "";
+      }
+    });
+    button.dataset.state = "error";
+    button.title = error instanceof Error ? error.message : "Feedback failed";
+    if (receipt) {
+      receipt.textContent = "Feedback failed";
+      receipt.dataset.state = "error";
+    }
+  }
+}
+
+async function sendFeedbackViaDevApi(
+  panel: string,
+  rating: "up" | "down",
+): Promise<{ ok: true; feedbackId: string }> {
+  const body = {
+    sessionId: sessionCapture.sessionId,
+    panel,
+    rating,
+    url: window.location.href,
+    state: appSnapshot(),
+  };
+
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    feedbackId?: string;
+    error?: string;
+  };
+
+  if (!response.ok || payload.ok !== true || typeof payload.feedbackId !== "string") {
+    throw new Error(payload.error ?? "Feedback request failed");
+  }
+
+  return { ok: true, feedbackId: payload.feedbackId };
+}
+
 async function startInteractiveRunViaDevApi(
   sheet: string,
   runnable: Runnable,
@@ -2628,6 +2768,17 @@ function appSnapshot(): JsonObject {
             },
       scrollTop: editor.getScrollTop(),
       scrollLeft: editor.getScrollLeft(),
+    },
+    workspace: {
+      activeSourceTabId,
+      sourceTabs: sourceTabs.map((tab) => ({
+        id: tab.id,
+        projectId: tab.projectId,
+        title: tab.title,
+        source: tab.source,
+      })),
+      compileVersion,
+      latestImplementationSource,
     },
     ui: {
       selectedSampleId: activeSampleItem()?.dataset.sampleId ?? null,

@@ -6,6 +6,7 @@ import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
+import { handleFeedback } from "./src/feedbackCapture";
 import { handleSessionEvents } from "./src/sessionCapture";
 import { createInteractiveRunApi } from "./src/interactiveRunApi";
 
@@ -199,6 +200,10 @@ function anthropicCompletionPlugin() {
 
       server.middlewares.use("/api/session-events", async (req, res) => {
         await handleSessionEvents(req, res);
+      });
+
+      server.middlewares.use("/api/feedback", async (req, res) => {
+        await handleFeedback(req, res);
       });
     },
   };
