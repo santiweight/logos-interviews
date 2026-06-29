@@ -1554,6 +1554,33 @@ print(square.pretty())`;
     ]);
   });
 
+  it("can compile cached sheets without emitting intermediate progress", async () => {
+    const cache: CodeCache = new Map();
+    const first = await completeSheet(cache, sheet, () => `def add(x: int, y: int) -> int:
+  return x + y`);
+    const events: CompilationEvent[] = [];
+
+    for await (const event of compile(cache, sheet, () => {
+      throw new Error("should not complete cached snippet");
+    }, {
+      emitProgress: false,
+      streamTokens: false,
+    })) {
+      events.push(event);
+    }
+
+    const compiled = events[0];
+    if (compiled?.kind !== "compiled") {
+      throw new Error("expected compiled event");
+    }
+
+    expect(first.completions).toHaveLength(1);
+    expect(events.map((event) => event.kind)).toEqual(["compiled"]);
+    expect(compiled.completed.completions).toEqual([
+      expect.objectContaining({ cached: true, replacement: first.completions[0].replacement }),
+    ]);
+  });
+
   it("preserves top-level helper constants returned with class completions", async () => {
     const completed = await completeSheet(
       new Map(),

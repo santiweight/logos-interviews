@@ -64,6 +64,7 @@ export type CompilationEvent =
 export type CompileOptions = {
   signal?: AbortSignal;
   streamTokens?: boolean;
+  emitProgress?: boolean;
   abortCurrentCompletion?: boolean;
   strategy?: CompilationStrategy;
   experimentalParallelCompletions?: boolean;
@@ -277,7 +278,11 @@ export async function completeSheet(
   options: CompileOptions = {},
 ): Promise<CompletedCodeSheet> {
   let compiled: CompletedCodeSheet | null = null;
-  for await (const event of compile(codeCache, codeSheet, complete, options)) {
+  for await (const event of compile(codeCache, codeSheet, complete, {
+    ...options,
+    emitProgress: false,
+    streamTokens: false,
+  })) {
     if (event.kind === "compiled") {
       compiled = event.completed;
     }
@@ -301,20 +306,23 @@ export async function* compile(
   const totalSnippets = ir.nodes.filter((node) => node.kind === "incomplete").length;
   let completedSnippets = 0;
   const completions: Completion[] = [];
+  const emitProgress = options.emitProgress ?? true;
 
   if (isAborted(options.signal)) {
     return;
   }
 
-  yield { kind: "parsed", parsed };
-  yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
-  yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-  yield {
-    kind: "implementation",
-    source: renderImplementation(ir),
-    completedSnippets,
-    totalSnippets,
-  };
+  if (emitProgress) {
+    yield { kind: "parsed", parsed };
+    yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
+    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+    yield {
+      kind: "implementation",
+      source: renderImplementation(ir),
+      completedSnippets,
+      totalSnippets,
+    };
+  }
 
   if (compileInParallel(options) && complete) {
     const missing: Array<{
@@ -339,14 +347,16 @@ export async function* compile(
         node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
         completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
         completedSnippets += 1;
-        yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-        yield {
-          kind: "implementation",
-          source: renderImplementation(ir),
-          completedSnippets,
-          totalSnippets,
-        };
+        if (emitProgress) {
+          yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
+          yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+          yield {
+            kind: "implementation",
+            source: renderImplementation(ir),
+            completedSnippets,
+            totalSnippets,
+          };
+        }
         continue;
       }
 
@@ -358,8 +368,10 @@ export async function* compile(
       });
     }
 
-    for (const item of missing) {
-      yield { kind: "llm-start", hash: item.hash, snippet: item.snippet };
+    if (emitProgress) {
+      for (const item of missing) {
+        yield { kind: "llm-start", hash: item.hash, snippet: item.snippet };
+      }
     }
 
     const pending = missing.map((item) => {
@@ -392,14 +404,16 @@ export async function* compile(
         return;
       }
 
-      yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
-      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-      yield {
-        kind: "implementation",
-        source: renderImplementation(ir),
-        completedSnippets,
-        totalSnippets,
-      };
+      if (emitProgress) {
+        yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+      }
     }
 
     yield {
@@ -429,14 +443,16 @@ export async function* compile(
       node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
       completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
       completedSnippets += 1;
-      yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-      yield {
-        kind: "implementation",
-        source: renderImplementation(ir),
-        completedSnippets,
-        totalSnippets,
-      };
+      if (emitProgress) {
+        yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+      }
       continue;
     }
 
@@ -444,7 +460,9 @@ export async function* compile(
       continue;
     }
 
-    yield { kind: "llm-start", hash, snippet };
+    if (emitProgress) {
+      yield { kind: "llm-start", hash, snippet };
+    }
     const prompt = buildCompletionPrompt(renderImplementation(ir), snippet, node.snippetKind);
     let replacement = "";
     const result = complete(
@@ -455,7 +473,7 @@ export async function* compile(
     if (isAsyncIterable(result)) {
       for await (const token of result) {
         replacement += token;
-        if (!isAborted(options.signal) && options.streamTokens !== false) {
+        if (emitProgress && !isAborted(options.signal) && options.streamTokens !== false) {
           yield { kind: "llm-token", hash, token };
         }
       }
@@ -472,14 +490,16 @@ export async function* compile(
       return;
     }
 
-    yield { kind: "llm-complete", hash, implementation: replacement };
-    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-    yield {
-      kind: "implementation",
-      source: renderImplementation(ir),
-      completedSnippets,
-      totalSnippets,
-    };
+    if (emitProgress) {
+      yield { kind: "llm-complete", hash, implementation: replacement };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+    }
   }
 
   yield {
