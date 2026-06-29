@@ -1591,7 +1591,7 @@ function rangesOverlap(left: SourceRange, right: SourceRange | undefined): boole
 }
 
 function indentNaturalReplacement(source: string, indent: string): string {
-  const lines = source.split("\n");
+  const lines = normalizeNaturalReplacementBlockIndent(source.split("\n"));
   return lines
     .map((line, index) => {
       if (index === 0 || line.trim().length === 0) {
@@ -1601,6 +1601,37 @@ function indentNaturalReplacement(source: string, indent: string): string {
       return `${indent}${line}`;
     })
     .join("\n");
+}
+
+function normalizeNaturalReplacementBlockIndent(lines: string[]): string[] {
+  const firstSignificant = lines.find((line) => line.trim().length > 0);
+  if (!firstSignificant || indentWidth(firstSignificant) > 0 || lineOpensIndentedContinuation(firstSignificant)) {
+    return lines;
+  }
+
+  const laterSignificant = lines.slice(1).filter((line) => line.trim().length > 0);
+  const laterIndents = laterSignificant.map(indentWidth).filter((width) => width > 0);
+  if (laterIndents.length === 0 || laterIndents.length !== laterSignificant.length) {
+    return lines;
+  }
+
+  const correction = Math.min(...laterIndents);
+  if (correction <= 0) {
+    return lines;
+  }
+
+  return lines.map((line, index) => {
+    if (index === 0 || line.trim().length === 0) {
+      return line;
+    }
+
+    return line.slice(Math.min(correction, indentWidth(line)));
+  });
+}
+
+function lineOpensIndentedContinuation(line: string): boolean {
+  const trimmed = line.trimEnd();
+  return /[:\\([{]$/.test(trimmed);
 }
 
 function splitNaturalReplacement(source: string): { imports: string[]; body: string } {

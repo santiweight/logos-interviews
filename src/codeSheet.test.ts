@@ -1591,6 +1591,66 @@ on its own line
     expect(Array.from(cache.values())).toEqual(["(1 + 2) * 3", "print(total)"]);
   });
 
+  it("does not double-indent mixed-indentation fenced statement completions", async () => {
+    const sheet = `# Render fractals in the command line.
+# Outputs are 24 characters tall, 64 characters wide.
+# Use only these density characters, from empty to bright: " .:-=+*#%@".
+# Keep the background mostly empty, with detail clustered into readable forms.
+
+class AsciiArt:
+  def render() -> str
+  def rotate() -> AsciiArt
+
+# Return a deterministic ASCII mandelbrot fractal.
+def mandelbrot() -> AsciiArt
+
+def main():
+  \`\`\`
+  print mandelbrot regularly and then rotated by 90*
+  \`\`\``;
+
+    const result = await runCodeSheet(sheet, "main", {
+      cache: new Map(),
+      complete(prompt) {
+        if (prompt.includes("Your job is to replace this natural-language Python fragment")) {
+          return `art = mandelbrot()
+  print(art.render())
+  print()
+  rotated = art.rotate()
+  print(rotated.render())`;
+        }
+
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        if (target.includes("class AsciiArt:")) {
+          return `class AsciiArt:
+  def __init__(self, value: str):
+    self.value = value
+
+  def render(self) -> str:
+    return self.value
+
+  def rotate(self) -> AsciiArt:
+    return AsciiArt(f"{self.value} rotated")`;
+        }
+
+        if (target.includes("def mandelbrot() -> AsciiArt")) {
+          return `def mandelbrot() -> AsciiArt:
+  return AsciiArt("@")`;
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["@", "", "@ rotated"] });
+    expect(result.completed.source).toContain(`def main():
+  art = mandelbrot()
+  print(art.render())
+  print()
+  rotated = art.rotate()
+  print(rotated.render())`);
+  });
+
   it("does not lower code-like text inside fenced natural-language snippets", async () => {
     const sheet = `def test():
   \`\`\`

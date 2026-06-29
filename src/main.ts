@@ -215,7 +215,20 @@ const templateGroups = createTemplateGroups([
   },
   {
     label: "Modeling and data",
-    sampleIds: ["formula-spreadsheet", "sudoku-state", "ascii-fractal"],
+    sampleIds: [
+      "formula-spreadsheet",
+      "sudoku-state",
+    ],
+  },
+  {
+    label: "ASCII art",
+    sampleIds: [
+      "ascii-fractal",
+      "weather-map",
+      "maze-renderer",
+      "julia-set-explorer",
+      "isometric-cube-stack",
+    ],
   },
 ]);
 

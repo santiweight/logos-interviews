@@ -330,17 +330,193 @@ def test_magic_square():
         id: "ascii-fractal",
         label: "ASCII fractal",
         code: `# Fractal rendering file.
-# Results must be exactly 24 strings, each 64 characters wide.
-# through the middle, and nested coastline or root contours near the ground.
-# Use only these density characters, from empty to bright: " .:-=+*#%@".
-# Keep the background mostly empty, with detail clustered into readable forms.
-# Return a deterministic ASCII mandelbrot fractal.
+# AsciiArt represents a generated image, not just a finished text buffer.
+# render() returns exactly 24 newline-separated rows, each exactly 64 columns.
+# rotate() returns a new AsciiArt view rotated 90 degrees clockwise.
+# For generated images, rotate by re-rendering transformed sample coordinates,
+# preserving the 24x64 output size; do not transpose the rendered text grid.
+# Keep every rendered character in this density palette, from empty to bright:
+# " .:-=+*#%@".
+# Keep the background mostly whitespace and make the main shape opaque.
+# Mandelbrot should have a compact body with a bulb, a horizontal waist,
+# nested coastline detail, and deterministic output.
+# If you use helper functions or constants such as ROWS, COLS, or PALETTE,
+# define them in the completion rather than assuming they already exist.
 
-def fractal() -> list
+class AsciiArt:
+  def render(self) -> str
+  def rotate(self) -> "AsciiArt"
+
+# Return a deterministic ASCII Mandelbrot fractal.
+def mandelbrot() -> AsciiArt
 
 def test():
-  for line in fractal():
-    print(line)`,
+  art = mandelbrot()
+  print(art.render())
+  print()
+  print(art.rotate().render())`,
+      },
+      {
+        id: "weather-map",
+        label: "Weather map",
+        code: `# Terminal weather map.
+# WeatherMap is a generated 40-column by 16-row map, not a screenshot.
+# render() returns exactly 16 newline-separated rows, each exactly 40 columns.
+# Use only these map symbols:
+# " " clear air, "." cloud, ":" heavy cloud, "~" rain band, "*" lightning,
+# "L" low pressure, "H" high pressure, and "^>v<" wind arrows.
+# Keep the background mostly whitespace with clustered weather systems.
+# pan(dx, dy) returns a new map shifted east/west and north/south.
+# rotate_wind(turns) returns a new map where wind arrows rotate 90 degrees per turn.
+# The generated output is deterministic.
+# If you use helpers or constants such as WIDTH, HEIGHT, or SYMBOLS, define
+# them in the completion rather than assuming they already exist.
+
+class WeatherMap:
+  def render(self) -> str
+  def pan(self, dx: int, dy: int) -> "WeatherMap"
+  def rotate_wind(self, turns: int = 1) -> "WeatherMap"
+
+def sample_weather() -> WeatherMap
+
+def main():
+  view = sample_weather()
+  print(view.render())
+  while True:
+    command = input("wasd pan, qe rotate wind, x exit> ").strip().lower()
+    if command == "x":
+      break
+    for key in command:
+      if key == "w":
+        view = view.pan(0, -1)
+      elif key == "s":
+        view = view.pan(0, 1)
+      elif key == "a":
+        view = view.pan(-1, 0)
+      elif key == "d":
+        view = view.pan(1, 0)
+      elif key == "q":
+        view = view.rotate_wind(-1)
+      elif key == "e":
+        view = view.rotate_wind(1)
+    print(view.render())`,
+      },
+      {
+        id: "maze-renderer",
+        label: "Maze renderer",
+        code: `# Interactive ASCII maze.
+# The maze is a fixed 13-column by 7-row grid.
+# render() returns exactly 7 newline-separated rows, each exactly 13 columns.
+# Use "#" for walls, " " for corridors, "@" for the player, and "E" for the exit.
+# The outer border is all walls except no gaps; the player cannot move through "#".
+# The sample maze starts the player at coordinate (1, 1), with an open corridor to the right.
+# move(command) accepts one of "w", "a", "s", "d" and returns a new Maze.
+# Invalid moves return an unchanged maze.
+# solved() is True only when the player reaches the exit cell.
+# The sample maze is deterministic and has at least one path from start to exit.
+# Keep the fixed grid or any helper constants in the completion.
+
+class Maze:
+  def render(self) -> str
+  def move(self, command: str) -> "Maze"
+  def position(self) -> tuple[int, int]
+  def solved(self) -> bool
+
+def sample_maze() -> Maze
+
+def main():
+  maze = sample_maze()
+  print(maze.render())
+  while not maze.solved():
+    command = input("wasd move, x exit> ").strip().lower()
+    if command == "x":
+      break
+    for key in command:
+      maze = maze.move(key)
+    print(maze.render())
+  if maze.solved():
+    print("solved")`,
+      },
+      {
+        id: "julia-set-explorer",
+        label: "Julia set explorer",
+        code: `# Julia set explorer.
+# AsciiArt is a generated 64-column by 24-row density image.
+# render() returns exactly 24 newline-separated rows, each exactly 64 columns.
+# Use only these density characters, from empty to bright: " .:-=+*#%@".
+# Keep the background mostly whitespace and the fractal body opaque.
+# pan(dx, dy), zoom(factor), and rotate() return new AsciiArt views.
+# For rotate(), re-render transformed sample coordinates while preserving 24x64;
+# do not transpose the rendered text grid.
+# julia(seed) is deterministic for the same seed.
+# If you use helper functions or constants such as ROWS, COLS, or PALETTE,
+# define them in the completion rather than assuming they already exist.
+
+class AsciiArt:
+  def render(self) -> str
+  def pan(self, dx: float, dy: float) -> "AsciiArt"
+  def zoom(self, factor: float) -> "AsciiArt"
+  def rotate(self) -> "AsciiArt"
+
+def julia(seed: str = "dragon") -> AsciiArt
+
+def main():
+  art = julia()
+  print(art.render())
+  while True:
+    command = input("wasd pan, z/c zoom, qe rotate, x exit> ").strip().lower()
+    if command == "x":
+      break
+    for key in command:
+      if key == "w":
+        art = art.pan(0, -0.12)
+      elif key == "s":
+        art = art.pan(0, 0.12)
+      elif key == "a":
+        art = art.pan(-0.12, 0)
+      elif key == "d":
+        art = art.pan(0.12, 0)
+      elif key == "z":
+        art = art.zoom(1.25)
+      elif key == "c":
+        art = art.zoom(0.8)
+      elif key in ("q", "e"):
+        art = art.rotate()
+    print(art.render())`,
+      },
+      {
+        id: "isometric-cube-stack",
+        label: "Isometric cubes",
+        code: `# Isometric cube stack.
+# IsoScene is a deterministic 48-column by 18-row ASCII scene.
+# render() returns exactly 18 newline-separated rows, each exactly 48 columns.
+# Use mostly whitespace plus these structural characters: "/\\_|.+#".
+# Cues should read as stacked isometric cubes with top, left, and right faces.
+# rotate_y(turns) returns a new scene rotated around the vertical axis.
+# Four clockwise rotations must return to the original view.
+# For directional glyphs, rotate face orientation intentionally; do not simply
+# reverse strings or transpose the rendered text.
+# Keep cube coordinates, dimensions, and helper functions in the completion.
+
+class IsoScene:
+  def render(self) -> str
+  def rotate_y(self, turns: int = 1) -> "IsoScene"
+
+def cube_stack() -> IsoScene
+
+def main():
+  scene = cube_stack()
+  print(scene.render())
+  while True:
+    command = input("q/e rotate, x exit> ").strip().lower()
+    if command == "x":
+      break
+    for key in command:
+      if key == "q":
+        scene = scene.rotate_y(-1)
+      elif key == "e":
+        scene = scene.rotate_y(1)
+    print(scene.render())`,
       },
       {
         id: "formula-spreadsheet",
@@ -638,20 +814,9 @@ def test():
   },
   {
     sampleId: "starter-arithmetic",
-    name: "logos intro test_basic arithmetic and snippets",
-    sheet: `def add(x: int, y: int) -> int
-
-def mul(x: int, y: int) -> int
-
-def test_basic():
-  print(mul(add(1, 2), 3))
-  \`print mul of (add one and two) and 3\`
-  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
-  added = \`add 1 and 2\`
-  product = \`mul 3 and 4\`
-  print(added)
-  print(product)`,
-    runnable: "test_basic",
+    name: "logos intro main arithmetic and snippets",
+    sheet: sampleById("starter-arithmetic").code,
+    runnable: "main",
     expectedStdout: ["9", "9", "9", "12"],
   },
   {
@@ -738,49 +903,221 @@ def test():
   },
   {
     sampleId: "ascii-fractal",
-    name: "deterministic ascii mandelbrot contract",
+    name: "deterministic ascii mandelbrot render and rotate contract",
     sheet: withTest("ascii-fractal", `def test():
   palette = set(" .:-=+*#%@")
-  first = fractal()
-  second = fractal()
-  filled = sum(char != " " for row in first for char in row)
-  used = {char for row in first for char in row if char != " "}
-  rows_with_marks = sum(any(char != " " for char in row) for row in first)
-  print(len(first), len(first[0]) if first else 0)
-  print(all(len(row) == 64 for row in first))
-  print(all(char in palette for row in first for char in row))
-  print(first == second)
-  print(100 <= filled <= 700)
-  print(rows_with_marks >= 14)
-  print(len(set(first)) >= 12)
-  print(len(used) >= 5)
-  print(any(char in "#%@" for row in first for char in row))`),
+  art = mandelbrot()
+  normal = art.render().splitlines()
+  rotated = art.rotate().render().splitlines()
+  repeat = mandelbrot().render().splitlines()
+  normal_filled = sum(char != " " for row in normal for char in row)
+  rotated_filled = sum(char != " " for row in rotated for char in row)
+  normal_used = {char for row in normal for char in row if char != " "}
+  rotated_used = {char for row in rotated for char in row if char != " "}
+  overlap_rows = sum(left == right for left, right in zip(normal, rotated))
+  print(len(normal), len(normal[0]) if normal else 0)
+  print(len(rotated), len(rotated[0]) if rotated else 0)
+  print(all(len(row) == 64 for row in normal + rotated))
+  print(all(char in palette for row in normal + rotated for char in row))
+  print(normal == repeat)
+  print(normal != rotated)
+  print(100 <= normal_filled <= 700)
+  print(100 <= rotated_filled <= 700)
+  print(sum(any(char != " " for char in row) for row in normal) >= 14)
+  print(sum(any(char != " " for char in row) for row in rotated) >= 14)
+  print(len(set(normal)) >= 12)
+  print(len(set(rotated)) >= 12)
+  print(len(normal_used) >= 5 and len(rotated_used) >= 5)
+  print(any(char in "#%@" for row in normal for char in row))
+  print(any(char in "#%@" for row in rotated for char in row))
+  print(overlap_rows <= 10)`),
     runnable: "test",
-    expectedStdout: ["24 64", "True", "True", "True", "True", "True", "True", "True", "True"],
+    expectedStdout: [
+      "24 64",
+      "24 64",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+    ],
   },
   {
     sampleId: "ascii-fractal",
-    name: "mandelbrot render natural snippet",
+    name: "mandelbrot render and rotate natural snippet",
     sheet: `# Fractal rendering file.
-# Results must be exactly 24 strings, each 64 characters wide.
-# through the middle, and nested coastline or root contours near the ground.
-# Use only these density characters, from empty to bright: " .:-=+*#%@".
-# Keep the background mostly empty, with detail clustered into readable forms.
+# AsciiArt represents a generated image, not just a finished text buffer.
+# render() returns exactly 24 newline-separated rows, each exactly 64 columns.
+# rotate() returns a new AsciiArt view rotated 90 degrees clockwise.
+# For generated images, rotate by re-rendering transformed sample coordinates,
+# preserving the 24x64 output size; do not transpose the rendered text grid.
+# Keep every rendered character in this density palette, from empty to bright:
+# " .:-=+*#%@".
+# Keep the background mostly whitespace and make the main shape opaque.
+# Mandelbrot should have a compact body with a bulb, a horizontal waist,
+# nested coastline detail, and deterministic output.
 
 class AsciiArt:
-  def render() -> str
+  def render(self) -> str
+  def rotate(self) -> "AsciiArt"
 
 def mandelbrot() -> AsciiArt
   # Return a deterministic ASCII mandelbrot fractal.
 
 def main():
-  \`generate and render the {mandelbrot} fractal\``,
+  \`generate and render the {mandelbrot} fractal, then print a blank line, then print its rotated view\``,
     runnable: "main",
     stdoutCheck: {
       description:
-        "prints a visible Mandelbrot-style ASCII rendering using the density palette",
-      matches: isVisibleAsciiFractalStdout,
+        "prints normal and rotated 24x64 Mandelbrot-style ASCII renderings using the density palette",
+      matches: isVisibleRotatedAsciiFractalStdout,
     },
+  },
+  {
+    sampleId: "weather-map",
+    name: "weather map render and controls contract",
+    sheet: withMain("weather-map", `def test():
+  allowed = set(" .:~*LH^>v<")
+  base = sample_weather()
+  rows = base.render().splitlines()
+  shifted = base.pan(2, -1).render().splitlines()
+  wind = base.rotate_wind(1).render().splitlines()
+  filled = sum(char != " " for row in rows for char in row)
+  print(len(rows), len(rows[0]) if rows else 0)
+  print(all(len(row) == 40 for row in rows + shifted + wind))
+  print(all(char in allowed for row in rows + shifted + wind for char in row))
+  print(rows == sample_weather().render().splitlines())
+  print(rows != shifted)
+  print(rows != wind)
+  print(filled >= 40)
+  print(any(char in "LH" for row in rows for char in row))
+  print(any(char in "^>v<" for row in rows for char in row))
+  print(any(char in "~*" for row in rows for char in row))`),
+    runnable: "test",
+    expectedStdout: [
+      "16 40",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+    ],
+  },
+  {
+    sampleId: "maze-renderer",
+    name: "maze renderer movement contract",
+    sheet: withMain("maze-renderer", `def test():
+  maze = sample_maze()
+  rows = maze.render().splitlines()
+  start = maze.position()
+  blocked = maze.move("a")
+  moved = maze.move("d")
+  print(len(rows), len(rows[0]) if rows else 0)
+  print(all(len(row) == 13 for row in rows))
+  print(all(char in set("# @E") for row in rows for char in row))
+  print(start == (1, 1))
+  print(blocked.position() == start)
+  print(moved.position() != start)
+  print(moved.render() != maze.render())
+  print(not maze.solved())
+  print(sum(row.count("@") for row in rows))
+  print(sum(row.count("E") for row in rows))`),
+    runnable: "test",
+    expectedStdout: [
+      "7 13",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "1",
+      "1",
+    ],
+  },
+  {
+    sampleId: "julia-set-explorer",
+    name: "julia set explorer view contract",
+    sheet: withMain("julia-set-explorer", `def test():
+  palette = set(" .:-=+*#%@")
+  art = julia("dragon")
+  rows = art.render().splitlines()
+  shifted = art.pan(0.2, -0.1).render().splitlines()
+  zoomed = art.zoom(1.2).render().splitlines()
+  rotated = art.rotate().render().splitlines()
+  repeat = julia("dragon").render().splitlines()
+  filled = sum(char != " " for row in rows for char in row)
+  print(len(rows), len(rows[0]) if rows else 0)
+  print(all(len(row) == 64 for row in rows + shifted + zoomed + rotated))
+  print(all(char in palette for row in rows + shifted + zoomed + rotated for char in row))
+  print(rows == repeat)
+  print(rows != shifted)
+  print(rows != zoomed)
+  print(rows != rotated)
+  print(100 <= filled <= 800)
+  print(len({char for row in rows for char in row if char != " "}) >= 5)
+  print(any(char in "#%@" for row in rows for char in row))`),
+    runnable: "test",
+    expectedStdout: [
+      "24 64",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+    ],
+  },
+  {
+    sampleId: "isometric-cube-stack",
+    name: "isometric cube stack rotation contract",
+    sheet: withMain("isometric-cube-stack", `def test():
+  allowed = set(" /\\\\_|.+#")
+  scene = cube_stack()
+  rows = scene.render().splitlines()
+  once = scene.rotate_y(1).render().splitlines()
+  four = scene.rotate_y(1).rotate_y(1).rotate_y(1).rotate_y(1).render().splitlines()
+  filled = sum(char != " " for row in rows for char in row)
+  print(len(rows), len(rows[0]) if rows else 0)
+  print(all(len(row) == 48 for row in rows + once + four))
+  print(all(char in allowed for row in rows + once + four for char in row))
+  print(rows == cube_stack().render().splitlines())
+  print(rows != once)
+  print(rows == four)
+  print(40 <= filled <= 500)
+  print(any("/" in row for row in rows))
+  print(any("\\\\" in row for row in rows))
+  print(any("_" in row or "|" in row for row in rows))`),
+    runnable: "test",
+    expectedStdout: [
+      "18 48",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+    ],
   },
   {
     sampleId: "formula-spreadsheet",
@@ -874,7 +1211,30 @@ function withMain(sampleId: string, mainSource: string): CodeSheet {
   return `${code.slice(0, markerIndex)}\n\n${mainSource}`;
 }
 
-function isVisibleAsciiFractalStdout(stdout: string[]): boolean {
+function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {
+  const blankIndex = stdout.findIndex((row) => row.length === 0);
+  if (blankIndex <= 0 || blankIndex >= stdout.length - 1) {
+    return false;
+  }
+
+  const normal = stdout.slice(0, blankIndex);
+  const rotated = stdout.slice(blankIndex + 1);
+  const overlapRows = normal.reduce((total, row, index) => {
+    return total + (row === rotated[index] ? 1 : 0);
+  }, 0);
+
+  return (
+    isVisibleAsciiFractalFrame(normal) &&
+    isVisibleAsciiFractalFrame(rotated) &&
+    normal.length === rotated.length &&
+    normal.every((row) => row.length === 64) &&
+    rotated.every((row) => row.length === 64) &&
+    normal.join("\n") !== rotated.join("\n") &&
+    overlapRows <= 10
+  );
+}
+
+function isVisibleAsciiFractalFrame(stdout: string[]): boolean {
   const palette = new Set(" .:-=+*#%@");
   const visibleRows = stdout.filter((row) => row.trim().length > 0);
   const filled = stdout.reduce((total, row) => {
@@ -883,13 +1243,11 @@ function isVisibleAsciiFractalStdout(stdout: string[]): boolean {
   const used = new Set(stdout.join("").replaceAll(" ", ""));
 
   return (
-    stdout.length >= 14 &&
-    stdout.length <= 24 &&
-    stdout.every((row) => row.length <= 64 && [...row].every((char) => palette.has(char))) &&
+    stdout.length === 24 &&
+    stdout.every((row) => row.length === 64 && [...row].every((char) => palette.has(char))) &&
     visibleRows.length >= 12 &&
-    stdout.some((row) => row.length >= 40) &&
     filled >= 100 &&
-    filled <= 800 &&
+    filled <= 700 &&
     used.size >= 5 &&
     stdout.some((row) => /[#%@]/.test(row))
   );
