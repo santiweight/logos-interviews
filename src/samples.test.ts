@@ -54,4 +54,28 @@ describe("product samples", () => {
 
     expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
   });
+
+  it("accepts spreadsheet renders that use row and column headers", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "formula spreadsheet strings and rendering");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    expect(testCase.stdoutCheck.matches([
+      "(empty spreadsheet)",
+      "None",
+      "Val(value=7)",
+      "5",
+      "48",
+      "",
+      "=== Unevaluated Expressions ===",
+      "          A           B           C      ",
+      "1         7         2 + 3    (B1 + A1) * 4",
+      "",
+      "=== Evaluated Values ===",
+      "          A           B           C      ",
+      "1         7           5           48",
+    ])).toBe(true);
+  });
 });

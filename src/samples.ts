@@ -1209,9 +1209,15 @@ function isRenderedSpreadsheetStdout(stdout: string[]): boolean {
   }
 
   const joined = stdout.join("\n");
-  const hasFormulaCells = ["A1", "B1", "C1"].every((address) => joined.includes(address));
+  const hasA1Addresses = ["A1", "B1", "C1"].every((address) => joined.includes(address));
+  const hasGridAddresses =
+    stdout.some((line) => /\bA\b.*\bB\b.*\bC\b/.test(line)) &&
+    stdout.some((line) => /^\s*1\b/.test(line) && /7/.test(line) && /2\s*\+\s*3/.test(line));
+  const hasFormulaCells = hasA1Addresses || hasGridAddresses;
   const hasPrettyFormula = /2\s*\+\s*3/.test(joined) && /B1\s*\+\s*A1/.test(joined);
-  const tableLikeRows = stdout.filter((line) => /[|+]/.test(line) && /\S/.test(line)).length;
+  const tableLikeRows = stdout.filter((line) => {
+    return /[|+]/.test(line) || /-{3,}/.test(line) || /\bA\b.*\bB\b.*\bC\b/.test(line) || /^\s*1\b/.test(line);
+  }).length;
 
   return cursor === coreOutputs.length && hasFormulaCells && hasPrettyFormula && tableLikeRows >= 2;
 }
