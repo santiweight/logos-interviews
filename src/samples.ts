@@ -653,7 +653,7 @@ def main():
       },
       {
         id: "formula-spreadsheet",
-        label: "Formula spreadsheet",
+        label: "Excel Calculator",
         code: `# Spreadsheet cell storage uses A1-style addressing.
 # Treat [[T]] as a nested mapping keyed by column then row:
 # cells["A"][1] is A1, cells["B"][2] is B2.
@@ -736,7 +736,7 @@ def main():
       },
       {
         id: "annotated-maze",
-        label: "Annotated maze",
+        label: "Maze Solver",
         code: annotatedMazeEvalSheet,
       },
       {
@@ -753,8 +753,8 @@ export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.sa
 export const defaultProjectIds = [
   "starter-arithmetic",
   "beyond-basics",
-  "formula-spreadsheet",
   "annotated-maze",
+  "formula-spreadsheet",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
@@ -772,7 +772,7 @@ export const sampleTemplateGroups: SampleTemplateGroup[] = [
   },
   {
     label: "Modeling and data",
-    sampleIds: ["formula-spreadsheet", "sudoku-state", "sudoku-human-strategies", "annotated-maze"],
+    sampleIds: ["annotated-maze", "formula-spreadsheet", "sudoku-state", "sudoku-human-strategies"],
   },
   {
     label: "ASCII art",
