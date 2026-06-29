@@ -22,7 +22,6 @@ import {
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import {
   defaultProjectIds,
-  sampleGroups,
   samples,
   type SampleGroup,
   type SampleProgram,
@@ -199,6 +198,24 @@ const shareIcon = `
 `;
 const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
+const templateGroups = createTemplateGroups([
+  {
+    label: "Getting started",
+    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
+  },
+  {
+    label: "Product workflows",
+    sampleIds: ["cart-promotions", "feature-flag-rollout", "calendar-availability"],
+  },
+  {
+    label: "Backend systems",
+    sampleIds: ["notification-retries", "rate-limiter", "job-queue"],
+  },
+  {
+    label: "Modeling and data",
+    sampleIds: ["formula-spreadsheet", "sudoku-state", "ascii-fractal"],
+  },
+]);
 
 function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
   return `
@@ -236,6 +253,35 @@ function renderSampleGroup(group: SampleGroup): string {
       </div>
     </details>
   `;
+}
+
+function createTemplateGroups(groups: Array<{ label: string; sampleIds: string[] }>): SampleGroup[] {
+  const sampleById = new Map(samples.map((sample) => [sample.id, sample]));
+  const groupedSampleIds = new Set<string>();
+
+  const templateGroups = groups.map((group) => ({
+    label: group.label,
+    samples: group.sampleIds.map((sampleId) => {
+      const sample = sampleById.get(sampleId);
+      if (!sample) {
+        throw new Error(`Missing template sample: ${sampleId}`);
+      }
+      if (groupedSampleIds.has(sampleId)) {
+        throw new Error(`Duplicate template sample: ${sampleId}`);
+      }
+
+      groupedSampleIds.add(sampleId);
+
+      return sample;
+    }),
+  }));
+
+  const ungroupedSample = samples.find((sample) => !groupedSampleIds.has(sample.id));
+  if (ungroupedSample) {
+    throw new Error(`Ungrouped template sample: ${ungroupedSample.id}`);
+  }
+
+  return templateGroups;
 }
 
 app.innerHTML = `
@@ -276,13 +322,18 @@ app.innerHTML = `
         <div class="source-tabs-bar">
           <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
           <details id="sample-menu" class="sample-menu">
-            <summary class="source-add-tab" aria-label="Add sample" title="Add sample">
+            <summary class="source-add-tab" aria-label="Add file" title="Add file">
               ${plusIcon}
             </summary>
             <div class="menu-popover sample-popover" role="menu">
               <div class="menu-section">
-                <div class="menu-section-title">Samples</div>
-                ${sampleGroups.map(renderSampleGroup).join("")}
+                <button id="scratch-file-button" class="menu-item scratch-file-menu-item" type="button" role="menuitem">
+                  <span class="menu-item-icon">${plusIcon}</span>
+                  <span>Scratch new file</span>
+                </button>
+                <div class="menu-separator" role="separator"></div>
+                <div class="menu-section-title">Templates</div>
+                ${templateGroups.map(renderSampleGroup).join("")}
               </div>
             </div>
           </details>
@@ -351,6 +402,7 @@ const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
 const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
+const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
@@ -640,7 +692,7 @@ editor.onMouseDown((event) => {
 
 resetWorkspaceButton.addEventListener("click", () => {
   workspaceMenu.open = false;
-  if (!window.confirm("Reset workspace? This removes your open projects and restores the default samples.")) {
+  if (!window.confirm("Reset workspace? This removes your open files and restores the default templates.")) {
     sessionCapture.track("reset_workspace_cancelled", undefined, true);
     return;
   }
@@ -743,6 +795,27 @@ snippetResizeHandle.addEventListener("keydown", (event) => {
   const currentHeight = snippetPanel.getBoundingClientRect().height;
   setSnippetPanelHeight(currentHeight + (event.key === "ArrowUp" ? 24 : -24));
 });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || (!sampleMenu.open && !workspaceMenu.open)) {
+    return;
+  }
+
+  const activeElement = document.activeElement;
+  const openMenu = sampleMenu.open ? sampleMenu : workspaceMenu;
+  const restoreFocus =
+    activeElement instanceof Element &&
+    (sampleMenu.contains(activeElement) || workspaceMenu.contains(activeElement));
+
+  event.preventDefault();
+  closeOpenMenus();
+
+  if (restoreFocus) {
+    openMenu.querySelector<HTMLElement>("summary")?.focus();
+  }
+});
+scratchFileButton.addEventListener("click", () => {
+  openScratchFile();
+});
 sampleMenuItems.forEach((item) => {
   item.addEventListener("click", () => {
     openProject(item.dataset.sampleId ?? "");
@@ -775,6 +848,11 @@ function openProject(sampleId: string): void {
   sampleMenu.open = false;
   openProjectTab(sample);
   sessionCapture.track("project_opened", { sampleId: sample.id, sampleLabel: sample.label }, true);
+}
+
+function closeOpenMenus(): void {
+  sampleMenu.open = false;
+  workspaceMenu.open = false;
 }
 
 renderSourceTabs();
@@ -944,6 +1022,26 @@ function openProjectTab(sample: SampleProgram): void {
   updateActiveProjectMenuItem();
 }
 
+function openScratchFile(): void {
+  syncActiveSourceTab();
+  sampleMenu.open = false;
+
+  const tab: SourceTab = {
+    id: createSourceTabId("scratch"),
+    projectId: "scratch",
+    title: nextScratchFileTitle(),
+    source: "",
+  };
+
+  sourceTabs = [...sourceTabs, tab];
+  activeSourceTabId = tab.id;
+  applyActiveSourceTab();
+  renderSourceTabs();
+  scheduleSaveSourceTabs();
+  updateActiveProjectMenuItem();
+  sessionCapture.track("scratch_file_opened", { tabId: tab.id, title: tab.title }, true);
+}
+
 function activateSourceTab(tabId: string): void {
   if (tabId === activeSourceTabId || !sourceTabs.some((tab) => tab.id === tabId)) {
     return;
@@ -986,7 +1084,7 @@ function applyActiveSourceTab(): void {
   agentMessages = [];
   renderAgentLog();
   lastRunLabel = "never";
-  lastRunStatusText = active ? "" : "No open project";
+  lastRunStatusText = active ? "" : "No open file";
   lastRunDefinitionHash = null;
   runStatus.textContent = lastRunStatusText;
   runStatus.dataset.state = active ? "" : "error";
@@ -1010,7 +1108,7 @@ function activeSourceTab(): SourceTab | null {
 
 function renderSourceTabs(): void {
   if (sourceTabs.length === 0) {
-    sourceTabsEl.innerHTML = `<div class="source-tabs-empty">No open projects</div>`;
+    sourceTabsEl.innerHTML = `<div class="source-tabs-empty">No open files</div>`;
     return;
   }
 
@@ -1042,10 +1140,14 @@ function updateEditorAvailability(): void {
 }
 
 function updateActiveProjectMenuItem(): void {
-  const active = activeSourceTab();
   sampleMenuItems.forEach((item) => {
-    item.classList.toggle("active", active !== null && item.dataset.sampleId === active.projectId);
+    item.classList.remove("active");
   });
+}
+
+function nextScratchFileTitle(): string {
+  const scratchCount = sourceTabs.filter((tab) => tab.projectId === "scratch").length;
+  return scratchCount === 0 ? "Scratch" : `Scratch ${scratchCount + 1}`;
 }
 
 function scheduleSaveSourceTabs(): void {
@@ -3632,7 +3734,12 @@ function appSnapshot(): JsonObject {
 }
 
 function activeSampleItem(): HTMLButtonElement | null {
-  return sampleMenuItems.find((item) => item.classList.contains("active")) ?? null;
+  const active = activeSourceTab();
+  if (!active) {
+    return null;
+  }
+
+  return sampleMenuItems.find((item) => item.dataset.sampleId === active.projectId) ?? null;
 }
 
 function requiredQuery<T extends Element>(selector: string): T {

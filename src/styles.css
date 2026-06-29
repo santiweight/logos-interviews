@@ -3,6 +3,8 @@
   --accent: #ec4e02;
   --accent-hover: #bb3e02;
   --accent-soft: #fee9dd;
+  --accent-hover-soft: rgba(236, 78, 2, 0.075);
+  --accent-focus: rgba(236, 78, 2, 0.22);
   --canvas: #f4f1eb;
   --ink: #07080a;
   --muted: #5c5f66;
@@ -16,8 +18,8 @@
   color: var(--ink);
   background: var(--canvas);
   font-family:
-    "IBM Plex Sans", Inter, ui-sans-serif, system-ui, -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
+    Inter, Aptos, "Segoe UI Variable", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -96,7 +98,7 @@ textarea:disabled {
 .sample-menu,
 .workspace-menu {
   position: relative;
-  z-index: 10;
+  z-index: 20;
 }
 
 .menu-popover {
@@ -104,18 +106,22 @@ textarea:disabled {
   top: 36px;
   left: 0;
   width: 246px;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   background: var(--paper);
-  box-shadow: 0 14px 34px rgba(14, 21, 37, 0.12);
-  padding: 5px;
+  box-shadow:
+    0 1px 2px rgba(14, 21, 37, 0.08),
+    0 10px 24px rgba(14, 21, 37, 0.12);
+  padding: 4px;
 }
 
 .sample-popover {
-  top: 32px;
+  top: 30px;
   right: 0;
   left: auto;
-  width: 276px;
+  width: 248px;
 }
 
 .workspace-popover {
@@ -126,11 +132,11 @@ textarea:disabled {
 }
 
 .menu-section-title {
-  padding: 6px 8px 4px;
+  padding: 6px 7px 3px;
   color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 850;
-  letter-spacing: 0.07em;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
@@ -140,37 +146,41 @@ textarea:disabled {
 }
 
 .sample-menu-group + .sample-menu-group {
-  margin-top: 2px;
+  margin-top: 0;
 }
 
 .sample-menu-group-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 30px;
-  border-radius: 5px;
+  min-height: 26px;
+  border-radius: 4px;
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.84rem;
-  font-weight: 760;
+  font-size: 0.78rem;
+  font-weight: 620;
   list-style: none;
-  padding: 0 8px;
+  padding: 0 7px;
 }
 
 .sample-menu-group-title::-webkit-details-marker {
   display: none;
 }
 
-.sample-menu-group-title:hover,
+.sample-menu-group-title:hover {
+  background: var(--paper-soft);
+  color: var(--ink);
+}
+
 .sample-menu-group[open] > .sample-menu-group-title {
-  background: var(--paper-pressed);
-  color: var(--accent-hover);
+  background: transparent;
+  color: var(--ink);
 }
 
 .sample-menu-group-chevron {
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 1.05rem;
+  font-size: 0.95rem;
   line-height: 1;
   transform: rotate(0deg);
 }
@@ -180,29 +190,49 @@ textarea:disabled {
 }
 
 .sample-menu-group .sample-menu-list {
-  margin: 2px 0 4px;
-  padding-left: 10px;
+  margin: 0 0 2px;
+  padding-left: 9px;
 }
 
 .menu-item {
   display: flex;
   align-items: center;
   width: 100%;
-  min-height: 30px;
+  min-height: 26px;
   border-radius: 4px;
   background: transparent;
   color: var(--ink);
   cursor: pointer;
-  font-size: 0.84rem;
-  font-weight: 650;
-  padding: 0 8px;
+  gap: 7px;
+  font-size: 0.78rem;
+  font-weight: 520;
+  padding: 0 7px;
   text-align: left;
 }
 
-.menu-item:hover,
-.menu-item.active {
-  background: var(--accent-soft);
+.menu-item:hover {
+  background: var(--accent-hover-soft);
   color: var(--accent);
+}
+
+.scratch-file-menu-item {
+  min-height: 28px;
+  font-weight: 620;
+}
+
+.menu-item-icon {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  place-items: center;
+  color: var(--accent);
+}
+
+.menu-item-icon .plus-icon {
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.2;
 }
 
 .menu-item-danger {
@@ -216,7 +246,7 @@ textarea:disabled {
 
 .menu-separator {
   height: 1px;
-  margin: 5px 2px;
+  margin: 4px 0;
   background: var(--border);
 }
 
@@ -523,6 +553,10 @@ h2 {
   border-bottom: 0;
   background: var(--tab-strip);
   padding: 0;
+}
+
+.source-tabs-bar:has(.sample-menu[open]) {
+  z-index: 30;
 }
 
 .source-tabs {
@@ -1097,7 +1131,7 @@ h2 {
 }
 
 .tool-tab-close:hover {
-  background: var(--accent-soft);
+  background: var(--accent-hover-soft);
   color: var(--accent);
 }
 
@@ -1393,7 +1427,7 @@ h2 {
 .sample-menu-group-title:focus-visible,
 .menu-item:focus-visible,
 .snippet-resize-handle:focus-visible {
-  outline: 2px solid rgba(236, 78, 2, 0.34);
+  outline: 2px solid var(--accent-focus);
   outline-offset: 1px;
 }
 
