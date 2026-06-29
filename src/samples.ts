@@ -11,6 +11,11 @@ export type SampleGroup = {
   samples: SampleProgram[];
 };
 
+export type SampleTemplateGroup = {
+  label: string;
+  sampleIds: string[];
+};
+
 export type SampleEvalCase = {
   sampleId: string;
   name: string;
@@ -26,6 +31,36 @@ export type SampleStdoutCheck = {
   matches: (stdout: string[]) => boolean;
 };
 
+const humanSudokuStrategyTemplate = `# Human-style Sudoku strategies.
+# apply_strategy performs one named strategy pass: no guessing or backtracking.
+
+type SudokuStrategy =
+  UniqueBoxSolve # there is only one square for a number to go in, in a box
+  | UniqueLineSolve # there is only one square for a number to go in, in a row/column
+  | HiddenDoubleInBox # two numbers appear in the same two cells of a box
+  | # a row/col's possible squares for a number are all in the same box,
+    # so that number can be removed from the rest of that box
+    LineCompleteExceptForBox
+  | HiddenSingle
+type CellAnnotation = Solved(int) | Annotations(list[int])
+
+class SudokuState:
+  grid: list[list[CellAnnotation]]
+
+  def __init__(self, grid: list) -> None
+  def values(self) -> list[list[int]]
+  def candidates(self, row: int, col: int) -> list[int]
+  def pretty_print(self) -> None
+
+def apply_strategy(state: SudokuState, strategy: SudokuStrategy) -> SudokuState
+
+@logos.debug.print()
+def main():
+  \`\`\`
+  Demonstrate the five strategies on a small set of Sudoku examples.
+  Print each strategy name, the board before and after, and any candidate changes.
+  \`\`\``;
+
 export const sampleGroups: SampleGroup[] = [
   {
     label: "Product workflows",
@@ -34,7 +69,9 @@ export const sampleGroups: SampleGroup[] = [
         id: "interactive-reverse",
         label: "Reverse CLI",
         code: `def main():
-  \`an interactive cli loop, where user types a word, and the program prints back the reverse of the word\``,
+  \`\`\`
+  A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
+  \`\`\``,
       },
       {
         id: "cart-promotions",
@@ -317,19 +354,23 @@ def main():
   added = \`add 1 and 2\`
   product = \`mul 3 and 4\`
   print(added)
-  print(product)`,
+  \`print product\``,
       },
       {
         id: "beyond-basics",
         label: "Beyond Basics",
-        code: `# You can also define classes, even if they're not complete!
-# Notice how the agent internally generates a field for tracking the grid.
+        code: `# Logos supports classes, even if incomplete.
+#
+# Click MagicSquare, and notice how the agent's implementations
+# compare to the stub we provided.
 
 class MagicSquare:
   size: int
 
   def gen() -> MagicSquare
-  def pretty() -> str
+  def grid(self) -> [[int]]
+
+  def pretty(self) -> str
 
 def test_magic_square():
   # Logos also support multi-line snippets.
@@ -344,10 +385,10 @@ def test_magic_square():
         label: "ASCII fractal",
         code: `# Fractal rendering file.
 # Results must be exactly 24 strings, each 64 characters wide.
-# through the middle, and nested coastline or root contours near the ground.
+#
 # Use only these density characters, from empty to bright: " .:-=+*#%@".
+#
 # Keep the background mostly empty, with detail clustered into readable forms.
-# Return a deterministic ASCII mandelbrot fractal.
 
 def mandelbrot() -> list
 
@@ -557,20 +598,22 @@ class SpreadsheetResult:
   def eval(self, cell: CellAddress) -> int | EvalError | None
   def eval_inner(self, stack: list, cell: CellAddress) -> int | EvalError | None
 
-def test():
+@logos.debug.print()
+def main():
   sheet = Spreadsheet()
-  \`render + print sheet\`
-  print(sheet.get(c("A1")))
-  sheet.set(c("A1"), "7")
-  print(sheet.get(c("A1")))
-  sheet.set(c("B1"), "2 + 3")
-  print(sheet.eval().eval(c("B1")))
-  sheet.set(c("C1"), "(B1 + A1) * 4)")
-  print(sheet.eval().eval(c("C1")))
+
   \`\`\`
-  render + print sheet as unevaluated expressions and then as an excel-like table
-  print as pretty tables
-  use pretty_expr
+  print results of each step...
+  A1 -> None
+  A1 = 7
+  A1 -> 7
+  B1 = 2 + 3
+  B1 -> 5
+  C1 = (B1 + A1) * 4
+  C1 -> ?
+  D[1:3] = B[1:3] * 2 # just do the first 3 rows
+
+  render + print sheet as unevaluated expressions in an excel-like table
   \`\`\``,
       },
       {
@@ -600,6 +643,48 @@ def main():
   print("Solution:")
   state.pretty_print()`,
       },
+      {
+        id: "annotated-maze",
+        label: "Annotated maze",
+        code: `# Maze.grid is a rectangular list of rows.
+# Use "#" for walls, " " for open cells, "S" for start, and "G" for goal.
+# start and goal are (row, col) coordinates.
+# MazeGenerator.gen returns a deterministic, solvable maze of the configured size.
+# astar_solve returns a shortest path from start to goal, including both endpoints.
+
+class Maze(grid: list[list[str]], start: tuple[int, int], goal: tuple[int, int])
+
+def maze_is_solvable(maze: Maze) -> bool
+
+@logos.debug.print()
+class MazeGenerator:
+  size: int = 8
+
+  # Generates a solvable maze using classical graph techniques.
+  # Start with a connected grid graph, choose two opposing reachable nodes,
+  # and remove enough edges or cells to make the route interesting while
+  # preserving at least one path between start and goal.
+  # Use maze_is_solvable for validation rather than undeclared helpers.
+  def gen(self) -> Maze
+
+def astar_solve(maze: Maze) -> list[tuple[int, int]]
+
+@logos.debug.print()
+def main():
+  \`\`\`
+  build a 10x10 maze using MazeGenerator, and then solve it using A*.
+  only generate solvable mazes.
+  use maze_is_solvable to check the generated maze before solving it.
+  print the maze, the start and goal, the path length, and the solved maze
+  with the path marked.
+  use colors to make it clear where the path is
+  \`\`\``,
+      },
+      {
+        id: "sudoku-human-strategies",
+        label: "Human Sudoku strategies",
+        code: humanSudokuStrategyTemplate,
+      },
     ],
   },
 ];
@@ -611,6 +696,36 @@ export const defaultProjectIds = [
   "beyond-basics",
   "ascii-fractal",
   "formula-spreadsheet",
+  "annotated-maze",
+];
+
+export const sampleTemplateGroups: SampleTemplateGroup[] = [
+  {
+    label: "Getting started",
+    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
+  },
+  {
+    label: "Product workflows",
+    sampleIds: ["cart-promotions", "feature-flag-rollout", "calendar-availability"],
+  },
+  {
+    label: "Backend systems",
+    sampleIds: ["notification-retries", "rate-limiter", "job-queue"],
+  },
+  {
+    label: "Modeling and data",
+    sampleIds: ["formula-spreadsheet", "sudoku-state", "sudoku-human-strategies", "annotated-maze"],
+  },
+  {
+    label: "ASCII art",
+    sampleIds: [
+      "ascii-fractal",
+      "weather-map",
+      "maze-renderer",
+      "julia-set-explorer",
+      "isometric-cube-stack",
+    ],
+  },
 ];
 
 export const sampleEvalCases: SampleEvalCase[] = [
@@ -808,6 +923,21 @@ def test():
   },
   {
     sampleId: "starter-arithmetic",
+    name: "ansi green terminal output",
+    sheet: `def main():
+  \`\`\`
+  print a green 8
+  \`\`\``,
+    runnable: "main",
+    stdoutCheck: {
+      description: "prints 8 wrapped in an ANSI green SGR sequence",
+      matches(stdout) {
+        return stdout.length === 1 && /^\x1b\[(?:0;)?(?:32|92)m8\x1b\[0m$/.test(stdout[0] ?? "");
+      },
+    },
+  },
+  {
+    sampleId: "starter-arithmetic",
     name: "starter arithmetic definitions and natural snippets",
     sheet: `def add(x: int, y: int) -> int
 
@@ -911,6 +1041,18 @@ def test():
       " #   #   #   # ",
       "# # # # # # # #",
     ],
+  },
+  {
+    sampleId: "ascii-fractal",
+    name: "ascii mandelbrot sample prints non-empty output",
+    sheet: sampleById("ascii-fractal").code,
+    runnable: "test",
+    stdoutCheck: {
+      description: "prints at least one non-whitespace Mandelbrot character",
+      matches(stdout) {
+        return stdout.some((line) => line.trim().length > 0);
+      },
+    },
   },
   {
     sampleId: "ascii-fractal",
@@ -1112,7 +1254,7 @@ def main():
     sampleId: "formula-spreadsheet",
     name: "formula spreadsheet strings and rendering",
     sheet: sampleById("formula-spreadsheet").code,
-    runnable: "test",
+    runnable: "main",
     stdoutCheck: {
       description:
         "prints the core spreadsheet results and at least one rendered table-like view with cell addresses",
@@ -1122,7 +1264,7 @@ def main():
   {
     sampleId: "formula-spreadsheet",
     name: "formula spreadsheet precedence and parentheses",
-    sheet: withTest("formula-spreadsheet", `def test():
+    sheet: withMain("formula-spreadsheet", `def test():
   sheet = Spreadsheet()
   sheet.set(c("A1"), "10 - 2 * 3")
   sheet.set(c("B1"), "(10 - 2) * 3")
@@ -1132,6 +1274,77 @@ def main():
   print(sheet.eval().eval(c("C1")))`),
     runnable: "test",
     expectedStdout: ["4", "24", "10"],
+  },
+  {
+    sampleId: "sudoku-human-strategies",
+    name: "human sudoku strategy semantics",
+    sheet: withMain("sudoku-human-strategies", `def main():
+  def annotation_grid(values: list[int]) -> list:
+    return [[Annotations(list(values)) for _ in range(9)] for _ in range(9)]
+
+  def solved_count(state: SudokuState) -> int:
+    return sum(1 for row in state.values() for value in row if value != 0)
+
+  line_state = SudokuState([
+    [0, 2, 3, 4, 5, 6, 7, 8, 9],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ])
+  before = solved_count(line_state)
+  line_state = apply_strategy(line_state, UniqueLineSolve())
+  print(line_state.values()[0][0] == 1 and solved_count(line_state) == before + 1)
+
+  box_state = SudokuState([
+    [0, 2, 3, 0, 0, 0, 0, 0, 0],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ])
+  before = solved_count(box_state)
+  box_state = apply_strategy(box_state, UniqueBoxSolve())
+  print(box_state.values()[0][0] == 1 and solved_count(box_state) == before + 1)
+
+  single_state = SudokuState([
+    [0, 2, 3, 4, 5, 6, 7, 8, 9],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ])
+  before = solved_count(single_state)
+  single_state = apply_strategy(single_state, HiddenSingle())
+  print(single_state.values()[0][0] == 1 and solved_count(single_state) == before + 1)
+
+  double_grid = annotation_grid([3, 4, 5, 6, 7, 8, 9])
+  double_grid[0][0] = Annotations([1, 2, 3])
+  double_grid[0][1] = Annotations([1, 2, 4])
+  double_state = apply_strategy(SudokuState(double_grid), HiddenDoubleInBox())
+  print(double_state.values()[0][0] == 0 and double_state.candidates(0, 0) == [1, 2] and double_state.candidates(0, 1) == [1, 2])
+
+  line_box_grid = annotation_grid([2, 3, 4, 5])
+  line_box_grid[0][0] = Annotations([1, 2])
+  line_box_grid[0][1] = Annotations([1, 3])
+  line_box_grid[0][2] = Annotations([1, 4])
+  line_box_grid[1][0] = Annotations([1, 5])
+  line_box_state = apply_strategy(SudokuState(line_box_grid), LineCompleteExceptForBox())
+  print(line_box_state.values()[1][0] == 0 and line_box_state.candidates(1, 0) == [5])`),
+    runnable: "main",
+    expectedStdout: ["True", "True", "True", "True", "True"],
   },
   {
     sampleId: "sudoku-state",
@@ -1170,6 +1383,17 @@ def main():
       "[5, 3, 4, 6, 7, 8, 9, 1, 2]",
       "[3, 4, 5, 2, 8, 6, 1, 7, 9]",
     ],
+  },
+  {
+    sampleId: "annotated-maze",
+    name: "annotated maze generation and astar debug output",
+    sheet: sampleById("annotated-maze").code,
+    runnable: "main",
+    stdoutCheck: {
+      description:
+        "prints maze generation/debug details, a visible maze, and an A* path length",
+      matches: isMazeDebugStdout,
+    },
   },
 ];
 
@@ -1218,6 +1442,12 @@ function isRenderedSpreadsheetStdout(stdout: string[]): boolean {
   }
 
   const joined = stdout.join("\n");
+  const hasLegacyCoreOutputs = cursor === coreOutputs.length;
+  const hasLabeledCoreOutputs =
+    stdout.some((line) => /\bA1\b.*(?:->|:).*\bNone\b/i.test(line)) &&
+    stdout.some((line) => /\bA1\b.*(?:->|=|:).*\b7\b/.test(line)) &&
+    stdout.some((line) => /\bB1\b.*(?:->|:).*\b5\b/.test(line)) &&
+    stdout.some((line) => /\bC1\b.*(?:->|:).*\b48\b/.test(line));
   const hasA1Addresses = ["A1", "B1", "C1"].every((address) => joined.includes(address));
   const hasGridAddresses =
     stdout.some((line) => /\bA\b.*\bB\b.*\bC\b/.test(line)) &&
@@ -1228,7 +1458,7 @@ function isRenderedSpreadsheetStdout(stdout: string[]): boolean {
     return /[|+]/.test(line) || /-{3,}/.test(line) || /\bA\b.*\bB\b.*\bC\b/.test(line) || /^\s*1\b/.test(line);
   }).length;
 
-  return cursor === coreOutputs.length && hasFormulaCells && hasPrettyFormula && tableLikeRows >= 2;
+  return (hasLegacyCoreOutputs || hasLabeledCoreOutputs) && hasFormulaCells && hasPrettyFormula && tableLikeRows >= 2;
 }
 
 function isVisibleRotatedAsciiFractalStdout(stdout: string[]): boolean {
@@ -1281,5 +1511,20 @@ function isVisibleAsciiFractalFrame(stdout: string[]): boolean {
     filled <= 700 &&
     used.size >= 5 &&
     stdout.some((row) => /[#%@]/.test(row))
+  );
+}
+
+function isMazeDebugStdout(stdout: string[]): boolean {
+  const joined = stdout.join("\n");
+  const mazeRows = stdout.filter((row) => /^[#.*SG ]{6,}$/.test(row));
+  const pathLength = stdout.some((row) => /path\s*(length|len)?\D+\d+/i.test(row));
+
+  return (
+    stdout.length >= 6 &&
+    mazeRows.length >= 4 &&
+    /start/i.test(joined) &&
+    /goal/i.test(joined) &&
+    /(?:a\*|astar|path)/i.test(joined) &&
+    pathLength
   );
 }

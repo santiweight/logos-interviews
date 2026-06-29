@@ -6,6 +6,7 @@ import {
   language as pythonLanguage,
 } from "monaco-editor/esm/vs/basic-languages/python/python.js";
 import {
+  completionSnippetHashes,
   definitionReadiness,
   hashCompletionInput,
   implementationBlockForTarget,
@@ -19,10 +20,12 @@ import {
   type Runnable,
   type SnippetHash,
 } from "./codeSheet";
+import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import {
   defaultProjectIds,
   samples,
+  sampleTemplateGroups,
   type SampleGroup,
   type SampleProgram,
 } from "./samples";
@@ -139,10 +142,6 @@ type InteractiveRunPollResponse = {
   status: RunStatus;
 };
 
-type RunOnceResponse =
-  | { ok: true; stdout: string[]; implementation: string }
-  | { ok: false; stdout: string[]; error: string; implementation: string };
-
 const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
@@ -212,37 +211,7 @@ const shareIcon = `
 `;
 const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
-const templateGroups = createTemplateGroups([
-  {
-    label: "Getting started",
-    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
-  },
-  {
-    label: "Product workflows",
-    sampleIds: ["cart-promotions", "feature-flag-rollout", "calendar-availability"],
-  },
-  {
-    label: "Backend systems",
-    sampleIds: ["notification-retries", "rate-limiter", "job-queue"],
-  },
-  {
-    label: "Modeling and data",
-    sampleIds: [
-      "formula-spreadsheet",
-      "sudoku-state",
-    ],
-  },
-  {
-    label: "ASCII art",
-    sampleIds: [
-      "ascii-fractal",
-      "weather-map",
-      "maze-renderer",
-      "julia-set-explorer",
-      "isometric-cube-stack",
-    ],
-  },
-]);
+const templateGroups = createTemplateGroups(sampleTemplateGroups);
 
 function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
   return `
@@ -350,6 +319,9 @@ app.innerHTML = `
                 </select>
               </label>
               <div class="menu-separator" role="separator"></div>
+              <button id="clear-code-cache-button" class="menu-item" type="button" role="menuitem">
+                Clear code cache
+              </button>
               <button id="reset-workspace-button" class="menu-item menu-item-danger" type="button" role="menuitem">
                 Reset workspace
               </button>
@@ -443,6 +415,7 @@ const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
+const clearCodeCacheButton = requiredQuery<HTMLButtonElement>("#clear-code-cache-button");
 const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
 const compilationStrategySelect = requiredQuery<HTMLSelectElement>("#compilation-strategy-select");
 const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button");
@@ -466,6 +439,8 @@ let compileController: AbortController | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
 let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let compilationPending = false;
+let latestReadinessDefinitions: DefinitionReadiness[] = [];
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
 let incompleteSnippetDecorations: string[] = [];
@@ -486,6 +461,7 @@ type RunnableState = {
   name: Runnable;
   ready: boolean;
   blockingDependencies: string[];
+  compiling: boolean;
 };
 
 type ToolTabId = string | null;
@@ -730,7 +706,9 @@ editor.onMouseDown((event) => {
   );
 
   if (!runnable.ready) {
-    runStatus.textContent = `${runnable.name} is blocked`;
+    runStatus.textContent = compilationPending
+      ? "Dependencies still compiling"
+      : `${runnable.name} is blocked`;
     runStatus.dataset.state = "error";
     return;
   }
@@ -751,8 +729,18 @@ resetWorkspaceButton.addEventListener("click", () => {
 compilationStrategySelect.addEventListener("change", () => {
   setCompilationStrategy(compilationMode(compilationStrategySelect.value));
 });
+clearCodeCacheButton.addEventListener("click", () => {
+  workspaceMenu.open = false;
+  sessionCapture.track("code_cache_clear_requested", undefined, true);
+  void clearCodeCache();
+});
 app.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
+  const runPanel = target?.closest<HTMLElement>("[data-run-panel-id]") ?? null;
+  if (runPanel) {
+    focusTerminalInput(runPanel.dataset.runPanelId ?? "");
+  }
+
   const shareButton = target?.closest<HTMLButtonElement>("[data-share-session]") ?? null;
   if (shareButton) {
     void shareCurrentSessionFromButton(shareButton);
@@ -940,11 +928,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   setActiveTab(runTab.id);
   renderRunTabs();
 
-  if (!shouldUseInteractiveRun(source, latestImplementationSource)) {
-    await runNonInteractiveTab(runTab.id);
-    return;
-  }
-
   const result = await startInteractiveRunViaDevApi(source, runnable).catch((error: unknown) => ({
     ok: false as const,
     error: error instanceof Error ? error.message : String(error),
@@ -978,39 +961,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   finishInteractiveRun(currentTab, result.status, result.implementation);
-}
-
-async function runNonInteractiveTab(runTabId: string): Promise<void> {
-  const tab = runTabById(runTabId);
-  if (!tab) {
-    return;
-  }
-
-  const result = await runCodeSheetViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
-    ok: false as const,
-    stdout: [] as string[],
-    error: error instanceof Error ? error.message : String(error),
-    implementation: tab.implementation,
-  }));
-  const currentTab = runTabById(runTabId);
-  if (!currentTab) {
-    return;
-  }
-
-  currentTab.sessionId = null;
-  currentTab.terminalText = result.stdout.length === 0 ? "" : `${result.stdout.join("\n")}\n`;
-  currentTab.implementation = result.implementation;
-
-  if (result.ok) {
-    finishInteractiveRun(currentTab, { state: "exited", code: 0, signal: null }, result.implementation);
-    return;
-  }
-
-  finishInteractiveRun(
-    currentTab,
-    { state: "exited", code: null, signal: null, error: result.error },
-    result.implementation,
-  );
 }
 
 async function resetWorkspace(): Promise<void> {
@@ -1057,6 +1007,34 @@ async function resetWorkspace(): Promise<void> {
   }
 }
 
+async function clearCodeCache(): Promise<void> {
+  clearCodeCacheButton.disabled = true;
+  runStatus.textContent = "Clearing code cache";
+  runStatus.dataset.state = "";
+
+  try {
+    const response = await fetch("/api/cache", { method: "DELETE" });
+    const payload = (await response.json()) as { ok?: boolean; cleared?: unknown; error?: string };
+    if (!response.ok || payload.ok !== true) {
+      throw new Error(payload.error ?? "Could not clear code cache");
+    }
+
+    runStatus.textContent = "Code cache cleared";
+    runStatus.dataset.state = "ok";
+    sessionCapture.track("code_cache_clear_completed", {
+      cleared: typeof payload.cleared === "number" ? payload.cleared : null,
+    }, true);
+    scheduleCompilation(0);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runStatus.textContent = "Code cache clear failed";
+    runStatus.dataset.state = "error";
+    sessionCapture.track("code_cache_clear_failed", { error: message }, true);
+  } finally {
+    clearCodeCacheButton.disabled = false;
+  }
+}
+
 function setCompilationStrategy(strategy: CompilationMode): void {
   if (appSettings.compilationStrategy === strategy) {
     compilationStrategySelect.value = strategy;
@@ -1098,6 +1076,7 @@ function scheduleCompilation(delayMs: number): void {
 
   compileController?.abort();
   compileController = null;
+  compilationPending = true;
   latestImplementationSource = source;
   refreshIncompleteSnippets(source);
   updateTypeCheckMarkers([]);
@@ -1508,6 +1487,10 @@ async function streamImplementation(source: string, version: number): Promise<vo
     if (compileController === controller) {
       compileController = null;
     }
+    if (version === compileVersion) {
+      compilationPending = false;
+      updateReadinessDecorations(latestReadinessDefinitions);
+    }
   }
 }
 
@@ -1592,10 +1575,11 @@ function refreshIncompleteSnippets(source: string): void {
 
   try {
     const parsed = parse(source);
-    targets = parsed.incompleteSnippets.map((snippet) => {
+    const compilerHashes = completionSnippetHashes(parsed);
+    targets = parsed.incompleteSnippets.map((snippet, index) => {
       const range = snippetRange(source, snippet);
       return {
-        hash: hashCompletionInput(parsed, snippet.snippet),
+        hash: compilerHashes[index] ?? hashCompletionInput(parsed, snippet.snippet),
         startLine: range.startLine,
         startColumn: range.startColumn,
         endLine: range.endLine,
@@ -1837,6 +1821,8 @@ function updateSelectedDefinitionDecorations(): void {
 function renderSnippetPanel(): void {
   if (selectedDefinitionTarget !== null) {
     const text =
+      directPreviewForDefinitionTarget(selectedDefinitionTarget) ??
+      implementationBlockForTarget(previewImplementationSource(), selectedDefinitionTarget) ??
       implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
       selectedDefinitionTarget.source;
 
@@ -1847,7 +1833,7 @@ function renderSnippetPanel(): void {
 
   if (selectedWholeFileImplementation) {
     setSnippetPanelTitle("Whole file");
-    setSnippetPreviewSource(latestImplementationSource);
+    setSnippetPreviewSource(previewImplementationSource());
     return;
   }
 
@@ -1870,6 +1856,57 @@ function renderSnippetPanel(): void {
 
   setSnippetPanelTitle(target.label);
   setSnippetPreviewSource(text);
+}
+
+function directPreviewForDefinitionTarget(target: ImplementationTarget): string | null {
+  const snippet = Array.from(incompleteSnippetByHash.values()).find((candidate) => {
+    return candidate.kind === target.kind &&
+      candidate.label === target.name &&
+      candidate.startLine === target.line;
+  });
+
+  return snippet === undefined ? null : previewReplacementForSnippet(snippet);
+}
+
+function previewImplementationSource(): string {
+  const source = editor.getValue();
+  const lineStarts = sourceLineStartOffsets(source);
+  const replacements = Array.from(incompleteSnippetByHash.values())
+    .map((target) => {
+      const replacement = previewReplacementForSnippet(target);
+      if (replacement === null) {
+        return null;
+      }
+
+      return {
+        start: editorPositionToOffset(lineStarts, target.startLine, target.startColumn),
+        end: editorPositionToOffset(lineStarts, target.endLine, target.endColumn),
+        replacement,
+      };
+    })
+    .filter((item): item is { start: number; end: number; replacement: string } => item !== null)
+    .sort((left, right) => right.start - left.start);
+
+  if (replacements.length === 0) {
+    return latestImplementationSource;
+  }
+
+  let preview = source;
+  for (const replacement of replacements) {
+    preview = `${preview.slice(0, replacement.start)}${replacement.replacement}${preview.slice(replacement.end)}`;
+  }
+
+  return preview;
+}
+
+function previewReplacementForSnippet(target: IncompleteSnippetTarget): string | null {
+  const preview = snippetPreviewByHash.get(target.hash);
+  if (!preview) {
+    return null;
+  }
+
+  return preview.implementation ??
+    (preview.streamed.length > 0 ? preview.streamed : null);
 }
 
 function setSnippetPanelTitle(label: string | null): void {
@@ -2480,6 +2517,11 @@ function sourceLineStartOffsets(source: string): number[] {
   return starts;
 }
 
+function editorPositionToOffset(lineStarts: number[], line: number, column: number): number {
+  const lineStart = lineStarts[line - 1] ?? 0;
+  return lineStart + Math.max(0, column - 1);
+}
+
 function offsetToEditorPosition(lineStarts: number[], offset: number): { line: number; column: number } {
   let low = 0;
   let high = lineStarts.length - 1;
@@ -2645,26 +2687,113 @@ function setSnippetPanelHeight(height: number): void {
 }
 
 function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
+  latestReadinessDefinitions = definitions;
   const runnableStates = runnableStatesFor(editor.getValue(), definitions);
   const runnableLines = new Set(runnableStates.map((runnable) => runnable.line));
-  const decorations = definitions
-    .filter((definition) => !definition.ready && !runnableLines.has(definition.line))
-    .map((definition) => ({
-      range: new monaco.Range(definition.line, 1, definition.line, 1),
+  const decorations = aggregatedReadinessDecorations(definitions, runnableLines)
+    .map((item) => ({
+      range: new monaco.Range(item.line, 1, item.line, 1),
       options: {
-        glyphMarginClassName: "not-ready-glyph-dot",
-        hoverMessage: {
-          value:
-            definition.reason === "implementation"
-              ? `${definition.name} is waiting for its implementation.`
-              : `${definition.name} is waiting for ${definition.blockingDependencies.join(", ")}.`,
-        },
+        glyphMarginClassName: "not-ready-glyph-spinner",
+        hoverMessage: { value: item.hoverMessage },
       },
     }));
 
   readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
   updateRunnableDecorations(runnableStates);
   updateToolbarRunState(runnableStates);
+}
+
+type ReadinessDecoration = {
+  line: number;
+  hoverMessage: string;
+};
+
+function aggregatedReadinessDecorations(
+  definitions: DefinitionReadiness[],
+  runnableLines: Set<number>,
+): ReadinessDecoration[] {
+  const pending = definitions.filter((definition) => !definition.ready && !runnableLines.has(definition.line));
+  const pendingMethodsByClass = new Map<string, DefinitionReadiness[]>();
+
+  for (const definition of pending) {
+    const className = classNameForMethodDefinition(definition);
+    if (className === null) {
+      continue;
+    }
+
+    pendingMethodsByClass.set(className, [
+      ...(pendingMethodsByClass.get(className) ?? []),
+      definition,
+    ]);
+  }
+
+  const aggregatedClassLines = classLinesForAggregatedMethods(pendingMethodsByClass);
+  const aggregatedClassNames = new Set(aggregatedClassLines.keys());
+
+  return [
+    ...Array.from(aggregatedClassLines, ([className, line]) => ({
+      line,
+      hoverMessage: aggregatedClassHoverMessage(className, pendingMethodsByClass.get(className) ?? []),
+    })),
+    ...pending.flatMap((definition) => {
+      const className = classNameForMethodDefinition(definition);
+      if (className !== null && aggregatedClassNames.has(className)) {
+        return [];
+      }
+
+      return [{
+        line: definition.line,
+        hoverMessage: definitionHoverMessage(definition),
+      }];
+    }),
+  ].sort((left, right) => left.line - right.line);
+}
+
+function classLinesForAggregatedMethods(
+  pendingMethodsByClass: Map<string, DefinitionReadiness[]>,
+): Map<string, number> {
+  let classDecls: Array<{ name: string; line: number }> = [];
+  try {
+    classDecls = parse(editor.getValue()).classDecls.map((decl) => ({
+      name: decl.name,
+      line: decl.line,
+    }));
+  } catch {
+    return new Map();
+  }
+
+  const classLineByName = new Map(classDecls.map((decl) => [decl.name, decl.line]));
+  const aggregated = new Map<string, number>();
+
+  for (const [className, methods] of pendingMethodsByClass) {
+    const classLine = classLineByName.get(className);
+    if (methods.length > 1 && classLine !== undefined) {
+      aggregated.set(className, classLine);
+    }
+  }
+
+  return aggregated;
+}
+
+function classNameForMethodDefinition(definition: DefinitionReadiness): string | null {
+  if (definition.kind !== "method") {
+    return null;
+  }
+
+  const separator = definition.name.indexOf(".");
+  return separator === -1 ? null : definition.name.slice(0, separator);
+}
+
+function definitionHoverMessage(definition: DefinitionReadiness): string {
+  return definition.reason === "implementation"
+    ? `${definition.name} is waiting for its implementation.`
+    : `${definition.name} is waiting for ${definition.blockingDependencies.join(", ")}.`;
+}
+
+function aggregatedClassHoverMessage(className: string, methods: DefinitionReadiness[]): string {
+  const methodNames = methods.map((method) => method.name).join(", ");
+  return `${className} has ${methods.length} pending methods: ${methodNames}.`;
 }
 
 function runnableStatesFor(
@@ -2680,6 +2809,7 @@ function runnableStatesFor(
       line: runnable.line,
       ready: readiness?.ready ?? true,
       blockingDependencies: readiness?.blockingDependencies ?? [],
+      compiling: compilationPending,
     };
   });
 }
@@ -2692,6 +2822,7 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
         name: runnable.name,
         ready: runnable.ready,
         blockingDependencies: runnable.blockingDependencies,
+        compiling: compilationPending,
       },
     ]),
   );
@@ -2707,11 +2838,23 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
         glyphMarginHoverMessage: {
           value: runnable.ready
             ? `Run ${runnable.name}`
-            : `${runnable.name} is waiting for ${runnable.blockingDependencies.join(", ")}.`,
+            : disabledRunnableHoverMessage(runnable),
         },
       },
     })),
   );
+}
+
+function disabledRunnableHoverMessage(runnable: RunnableState): string {
+  if (runnable.compiling) {
+    return "Dependencies still compiling.";
+  }
+
+  if (runnable.blockingDependencies.length > 0) {
+    return `${runnable.name} is waiting for ${runnable.blockingDependencies.join(", ")}.`;
+  }
+
+  return `${runnable.name} is waiting for its implementation.`;
 }
 
 function updateToolbarRunState(runnablesState: Array<RunnableState & { line: number }>): void {
@@ -2731,14 +2874,6 @@ function updateTypeCheckMarkers(diagnostics: TypeCheckDiagnostic[]): void {
 
 function firstRunnable(source: string): Runnable | null {
   return runnables(source)[0]?.name ?? null;
-}
-
-function shouldUseInteractiveRun(source: string, implementation: string): boolean {
-  return (
-    /\binput\s*\(/.test(source) ||
-    /\binput\s*\(/.test(implementation) ||
-    /\b(interactive|stdin|cli loop|user types|prompt)\b/i.test(source)
-  );
 }
 
 function markLastRunCompleted(): void {
@@ -2904,7 +3039,7 @@ function renderRunTab(tab: RunTab): void {
   panel.classList.toggle("active", activeToolTabId === tab.id);
   panel.classList.toggle("terminal-running", running);
   if (output) {
-    output.textContent = tab.terminalText;
+    renderAnsiTerminalText(output, terminalDisplayText(tab));
   }
   if (form) {
     form.hidden = !running;
@@ -2916,6 +3051,18 @@ function renderRunTab(tab: RunTab): void {
   panel.scrollTop = panel.scrollHeight;
 }
 
+function terminalDisplayText(tab: RunTab): string {
+  if (tab.terminalText.length > 0) {
+    return tab.terminalText;
+  }
+
+  if (tab.status?.state === "exited" && tab.status.error) {
+    return `${tab.status.error}\n`;
+  }
+
+  return "";
+}
+
 function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {
   if (chunks.length === 0) {
     return;
@@ -2923,6 +3070,22 @@ function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {
 
   tab.terminalText += chunks.map((chunk) => chunk.text).join("");
   renderRunTab(tab);
+}
+
+function focusTerminalInput(runTabId: string): void {
+  const tab = runTabById(runTabId);
+  if (!tab || activeToolTabId !== runTabId || tab.status?.state !== "running") {
+    return;
+  }
+
+  const input = document.querySelector<HTMLInputElement>(
+    `[data-run-input-id="${cssEscape(runTabId)}"]`,
+  );
+  if (!input || input.disabled || input.hidden) {
+    return;
+  }
+
+  input.focus();
 }
 
 async function sendTerminalInput(runTabId: string): Promise<void> {
@@ -3059,35 +3222,43 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   }
 
   tab.sessionId = null;
+  tab.terminalText = "";
   runStatus.textContent = `Recovering ${tab.runnable} · last run ${lastRunLabel}`;
   runStatus.dataset.state = "";
   renderRunTab(tab);
 
-  const result = await runCodeSheetViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
+  const result = await startInteractiveRunViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
     ok: false as const,
-    stdout: [] as string[],
     error: error instanceof Error ? error.message : String(error),
-    implementation: tab.implementation,
   }));
   const currentTab = runTabById(runTabId);
   if (!currentTab) {
     return;
   }
 
-  currentTab.sessionId = null;
-  currentTab.terminalText = result.stdout.length === 0 ? "" : `${result.stdout.join("\n")}\n`;
-  currentTab.implementation = result.implementation;
-
-  if (result.ok) {
-    finishInteractiveRun(currentTab, { state: "exited", code: 0, signal: null }, result.implementation);
+  if (!result.ok) {
+    currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
+    markLastRunCompleted();
+    lastRunDefinitionHash = currentTab.sourceHash;
+    setLastRunStatus("Error", "error");
+    appendTerminalChunks(currentTab, [{ stream: "stderr", text: result.error }]);
+    updateRunStaleness();
     return;
   }
 
-  finishInteractiveRun(
-    currentTab,
-    { state: "exited", code: null, signal: null, error: result.error },
-    result.implementation,
-  );
+  currentTab.sessionId = result.sessionId;
+  currentTab.implementation = result.implementation;
+  currentTab.status = result.status;
+  latestImplementationSource = result.implementation;
+  renderSnippetPanel();
+  appendTerminalChunks(currentTab, result.chunks);
+
+  if (result.status.state === "running") {
+    scheduleRunPoll(currentTab.id, 120);
+    return;
+  }
+
+  finishInteractiveRun(currentTab, result.status, result.implementation);
 }
 
 function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: string): void {
@@ -3521,55 +3692,6 @@ async function pollInteractiveRunViaDevApi(
   };
 }
 
-async function runCodeSheetViaDevApi(sheet: string, runnable: Runnable): Promise<RunOnceResponse> {
-  const body = {
-    sheet,
-    runnable,
-    compilationStrategy: appSettings.compilationStrategy,
-  };
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/run",
-    body,
-  });
-  const response = await fetch("/api/run", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json()) as {
-    ok?: boolean;
-    stdout?: string[];
-    error?: string;
-    implementation?: string;
-  };
-  sessionCapture.track("api_response", {
-    method: "POST",
-    path: "/api/run",
-    status: response.status,
-    body: payload,
-  });
-
-  const stdout =
-    Array.isArray(payload.stdout) && payload.stdout.every((line) => typeof line === "string")
-      ? payload.stdout
-      : null;
-  if (!response.ok || stdout === null || typeof payload.implementation !== "string") {
-    throw new Error(payload.error ?? "Run request failed");
-  }
-
-  if (payload.ok === true) {
-    return { ok: true, stdout, implementation: payload.implementation };
-  }
-
-  return {
-    ok: false,
-    stdout,
-    error: payload.error ?? "Run request failed",
-    implementation: payload.implementation,
-  };
-}
-
 async function stopInteractiveRunViaDevApi(
   sessionId: string,
 ): Promise<{ ok: true; chunks: RunChunk[]; status: RunStatus }> {
@@ -3908,6 +4030,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       clearTimeout(compileTimer);
       compileTimer = null;
     }
+    compilationPending = false;
     if (editorCaptureTimer) {
       clearTimeout(editorCaptureTimer);
       editorCaptureTimer = null;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runnables } from "./codeSheet";
-import { defaultProjectIds, sampleEvalCases, sampleGroups, samples } from "./samples";
+import { defaultProjectIds, sampleEvalCases, sampleGroups, samples, sampleTemplateGroups } from "./samples";
 
 describe("product samples", () => {
   it("groups every sample exactly once", () => {
@@ -15,6 +15,14 @@ describe("product samples", () => {
 
     expect(defaultProjectIds).toHaveLength(new Set(defaultProjectIds).size);
     expect(defaultProjectIds.every((id) => sampleIds.has(id))).toBe(true);
+  });
+
+  it("loads every sample from the template menu exactly once", () => {
+    const sampleIds = samples.map((sample) => sample.id);
+    const templateIds = sampleTemplateGroups.flatMap((group) => group.sampleIds);
+
+    expect(templateIds).toHaveLength(new Set(templateIds).size);
+    expect(new Set(templateIds)).toEqual(new Set(sampleIds));
   });
 
   it("has runnable eval fixtures for every product sample", () => {
@@ -35,6 +43,15 @@ describe("product samples", () => {
         expect(testCase.stdoutCheck.description.length, testCase.name).toBeGreaterThan(0);
       }
     }
+  });
+
+  it("keeps the reverse CLI sample as an interactive natural-language prompt", () => {
+    const sample = samples.find((item) => item.id === "interactive-reverse");
+
+    expect(sample?.code).toBe(`def main():
+  \`\`\`
+  A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
+  \`\`\``);
   });
 
   it("accepts ASCII fractal output with trailing blank rows trimmed by stdout capture", () => {
@@ -76,6 +93,22 @@ describe("product samples", () => {
       "=== Evaluated Values ===",
       "          A           B           C      ",
       "1         7           5           48",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "A1 -> None",
+      "A1 = 7",
+      "A1 -> 7",
+      "B1 = 2 + 3",
+      "B1 -> 5",
+      "C1 = (B1 + A1) * 4",
+      "C1 -> 48",
+      "",
+      "=== Unevaluated Expressions ===",
+      "          A           B           C      ",
+      "1         7         2 + 3    (B1 + A1) * 4",
+      "2                   10",
+      "3                   10",
     ])).toBe(true);
   });
 });

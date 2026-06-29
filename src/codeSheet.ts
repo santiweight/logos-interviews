@@ -68,6 +68,7 @@ export type CompilationEvent =
 export type CompileOptions = {
   signal?: AbortSignal;
   streamTokens?: boolean;
+  emitProgress?: boolean;
   abortCurrentCompletion?: boolean;
   strategy?: CompilationStrategy;
   experimentalParallelCompletions?: boolean;
@@ -110,6 +111,7 @@ export type CompilationNode =
       kind: "incomplete";
       line: number;
       snippetKind: IncompleteSnippet["kind"];
+      annotationContexts: LogosAnnotationContext[];
       indent: string;
       state: CompletionState;
     };
@@ -135,6 +137,15 @@ type TypeAliasDecl = {
   name: string;
   source: string;
   line: number;
+  target: string;
+};
+
+type ParsedTypeDeclaration = {
+  name: string;
+  source: string;
+  line: number;
+  startLine: number;
+  endLine: number;
   target: string;
 };
 
@@ -174,8 +185,18 @@ export type IncompleteSnippet = {
   line: number;
   column?: number;
   snippet: string;
+  annotationContexts?: LogosAnnotationContext[];
   range?: SourceRange;
 };
+
+export type LogosAnnotationContext = {
+  annotation: string;
+  cacheKey: string;
+  promptGuidance: string;
+};
+
+const pythonCompletionRuntimePolicy = `Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.`;
 
 export type ClassDecl = {
   name: string;
@@ -191,7 +212,8 @@ type SourceRange = {
 export function parse(codeSheet: CodeSheet): ParsedSheet {
   const source = normalizeNewlines(codeSheet);
   const lines = source.split("\n");
-  const sumTypes = lines.flatMap(parseSumTypeLine);
+  const typeDeclarations = collectTypeDeclarations(lines);
+  const sumTypes = parseSumTypeDeclarations(typeDeclarations);
   const classDecls = discoverClassDecls(lines);
   const incomplete = discoverIncompleteSnippets(source);
 
@@ -201,7 +223,7 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
     incompleteSnippets: incomplete,
     declarations: declarations(sumTypes, classDecls, incomplete),
     sumTypes,
-    typeAliases: lines.flatMap(parseTypeAliasLine),
+    typeAliases: parseTypeAliasDeclarations(typeDeclarations),
     classDecls,
     topLevelComments: lines.filter((line) => line.startsWith("#")),
   };
@@ -209,7 +231,8 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
 
 export function lower(parsed: ParsedSheet): LoweredCodeSheet {
   const lines = parsed.source.split("\n");
-  const body = lowerSurfaceSyntax(lines.filter((line) => !isTypeLine(line)).join("\n"));
+  const typeLineIndexes = typeDeclarationLineIndexes(lines);
+  const body = lowerSurfaceSyntax(lines.filter((_, index) => !typeLineIndexes.has(index)).join("\n"));
   const loweredDataclassImport =
     parsed.sumTypes.length > 0 || body.needsDataclass ? "from dataclasses import dataclass" : "";
   const loweredSumTypes = lowerSumTypes(parsed.sumTypes);
@@ -252,11 +275,12 @@ export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
       kind: "incomplete",
       line: item.line,
       snippetKind: item.kind,
+      annotationContexts: item.annotationContexts ?? [],
       indent: indentationAt(lowered.source, start),
       state: {
         kind: "partial",
         snippet: item.snippet,
-        hash: hashCompletionInput(parsed, item.snippet),
+        hash: hashCompletionInput(parsed, item.snippet, item.annotationContexts),
       },
     });
 
@@ -274,6 +298,12 @@ export function buildCompilationIR(parsed: ParsedSheet): CompilationIR {
   return { parsed, lowered, nodes };
 }
 
+export function completionSnippetHashes(parsed: ParsedSheet): SnippetHash[] {
+  return buildCompilationIR(parsed).nodes.flatMap((node) => {
+    return node.kind === "incomplete" ? [node.state.hash] : [];
+  });
+}
+
 export async function completeSheet(
   codeCache: CodeCache,
   codeSheet: CodeSheet,
@@ -281,7 +311,11 @@ export async function completeSheet(
   options: CompileOptions = {},
 ): Promise<CompletedCodeSheet> {
   let compiled: CompletedCodeSheet | null = null;
-  for await (const event of compile(codeCache, codeSheet, complete, options)) {
+  for await (const event of compile(codeCache, codeSheet, complete, {
+    ...options,
+    emitProgress: false,
+    streamTokens: false,
+  })) {
     if (event.kind === "compiled") {
       compiled = event.completed;
     }
@@ -305,20 +339,44 @@ export async function* compile(
   const totalSnippets = ir.nodes.filter((node) => node.kind === "incomplete").length;
   let completedSnippets = 0;
   const completions: Completion[] = [];
+  const emitProgress = options.emitProgress ?? true;
+  const initialCacheHits: Array<{ hash: SnippetHash; snippet: string; implementation: string }> = [];
 
   if (isAborted(options.signal)) {
     return;
   }
 
-  yield { kind: "parsed", parsed };
-  yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
-  yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-  yield {
-    kind: "implementation",
-    source: renderImplementation(ir),
-    completedSnippets,
-    totalSnippets,
-  };
+  for (const node of ir.nodes) {
+    if (node.kind !== "incomplete" || node.state.kind !== "partial") {
+      continue;
+    }
+
+    const { hash, snippet } = node.state;
+    const cachedReplacement = await cachedImplementation(codeCache, hash);
+    if (cachedReplacement === undefined) {
+      continue;
+    }
+
+    node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
+    completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
+    completedSnippets += 1;
+    initialCacheHits.push({ hash, snippet, implementation: cachedReplacement });
+  }
+
+  if (emitProgress) {
+    yield { kind: "parsed", parsed };
+    yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
+    for (const hit of initialCacheHits) {
+      yield { kind: "cache-hit", hash: hit.hash, snippet: hit.snippet, implementation: hit.implementation };
+    }
+    yield {
+      kind: "implementation",
+      source: renderImplementation(ir),
+      completedSnippets,
+      totalSnippets,
+    };
+    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+  }
 
   if (compileInParallel(options) && complete) {
     const missing: Array<{
@@ -343,14 +401,16 @@ export async function* compile(
         node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
         completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
         completedSnippets += 1;
-        yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-        yield {
-          kind: "implementation",
-          source: renderImplementation(ir),
-          completedSnippets,
-          totalSnippets,
-        };
+        if (emitProgress) {
+          yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
+          yield {
+            kind: "implementation",
+            source: renderImplementation(ir),
+            completedSnippets,
+            totalSnippets,
+          };
+          yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+        }
         continue;
       }
 
@@ -360,13 +420,15 @@ export async function* compile(
         node.state = { kind: "complete", hash, snippet, implementation: synthesizedReplacement };
         completions.push({ hash, snippet, replacement: synthesizedReplacement, cached: false });
         completedSnippets += 1;
-        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-        yield {
-          kind: "implementation",
-          source: renderImplementation(ir),
-          completedSnippets,
-          totalSnippets,
-        };
+        if (emitProgress) {
+          yield {
+            kind: "implementation",
+            source: renderImplementation(ir),
+            completedSnippets,
+            totalSnippets,
+          };
+          yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+        }
         continue;
       }
 
@@ -374,12 +436,19 @@ export async function* compile(
         node,
         hash,
         snippet,
-        prompt: buildCompletionPrompt(renderImplementation(ir), snippet, node.snippetKind),
+        prompt: buildCompletionPrompt(
+          renderImplementation(ir),
+          snippet,
+          node.snippetKind,
+          node.annotationContexts,
+        ),
       });
     }
 
-    for (const item of missing) {
-      yield { kind: "llm-start", hash: item.hash, snippet: item.snippet };
+    if (emitProgress) {
+      for (const item of missing) {
+        yield { kind: "llm-start", hash: item.hash, snippet: item.snippet };
+      }
     }
 
     const pending = missing.map((item) => {
@@ -389,7 +458,12 @@ export async function* compile(
       );
       return collectCompletionResult(result).then((replacement) => ({
         ...item,
-        replacement: normalizeSnippet(replacement, item.node.snippetKind, item.snippet),
+        replacement: normalizeSnippet(
+          replacement,
+          item.node.snippetKind,
+          item.snippet,
+          renderImplementation(ir),
+        ),
       }));
     });
 
@@ -412,14 +486,16 @@ export async function* compile(
         return;
       }
 
-      yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
-      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-      yield {
-        kind: "implementation",
-        source: renderImplementation(ir),
-        completedSnippets,
-        totalSnippets,
-      };
+      if (emitProgress) {
+        yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+      }
     }
 
     yield {
@@ -449,14 +525,16 @@ export async function* compile(
       node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
       completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
       completedSnippets += 1;
-      yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-      yield {
-        kind: "implementation",
-        source: renderImplementation(ir),
-        completedSnippets,
-        totalSnippets,
-      };
+      if (emitProgress) {
+        yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+      }
       continue;
     }
 
@@ -464,8 +542,15 @@ export async function* compile(
       continue;
     }
 
-    yield { kind: "llm-start", hash, snippet };
-    const prompt = buildCompletionPrompt(renderImplementation(ir), snippet, node.snippetKind);
+    if (emitProgress) {
+      yield { kind: "llm-start", hash, snippet };
+    }
+    const prompt = buildCompletionPrompt(
+      renderImplementation(ir),
+      snippet,
+      node.snippetKind,
+      node.annotationContexts,
+    );
     let replacement = "";
     const result = complete(
       prompt,
@@ -475,7 +560,7 @@ export async function* compile(
     if (isAsyncIterable(result)) {
       for await (const token of result) {
         replacement += token;
-        if (!isAborted(options.signal) && options.streamTokens !== false) {
+        if (emitProgress && !isAborted(options.signal) && options.streamTokens !== false) {
           yield { kind: "llm-token", hash, token };
         }
       }
@@ -483,7 +568,12 @@ export async function* compile(
       replacement = await result;
     }
 
-    replacement = normalizeSnippet(replacement, node.snippetKind, snippet);
+    replacement = normalizeSnippet(
+      replacement,
+      node.snippetKind,
+      snippet,
+      renderImplementation(ir),
+    );
     await cacheImplementation(codeCache, hash, replacement);
     node.state = { kind: "complete", hash, snippet, implementation: replacement };
     completions.push({ hash, snippet, replacement, cached: false });
@@ -492,14 +582,16 @@ export async function* compile(
       return;
     }
 
-    yield { kind: "llm-complete", hash, implementation: replacement };
-    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-    yield {
-      kind: "implementation",
-      source: renderImplementation(ir),
-      completedSnippets,
-      totalSnippets,
-    };
+    if (emitProgress) {
+      yield { kind: "llm-complete", hash, implementation: replacement };
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+    }
   }
 
   yield {
@@ -527,7 +619,7 @@ export function renderImplementation(ir: CompilationIR): CodeSheet {
   const source = ir.nodes
     .map((node) => {
       if (node.kind === "source") {
-        return node.source;
+        return stripLogosAnnotationLines(node.source);
       }
 
       if (node.state.kind !== "complete") {
@@ -703,7 +795,11 @@ export async function cacheImplementation(
   await codeCache.persist?.(hash, implementation);
 }
 
-export function hashCompletionInput(parsed: ParsedSheet, incompleteCodeSnippet: string): SnippetHash {
+export function hashCompletionInput(
+  parsed: ParsedSheet,
+  incompleteCodeSnippet: string,
+  annotationContexts: LogosAnnotationContext[] = [],
+): SnippetHash {
   const naturalPolicy = naturalSnippetPolicy(incompleteCodeSnippet);
   return hashText(
     "completion",
@@ -716,6 +812,13 @@ export function hashCompletionInput(parsed: ParsedSheet, incompleteCodeSnippet: 
         : [
             "--- natural-language policy ---",
             naturalPolicy.cacheKey,
+            "",
+          ]),
+      ...(annotationContexts.length === 0
+        ? []
+        : [
+            "--- annotation contexts ---",
+            ...annotationContexts.map((context) => context.cacheKey),
             "",
           ]),
       "--- dependencies ---",
@@ -819,7 +922,7 @@ function incompleteSymbols(parsed: ParsedSheet, codeCache: CodeCache): Set<strin
   const result = new Set<string>();
 
   for (const snippet of parsed.incompleteSnippets) {
-    if (codeCache.has(hashCompletionInput(parsed, snippet.snippet))) {
+    if (codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts))) {
       continue;
     }
 
@@ -849,7 +952,7 @@ function hasUncachedNaturalSnippet(
     return (
       snippet.kind === "natural" &&
       source.includes(snippet.snippet) &&
-      !codeCache.has(hashCompletionInput(parsed, snippet.snippet))
+      !codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts))
     );
   });
 }
@@ -1091,45 +1194,123 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
   return declarations;
 }
 
-function parseSumTypeLine(line: string, index: number): SumTypeDecl[] {
-  const match = parseTypeDeclarationLine(line);
-  if (!match || !isSumTypeRhs(match[2])) {
-    return [];
-  }
+function parseSumTypeDeclarations(typeDeclarations: ParsedTypeDeclaration[]): SumTypeDecl[] {
+  return typeDeclarations.flatMap((declaration) => {
+    if (!isSumTypeRhs(declaration.target)) {
+      return [];
+    }
 
-  return [
-    {
-      name: match[1],
-      source: line.trimEnd(),
-      line: index + 1,
-      variants: splitTopLevel(match[2], "|").map(parseVariant),
-    },
-  ];
+    return [
+      {
+        name: declaration.name,
+        source: declaration.source,
+        line: declaration.line,
+        variants: splitTopLevel(declaration.target, "|").map(parseVariant),
+      },
+    ];
+  });
 }
 
-function parseTypeAliasLine(line: string, index: number): TypeAliasDecl[] {
-  const match = parseTypeDeclarationLine(line);
-  if (!match || isSumTypeRhs(match[2]) || !isTypeAliasRhs(match[2])) {
-    return [];
-  }
+function parseTypeAliasDeclarations(typeDeclarations: ParsedTypeDeclaration[]): TypeAliasDecl[] {
+  return typeDeclarations.flatMap((declaration) => {
+    if (isSumTypeRhs(declaration.target) || !isTypeAliasRhs(declaration.target)) {
+      return [];
+    }
 
-  return [
-    {
-      name: match[1],
-      source: line.trimEnd(),
-      line: index + 1,
-      target: match[2].trim(),
-    },
-  ];
+    return [
+      {
+        name: declaration.name,
+        source: declaration.source,
+        line: declaration.line,
+        target: declaration.target,
+      },
+    ];
+  });
 }
 
-function parseTypeDeclarationLine(line: string): RegExpMatchArray | null {
-  const heralded = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+function collectTypeDeclarations(lines: string[]): ParsedTypeDeclaration[] {
+  const declarations: ParsedTypeDeclaration[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const start = parseTypeDeclarationStartLine(lines[index]);
+    if (!start) {
+      continue;
+    }
+
+    const continuationLines: string[] = [];
+    let end = index + 1;
+    if (start.target.trim().length === 0) {
+      while (end < lines.length) {
+        const candidate = lines[end];
+        if (candidate.trim().length > 0 && !/^\s+/.test(candidate)) {
+          break;
+        }
+
+        continuationLines.push(candidate);
+        end += 1;
+      }
+    }
+
+    const target = normalizeTypeDeclarationTarget(start.target, continuationLines);
+    if (target.length === 0) {
+      continue;
+    }
+
+    const sourceLines = lines.slice(index, end);
+    declarations.push({
+      name: start.name,
+      source: trimTrailingBlankLines(sourceLines).join("\n"),
+      line: index + 1,
+      startLine: index + 1,
+      endLine: end,
+      target,
+    });
+    index = Math.max(index, end - 1);
+  }
+
+  return declarations;
+}
+
+function parseTypeDeclarationStartLine(line: string): { name: string; target: string } | null {
+  const heralded = line.match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
   if (heralded) {
-    return heralded;
+    return { name: heralded[1], target: heralded[2] };
   }
 
-  return line.match(/^([A-Z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  const bare = line.match(/^([A-Z][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+  if (bare) {
+    return { name: bare[1], target: bare[2] };
+  }
+
+  return null;
+}
+
+function normalizeTypeDeclarationTarget(firstTarget: string, continuationLines: string[]): string {
+  return [firstTarget, ...continuationLines]
+    .map((line) => {
+      const trimmed = stripTypeComment(line).trim();
+      return trimmed.startsWith("|") ? trimmed.slice(1).trim() : trimmed;
+    })
+    .filter((line) => line.length > 0)
+    .join(" | ");
+}
+
+function stripTypeComment(source: string): string {
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const previous = source[index - 1];
+    if ((char === "'" || char === '"') && previous !== "\\") {
+      quote = quote === char ? null : quote ?? char;
+      continue;
+    }
+
+    if (char === "#" && quote === null) {
+      return source.slice(0, index);
+    }
+  }
+
+  return source;
 }
 
 function discoverClassDecls(lines: string[]): ClassDecl[] {
@@ -1328,11 +1509,13 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
         start: lineStarts[index],
         end: lineStarts[index] + snippet.length,
       };
+      const annotationContexts = logosAnnotationContextsForDeclaration(lines, index);
 
       snippets.push(snippetWithRange({
         kind: "class",
         line: index + 1,
         snippet,
+        ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
       }, range));
       coveredRanges.push(range);
 
@@ -1367,11 +1550,13 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
       start: lineStarts[start],
       end: lineStarts[start] + snippet.length,
     };
+    const annotationContexts = logosAnnotationContextsForDeclaration(lines, start);
 
     snippets.push(snippetWithRange({
       kind: "function",
       line: start + 1,
       snippet,
+      ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
     }, range));
     coveredRanges.push(range);
     index = end - 1;
@@ -1645,11 +1830,13 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
       if (inner.length > 0) {
         const line = lineForOffset(lineStarts, start);
         const lineStart = lineStarts[line - 1] ?? 0;
+        const annotationContexts = logosAnnotationContextsForNaturalSnippet(source, line);
         snippets.push(snippetWithRange({
           kind: "natural",
           line,
           column: start - lineStart + 1,
           snippet: source.slice(start, end + 3),
+          ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
         }, { start, end: end + 3 }));
       }
 
@@ -1666,11 +1853,13 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
     if (inner.length > 0) {
       const line = lineForOffset(lineStarts, start);
       const lineStart = lineStarts[line - 1] ?? 0;
+      const annotationContexts = logosAnnotationContextsForNaturalSnippet(source, line);
       snippets.push(snippetWithRange({
         kind: "natural",
         line,
         column: start - lineStart + 1,
         snippet: source.slice(start, end + 1),
+        ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
       }, { start, end: end + 1 }));
     }
 
@@ -1678,6 +1867,80 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
   }
 
   return snippets;
+}
+
+function logosAnnotationContextsForNaturalSnippet(
+  source: string,
+  lineNumber: number,
+): LogosAnnotationContext[] {
+  const lines = source.split("\n");
+  const targetLine = lines[lineNumber - 1] ?? "";
+  const targetIndent = indentWidth(targetLine);
+
+  for (let index = lineNumber - 2; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    const header = parseFunctionHeader(line);
+    if (header && header.hasColon && indentWidth(line) < targetIndent) {
+      return logosAnnotationContextsForDeclaration(lines, index);
+    }
+  }
+
+  return [];
+}
+
+function logosAnnotationContextsForDeclaration(
+  lines: string[],
+  declarationIndex: number,
+): LogosAnnotationContext[] {
+  const declarationIndent = indentWidth(lines[declarationIndex] ?? "");
+  const contexts: LogosAnnotationContext[] = [];
+
+  for (let index = declarationIndex - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (line.trim().length === 0) {
+      break;
+    }
+
+    const context = logosAnnotationContextForLine(line, declarationIndent);
+    if (!context) {
+      break;
+    }
+
+    contexts.unshift(context);
+  }
+
+  return contexts;
+}
+
+function logosAnnotationContextForLine(
+  line: string,
+  expectedIndent: number,
+): LogosAnnotationContext | null {
+  if (indentWidth(line) !== expectedIndent) {
+    return null;
+  }
+
+  const trimmed = line.trim();
+  const match = trimmed.match(/^@logos((?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*(?:\([^)]*\))?\s*$/);
+  if (!match) {
+    return null;
+  }
+
+  const annotation = `logos${match[1]}`;
+  if (annotation !== "logos.debug.print") {
+    return null;
+  }
+
+  return {
+    annotation: `${annotation}()`,
+    cacheKey: "logos.debug.print-v1",
+    promptGuidance:
+      "when generating code, make sure to add thoughtful and reasonable print statements to help the user understand how the code evaluated. consider the user's snippet and make sure that you are outputting important values at key moments",
+  };
 }
 
 function isInPythonLineComment(source: string, offset: number): boolean {
@@ -1849,11 +2112,25 @@ function splitNaturalReplacement(source: string): { imports: string[]; body: str
   };
 }
 
+function stripLogosAnnotationLines(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !isLogosAnnotationLine(line))
+    .join("\n");
+}
+
+function isLogosAnnotationLine(line: string): boolean {
+  return /^\s*@logos(?:\.|\s*\(|\s*$)/.test(line);
+}
+
 function buildCompletionPrompt(
   sheet: CodeSheet,
   snippet: string,
   kind: IncompleteSnippet["kind"],
+  annotationContexts: LogosAnnotationContext[] = [],
 ): string {
+  const annotationGuidance = annotationPromptGuidance(annotationContexts);
+  const annotationBlock = annotationGuidance.length === 0 ? "" : `\n${annotationGuidance}`;
   if (kind === "natural") {
     const naturalPolicy = naturalSnippetPolicy(snippet)?.promptGuidance ?? "";
     return `You are an expert software engineer building programs.
@@ -1867,9 +2144,9 @@ Your job is to replace this natural-language Python fragment with valid Python c
 ${snippet}
 
 Return only the replacement code for the fragment, without backticks or fences.
-${naturalPolicy}
-Use only Python built-ins and standard-library modules; do not import third-party packages.
-If standard-library imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+${naturalPolicy}${annotationBlock}
+If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+${pythonCompletionRuntimePolicy}
 Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
 Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
   }
@@ -1893,9 +2170,21 @@ Do not assign local variables or loop variables with the same names as top-level
 Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
 When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
 When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
+${pythonCompletionRuntimePolicy}
 Use normal Python. Prefer dataclasses and match statements for sum types.
-Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
+}
+
+function annotationPromptGuidance(contexts: LogosAnnotationContext[]): string {
+  if (contexts.length === 0) {
+    return "";
+  }
+
+  return [
+    "Apply these Logos annotation contexts while generating the replacement:",
+    ...contexts.map((context) => `- ${context.annotation}: ${context.promptGuidance}`),
+  ].join("\n");
 }
 
 function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidance: string } | null {
@@ -1923,11 +2212,14 @@ function normalizeSnippet(
   source: string,
   kind: IncompleteSnippet["kind"],
   requestedSnippet = "",
+  contextSheet = "",
 ): string {
   const trimmed = source.trim();
   const fence = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/);
   const unfenced = fence?.[1] ?? trimmed;
   const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
+  const duplicateDefinitions = existingDefinitionsToDrop(contextSheet, requestedSnippet);
+  const requestedDefinitions = requestedDefinitionNames(requestedSnippet);
 
   if (kind === "natural") {
     return extractNaturalPythonLines(lines).join("\n").trim();
@@ -1943,16 +2235,12 @@ function normalizeSnippet(
       return unfenced.trimEnd();
     }
 
-    const classDefinition = extractSingleTopLevelDefinition(lines, classIndex, {
-      includeTrailingHelperConstants: true,
-      includeTrailingPrivateHelpers: true,
-      includeTrailingReferencedHelpers: true,
-    });
-    const classDefinitionLines = new Set(classDefinition.split("\n"));
-    return [
-      ...leadingImportLines(lines).filter((line) => !classDefinitionLines.has(line)),
-      classDefinition,
-    ].filter((part) => part.trim().length > 0).join("\n\n");
+    return pruneTopLevelDefinitions(
+      extractTopLevelDefinitions(lines, firstTopLevelCodeIndex(lines, classIndex)),
+      duplicateDefinitions,
+      requestedDefinitions,
+      contextSheet,
+    );
   }
 
   const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
@@ -1964,16 +2252,22 @@ function normalizeSnippet(
     const fallbackIndex = lines.findIndex((line) => {
       return /^(class\s+|def\s+|async\s+def\s+|@|import\s+|from\s+)/.test(line.trimStart());
     });
-    return fallbackIndex < 0 ? unfenced.trimEnd() : extractTopLevelDefinitions(lines, fallbackIndex);
+    return fallbackIndex < 0
+      ? unfenced.trimEnd()
+      : pruneTopLevelDefinitions(
+          extractTopLevelDefinitions(lines, fallbackIndex),
+          duplicateDefinitions,
+          requestedDefinitions,
+          contextSheet,
+        );
   }
 
-  if (requestedFunctionNames(requestedSnippet).length > 1) {
-    return extractTopLevelDefinitions(lines, startOfDefinitionWithImportsAndDecorators(lines, definitionIndex));
-  }
-
-  return extractSingleTopLevelDefinition(lines, definitionIndex, {
-    includeTrailingPrivateHelpers: true,
-  });
+  return pruneTopLevelDefinitions(
+    extractTopLevelDefinitions(lines, firstTopLevelCodeIndex(lines, definitionIndex)),
+    duplicateDefinitions,
+    requestedDefinitions,
+    contextSheet,
+  );
 }
 
 function extractNaturalPythonLines(lines: string[]): string[] {
@@ -1997,29 +2291,6 @@ function isLikelyPythonNaturalLine(line: string): boolean {
     /^[A-Za-z_][A-Za-z0-9_.]*\s*\(/.test(line) ||
     /^[\[{('"0-9-]/.test(line)
   );
-}
-
-function requestedFunctionNames(snippet: string): string[] {
-  return snippet
-    .split("\n")
-    .map((line) => parseFunctionHeader(line.trimStart())?.name)
-    .filter((name): name is string => name !== undefined);
-}
-
-function leadingImportLines(lines: string[]): string[] {
-  const imports: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.trimStart();
-    if (/^(import\s+|from\s+)/.test(trimmed)) {
-      imports.push(line.trimEnd());
-      continue;
-    }
-
-    if (line.trim().length > 0 && !trimmed.startsWith("#")) {
-      break;
-    }
-  }
-  return imports;
 }
 
 function dedentLines(lines: string[]): string[] {
@@ -2055,86 +2326,122 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
 }
 
-function extractSingleTopLevelDefinition(
-  lines: string[],
-  definitionIndex: number,
-  options: {
-    includeTrailingHelperConstants?: boolean;
-    includeTrailingPrivateHelpers?: boolean;
-    includeTrailingReferencedHelpers?: boolean;
-  } = {},
-): string {
-  const start = startOfDefinitionWithImportsAndDecorators(lines, definitionIndex);
-  const snippet: string[] = [];
-  let seenRequestedDefinition = false;
-
-  for (let index = start; index < lines.length; index += 1) {
-    const line = lines[index];
+function firstTopLevelCodeIndex(lines: string[], fallback: number): number {
+  const firstCodeIndex = lines.findIndex((line) => {
     const trimmed = line.trimStart();
-    const isBlank = line.trim().length === 0;
-    const isNested = /^\s+/.test(line);
-    const isImport = /^(import\s+|from\s+)/.test(trimmed);
-    const isDecorator = /^@/.test(trimmed);
-    const isDefinition = /^(def\s+|async\s+def\s+|class\s+)/.test(trimmed);
-    const isHelperConstant = /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed);
+    return (
+      /^(import\s+|from\s+|@|def\s+|async\s+def\s+|class\s+)/.test(trimmed) ||
+      /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
+    );
+  });
 
-    if (isBlank) {
-      snippet.push(line);
-      continue;
-    }
-
-    if (!seenRequestedDefinition) {
-      if (isImport || isDecorator || isHelperConstant || trimmed.startsWith("#")) {
-        snippet.push(line.trimEnd());
-        continue;
-      }
-
-      if (isDefinition) {
-        seenRequestedDefinition = true;
-        snippet.push(line.trimEnd());
-        continue;
-      }
-
-      continue;
-    }
-
-    if (isNested) {
-      snippet.push(line.trimEnd());
-      continue;
-    }
-
-    const includedSource = snippet.join("\n");
-    const trailingHelperName = helperNameFromTopLevelLine(trimmed);
-    if (
-      (options.includeTrailingHelperConstants && isHelperConstant) ||
-      (options.includeTrailingPrivateHelpers && isPrivateHelperDefinitionLine(trimmed)) ||
-      (
-        options.includeTrailingReferencedHelpers &&
-        trailingHelperName !== null &&
-        referencesName(includedSource, trailingHelperName)
-      )
-    ) {
-      snippet.push(line.trimEnd());
-      continue;
-    }
-
-    break;
-  }
-
-  return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+  return firstCodeIndex < 0 ? fallback : firstCodeIndex;
 }
 
-function helperNameFromTopLevelLine(trimmed: string): string | null {
-  const functionHeader = parseFunctionHeader(trimmed);
-  if (functionHeader) {
-    return functionHeader.name;
+function existingDefinitionsToDrop(contextSheet: string, requestedSnippet: string): Set<string> {
+  if (contextSheet.trim().length === 0) {
+    return new Set();
   }
 
-  return (
-    trimmed.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ??
-    trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*[^=]+)?\s*=/)?.[1] ??
-    null
-  );
+  const requested = requestedDefinitionNames(requestedSnippet);
+  const existing = new Set([
+    ...discoverClassDecls(contextSheet.split("\n")).map((decl) => decl.name),
+    ...discoverTopLevelFunctionBlocks(contextSheet).map((decl) => decl.name),
+  ]);
+
+  for (const name of requested) {
+    existing.delete(name);
+  }
+
+  return existing;
+}
+
+function requestedDefinitionNames(source: string): Set<string> {
+  const names = new Set<string>();
+
+  for (const line of source.split("\n")) {
+    const className = line.trimStart().match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+    if (className) {
+      names.add(className);
+      continue;
+    }
+
+    const functionName = parseFunctionHeader(line.trimStart())?.name;
+    if (functionName) {
+      names.add(functionName);
+    }
+  }
+
+  return names;
+}
+
+function pruneTopLevelDefinitions(
+  source: string,
+  namesToDrop: Set<string>,
+  requestedDefinitions: Set<string>,
+  contextSheet: string,
+): string {
+  const lines = source.split("\n");
+  const output: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    const definitionName = topLevelDefinitionName(line);
+    if (!definitionName) {
+      output.push(line);
+      index += 1;
+      continue;
+    }
+
+    const blockEnd = topLevelDefinitionBlockEnd(lines, index);
+    const referenceSource = [
+      output.join("\n"),
+      lines.slice(blockEnd).join("\n"),
+      contextSheet,
+    ].join("\n");
+    const shouldDrop =
+      namesToDrop.has(definitionName) ||
+      (
+        !requestedDefinitions.has(definitionName) &&
+        !definitionName.startsWith("_") &&
+        !referencesName(referenceSource, definitionName)
+      );
+
+    if (!shouldDrop) {
+      output.push(...lines.slice(index, blockEnd));
+      index = blockEnd;
+      continue;
+    }
+
+    while (output.length > 0 && /^@/.test(output[output.length - 1].trimStart())) {
+      output.pop();
+    }
+    index = blockEnd;
+  }
+
+  return trimOuterBlankLines(output).join("\n").trimEnd();
+}
+
+function topLevelDefinitionBlockEnd(lines: string[], start: number): number {
+  let end = start + 1;
+  while (end < lines.length) {
+    const line = lines[end];
+    if (line.trim().length === 0 || /^\s+/.test(line)) {
+      end += 1;
+      continue;
+    }
+    break;
+  }
+  return end;
+}
+
+function topLevelDefinitionName(line: string): string | null {
+  if (/^\s/.test(line)) {
+    return null;
+  }
+
+  return line.match(/^(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ?? null;
 }
 
 function referencesName(source: string, name: string): boolean {
@@ -2143,35 +2450,6 @@ function referencesName(source: string, name: string): boolean {
 
 function escapeRegExp(source: string): string {
   return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isPrivateHelperDefinitionLine(trimmed: string): boolean {
-  const header = parseFunctionHeader(trimmed);
-  if (header && header.name.startsWith("_")) {
-    return true;
-  }
-
-  return /^class\s+_[A-Za-z_][A-Za-z0-9_]*/.test(trimmed);
-}
-
-function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIndex: number): number {
-  let start = definitionIndex;
-  while (start > 0) {
-    const previous = lines[start - 1];
-    const trimmed = previous.trimStart();
-    if (
-      previous.trim().length === 0 ||
-      /^(import\s+|from\s+|@|#)/.test(trimmed) ||
-      /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
-    ) {
-      start -= 1;
-      continue;
-    }
-
-    break;
-  }
-
-  return start;
 }
 
 function isTopLevelDefinitionLine(trimmed: string): boolean {
@@ -2210,9 +2488,19 @@ function splitTopLevel(source: string, separator: string): string[] {
   return parts;
 }
 
-function isTypeLine(line: string): boolean {
-  const match = parseTypeDeclarationLine(line);
-  return match !== null && (isSumTypeRhs(match[2]) || isTypeAliasRhs(match[2]));
+function typeDeclarationLineIndexes(lines: string[]): Set<number> {
+  const indexes = new Set<number>();
+  for (const declaration of collectTypeDeclarations(lines)) {
+    if (!isSumTypeRhs(declaration.target) && !isTypeAliasRhs(declaration.target)) {
+      continue;
+    }
+
+    for (let line = declaration.startLine - 1; line < declaration.endLine; line += 1) {
+      indexes.add(line);
+    }
+  }
+
+  return indexes;
 }
 
 function normalizeNewlines(source: string): string {
