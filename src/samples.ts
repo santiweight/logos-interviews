@@ -753,7 +753,6 @@ export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.sa
 export const defaultProjectIds = [
   "starter-arithmetic",
   "beyond-basics",
-  "ascii-fractal",
   "formula-spreadsheet",
   "annotated-maze",
 ];
