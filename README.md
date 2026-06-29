@@ -28,8 +28,9 @@ The `Anthropic E2E` GitHub Actions workflow runs that live eval on relevant
 when the current `main` SHA has already passed.
 
 The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
-Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
-memory for the lifetime of the process.
+Vite build from `dist`, exposes `/api/run`, and caches completed snippets in a
+process-local map backed by durable storage. Local development uses
+`CODE_CACHE_DIR` or `logs/code-cache`.
 
 ## Session Capture
 
@@ -67,6 +68,22 @@ SHARED_SESSION_S3_FORCE_PATH_STYLE=false
 
 Credentials use the standard AWS SDK environment variables, such as
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+
+## Code Cache
+
+Compile and run share a global code cache keyed by completion hash. In
+production, configure S3-compatible storage so Fly machines share completions:
+
+```sh
+CODE_CACHE_S3_BUCKET=...
+CODE_CACHE_S3_REGION=...
+CODE_CACHE_S3_ENDPOINT=... # optional for R2, Tigris, MinIO, etc.
+CODE_CACHE_S3_PREFIX=code-cache
+CODE_CACHE_S3_FORCE_PATH_STYLE=false
+```
+
+If `CODE_CACHE_S3_BUCKET` is unset but `SHARED_SESSION_S3_BUCKET` is set, the
+code cache reuses that bucket with the `code-cache` prefix.
 
 Fly deployment is configured with `Dockerfile`, `fly.toml`, and
 `.github/workflows/deploy.yml`. Configure the repository with:

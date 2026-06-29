@@ -4,7 +4,11 @@ import type { TypeCheckDiagnostic } from "./typeCheck";
 export type CodeSheet = string;
 export type Runnable = string;
 export type SnippetHash = string;
-export type CodeCache = Map<SnippetHash, string>;
+export type CodeCache = Map<SnippetHash, string> & {
+  hydrate?: (hash: SnippetHash) => Promise<void>;
+  persist?: (hash: SnippetHash, implementation: string) => Promise<void>;
+  clearRemote?: () => Promise<void>;
+};
 export type CompleteResult = string | Promise<string> | AsyncIterable<string>;
 export type CompleteOptions = {
   signal?: AbortSignal;
@@ -334,8 +338,8 @@ export async function* compile(
       }
 
       const { hash, snippet } = node.state;
-      if (codeCache.has(hash)) {
-        const cachedReplacement = codeCache.get(hash) ?? "";
+      const cachedReplacement = await cachedImplementation(codeCache, hash);
+      if (cachedReplacement !== undefined) {
         node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
         completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
         completedSnippets += 1;
@@ -352,7 +356,7 @@ export async function* compile(
 
       const synthesizedReplacement = synthesizeTopLevelClassFactory(parsed, snippet);
       if (synthesizedReplacement !== null) {
-        codeCache.set(hash, synthesizedReplacement);
+        await cacheImplementation(codeCache, hash, synthesizedReplacement);
         node.state = { kind: "complete", hash, snippet, implementation: synthesizedReplacement };
         completions.push({ hash, snippet, replacement: synthesizedReplacement, cached: false });
         completedSnippets += 1;
@@ -390,7 +394,7 @@ export async function* compile(
     });
 
     for (const item of await Promise.all(pending)) {
-      codeCache.set(item.hash, item.replacement);
+      await cacheImplementation(codeCache, item.hash, item.replacement);
       item.node.state = {
         kind: "complete",
         hash: item.hash,
@@ -440,8 +444,8 @@ export async function* compile(
     }
 
     const { hash, snippet } = node.state;
-    if (codeCache.has(hash)) {
-      const cachedReplacement = codeCache.get(hash) ?? "";
+    const cachedReplacement = await cachedImplementation(codeCache, hash);
+    if (cachedReplacement !== undefined) {
       node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
       completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
       completedSnippets += 1;
@@ -480,7 +484,7 @@ export async function* compile(
     }
 
     replacement = normalizeSnippet(replacement, node.snippetKind, snippet);
-    codeCache.set(hash, replacement);
+    await cacheImplementation(codeCache, hash, replacement);
     node.state = { kind: "complete", hash, snippet, implementation: replacement };
     completions.push({ hash, snippet, replacement, cached: false });
     completedSnippets += 1;
@@ -677,6 +681,26 @@ export function implementationBlockForTarget(
 
 export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
   return hashText("snippet", incompleteCodeSnippet);
+}
+
+export async function cachedImplementation(
+  codeCache: CodeCache,
+  hash: SnippetHash,
+): Promise<string | undefined> {
+  if (!codeCache.has(hash)) {
+    await codeCache.hydrate?.(hash);
+  }
+
+  return codeCache.get(hash);
+}
+
+export async function cacheImplementation(
+  codeCache: CodeCache,
+  hash: SnippetHash,
+  implementation: string,
+): Promise<void> {
+  codeCache.set(hash, implementation);
+  await codeCache.persist?.(hash, implementation);
 }
 
 export function hashCompletionInput(parsed: ParsedSheet, incompleteCodeSnippet: string): SnippetHash {

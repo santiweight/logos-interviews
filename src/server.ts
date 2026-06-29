@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicComplete";
+import { createGlobalCodeCache } from "./codeCache";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
@@ -12,7 +13,7 @@ import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
-const codeCache: CodeCache = new Map();
+const codeCache: CodeCache = createGlobalCodeCache();
 const interactiveRunApi = createInteractiveRunApi({
   cache: codeCache,
   complete: completeWithAnthropic,
@@ -166,6 +167,7 @@ async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<v
 
   const cleared = codeCache.size;
   codeCache.clear();
+  await codeCache.clearRemote?.();
   sendJson(res, 200, { ok: true, cleared });
 }
 

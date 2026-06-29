@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   buildCompilationIR,
+  cachedImplementation,
+  cacheImplementation,
   completeSheet,
   type CodeCache,
   type CodeSheet,
@@ -186,7 +188,7 @@ async function compileAndRunAgentically(
   }
 
   const cacheKey = hashSnippet(`agentic-file:${runnable}\n${codeSheet}`);
-  const cachedSource = cache.get(cacheKey);
+  const cachedSource = await cachedImplementation(cache, cacheKey);
   if (cachedSource !== undefined) {
     const completed = completedAgenticSheet(codeSheet, cachedSource, cacheKey, true);
     const executed = await runPython(
@@ -241,7 +243,7 @@ async function compileAndRunAgentically(
     options.onStdoutLine,
   );
   if (executed.ok) {
-    cache.set(cacheKey, currentSource);
+    await cacheImplementation(cache, cacheKey, currentSource);
   }
   return runResult(executed, completed);
 }
@@ -257,7 +259,7 @@ async function compileAndRunAgenticMethods(
   }
 
   const cacheKey = hashSnippet(`agentic-methods:${runnable}\n${codeSheet}`);
-  const cachedSource = cache.get(cacheKey);
+  const cachedSource = await cachedImplementation(cache, cacheKey);
   if (cachedSource !== undefined) {
     const completed = completedAgenticSheet(codeSheet, cachedSource, cacheKey, true);
     const executed = await runPython(
@@ -299,7 +301,7 @@ async function compileAndRunAgenticMethods(
     options.onStdoutLine,
   );
   if (executed.ok) {
-    cache.set(cacheKey, currentSource);
+    await cacheImplementation(cache, cacheKey, currentSource);
   }
   return runResult(executed, completed);
 }
