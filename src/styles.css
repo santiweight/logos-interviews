@@ -627,7 +627,7 @@ h2 {
   color: #3f4248;
   cursor: pointer;
   font-size: 0.78rem;
-  font-weight: 760;
+  font-weight: 620;
   line-height: 28px;
   text-align: left;
   text-overflow: ellipsis;
@@ -1271,7 +1271,7 @@ h2 {
   max-height: 72%;
   flex-direction: column;
   border-top: 1px solid var(--border);
-  background: var(--paper);
+  background: var(--paper-soft);
   color: var(--ink);
 }
 
@@ -1285,18 +1285,6 @@ h2 {
   cursor: ns-resize;
 }
 
-.snippet-resize-handle::before {
-  position: absolute;
-  top: 3px;
-  left: 50%;
-  width: 42px;
-  height: 2px;
-  border-radius: 999px;
-  background: #afb1b3;
-  content: "";
-  transform: translateX(-50%);
-}
-
 .snippet-panel-header {
   display: flex;
   align-items: center;
@@ -1304,7 +1292,7 @@ h2 {
   min-width: 0;
   gap: 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--paper);
+  background: var(--paper-soft);
   padding: 0 9px;
 }
 
