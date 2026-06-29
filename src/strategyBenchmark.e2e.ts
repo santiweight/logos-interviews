@@ -20,6 +20,7 @@ type CompletionTrace = {
   index: number;
   target: string;
   promptChars: number;
+  completionChars?: number;
   elapsedMs: number;
   ok: boolean;
   error?: string;
@@ -196,6 +197,7 @@ async function runStrategyAttempt(
         index,
         target: completionTarget(prompt),
         promptChars: prompt.length,
+        completionChars: replacement.length,
         elapsedMs: roundMs(nowMs() - started),
         ok: true,
       });
