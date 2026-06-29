@@ -18,6 +18,7 @@ RUN mkdir -p "$PNPM_HOME" \
 COPY --chown=node:node . .
 
 RUN pnpm build
+RUN mkdir -p logs && chown -R node:node logs
 
 ENV NODE_ENV=production
 ENV PORT=8080
