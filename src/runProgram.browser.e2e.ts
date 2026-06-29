@@ -162,6 +162,35 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("shows a compilation status marker for selected runnable definitions", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = "def main():\n  print('hi')\n";
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Runnable Header", {
+        kind: "definition",
+        line: 1,
+        name: "main",
+        targetKind: "function",
+      });
+
+      await expect.poll(async () => page.locator("#snippet-title").textContent()).toBe("Compilation View: main");
+      await expect.poll(async () => {
+        return page.locator("#snippet-status-indicator").getAttribute("data-state");
+      }).toBe("complete");
+      await expect.poll(async () => page.locator("#snippet-status-indicator").getAttribute("title")).toBe("Ready");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("explains restored running sessions instead of rendering a blank terminal", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
@@ -389,8 +418,8 @@ async function waitForSessionHelpers(page: Page): Promise<void> {
   });
 }
 
-async function loadSource(page: Page, source: string, title: string): Promise<void> {
-  await page.evaluate(async ({ source, title }) => {
+async function loadSource(page: Page, source: string, title: string, selection: unknown = { kind: "none" }): Promise<void> {
+  await page.evaluate(async ({ source, title, selection }) => {
     const logosWindow = window as LogosWindow;
     const session = logosWindow.createLogosSessionBundle?.();
     if (!session || !logosWindow.loadLogosSession) {
@@ -417,9 +446,10 @@ async function loadSource(page: Page, source: string, title: string): Promise<vo
       compilation: {
         ...session.compilation,
         latestImplementationSource: source,
+        selection,
       },
     });
-  }, { source, title });
+  }, { source, title, selection });
 }
 
 async function isTerminalInputFocused(page: Page): Promise<boolean> {

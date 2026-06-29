@@ -497,6 +497,8 @@ type SnippetPreviewState = {
   status: "stub" | "generating" | "cached" | "complete";
 };
 
+type SnippetPanelStatus = SnippetPreviewState["status"] | null;
+
 const logosPythonLanguageId = "logos-python";
 
 registerLogosPythonLanguage();
@@ -1824,7 +1826,10 @@ function renderSnippetPanel(): void {
       implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
       selectedDefinitionTarget.source;
 
-    setSnippetPanelTitle(selectedDefinitionTarget.name, null);
+    setSnippetPanelTitle(
+      selectedDefinitionTarget.name,
+      definitionPanelStatus(selectedDefinitionTarget),
+    );
     setSnippetPreviewSource(text);
     return;
   }
@@ -1944,7 +1949,7 @@ function previewReplacementForSnippet(target: IncompleteSnippetTarget): string |
     (preview.streamed.length > 0 ? preview.streamed : null);
 }
 
-function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPreviewState["status"] | null {
+function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPanelStatus {
   if (preview?.status === "complete" || preview?.status === "cached") {
     return preview.status;
   }
@@ -1956,14 +1961,32 @@ function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPr
   return null;
 }
 
-function setSnippetPanelTitle(label: string | null, status: SnippetPreviewState["status"] | null): void {
+function definitionPanelStatus(target: ImplementationTarget): SnippetPanelStatus {
+  if (compilationPending) {
+    return "generating";
+  }
+
+  const matchingReadiness = latestReadinessDefinitions.filter((definition) => (
+    target.kind === "function"
+      ? definition.kind === "function" && definition.name === target.name
+      : definition.kind === "method" && definition.name.startsWith(`${target.name}.`)
+  ));
+
+  if (matchingReadiness.length === 0) {
+    return null;
+  }
+
+  return matchingReadiness.every((definition) => definition.ready) ? "complete" : null;
+}
+
+function setSnippetPanelTitle(label: string | null, status: SnippetPanelStatus): void {
   snippetTitle.textContent = label === null ? "Compilation View" : `Compilation View: ${label}`;
   snippetTitle.title = snippetTitle.textContent;
   snippetStatusIndicator.dataset.state = status ?? "hidden";
   snippetStatusIndicator.title = snippetStatusTitle(status);
 }
 
-function snippetStatusTitle(status: SnippetPreviewState["status"] | null): string {
+function snippetStatusTitle(status: SnippetPanelStatus): string {
   switch (status) {
     case "generating":
       return "Compiling";
@@ -2764,6 +2787,7 @@ function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
   readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
   updateRunnableDecorations(runnableStates);
   updateToolbarRunState(runnableStates);
+  renderSnippetPanel();
 }
 
 type ReadinessDecoration = {
