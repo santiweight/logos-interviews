@@ -1761,9 +1761,6 @@ function updateIncompleteSnippetDecorations(): void {
             ? "natural-snippet-inline natural-snippet-plain natural-snippet-inline-selected"
             : "natural-snippet-inline natural-snippet-plain"
           : undefined,
-        hoverMessage: {
-          value: `Show generated implementation for ${target.label}.`,
-        },
       },
     };
   });

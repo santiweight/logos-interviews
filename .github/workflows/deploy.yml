@@ -1,10 +1,13 @@
 name: Deploy
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - CI
     branches:
       - main
-  workflow_dispatch:
+    types:
+      - completed
 
 concurrency:
   group: production
@@ -14,35 +17,13 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-      - name: Enable pnpm
-        run: corepack enable
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Install browser dependencies
-        run: pnpm exec playwright install --with-deps chromium
-      - name: Build
-        run: pnpm build
-      - name: Production image smoke test
-        run: |
-          docker build -t logos-interviews-smoke .
-          ./scripts/smoke-production-image.sh logos-interviews-smoke
-      - name: Unit tests
-        run: pnpm test
-      - name: E2E tests
-        run: pnpm test:e2e
-
   deploy:
-    needs: verify
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
       - name: Validate deployment configuration
         env:

@@ -31,6 +31,27 @@ export type SampleStdoutCheck = {
   matches: (stdout: string[]) => boolean;
 };
 
+const starterArithmeticEvalSheet = `# In Logos, LLMs will complete partial code for you.
+# Click \`add\` in the code view to see its implementation.
+def add(x: int, y: int) -> int
+
+def mul(x: int, y: int) -> int
+
+# Click the run button to run this class (once it's been compiled).
+# Click \`main\` in the code view to see its implementation.
+def main():
+  # In Logos, you can use regular python...
+  print(mul(add(1, 2), 3))
+
+  # Or use a snippet to have the LLM write it for you...
+  \`print mul of (add one and two) and 3\`
+  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+
+  added = \`add 1 and 2\`
+  product = \`mul 3 and 4\`
+  print(added)
+  \`print product\``;
+
 const humanSudokuStrategyTemplate = `# Human-style Sudoku strategies.
 # apply_strategy performs one named strategy pass: no guessing or backtracking.
 
@@ -377,26 +398,33 @@ def test():
       {
         id: "starter-arithmetic",
         label: "Intro to Logos",
-        code: `# In Logos, LLMs will complete partial code for you.
-# Click \`add\` in the code view to see its implementation.
-def add(x: int, y: int) -> int
+        code: `# Logos is a Programming Language that supports:
+#  - spec-level programming
+#  - natural language code
+#  - regular Python syntax
 
+# If an implementation is incomplete, Logos will define it for you.
+#
+# Click \`add\` below to see its implementation.
+def add(x: int, y: int) -> int
 def mul(x: int, y: int) -> int
 
-# Click the run button to run this class (once it's been compiled).
+# Click the run button to run \`main\`.
+#
 # Click \`main\` in the code view to see its implementation.
 def main():
-  # In Logos, you can use regular python...
-  print(mul(add(1, 2), 3))
+  # Logos is compatible with regular Python
+  print("Regular Python: ", mul(add(1, 2), 3))
 
-  # Or use a snippet to have the LLM write it for you...
-  \`print mul of (add one and two) and 3\`
-  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+  # Or use natural langauge: Logos will compile the code for you.
+  \`print mul of (add one and two) and 3 with a "Logos:" prefix\`
 
-  added = \`add 1 and 2\`
+  # Or mix python syntax with natural language.
+  print("Mixed Logos:", mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+
+  added = \`add 1 and 5\`
   product = \`mul 3 and 4\`
-  print(added)
-  \`print product\``,
+  \`output added + product\``,
       },
       {
         id: "beyond-basics",
@@ -968,14 +996,14 @@ def test():
   {
     sampleId: "starter-arithmetic",
     name: "logos intro main arithmetic and snippets",
-    sheet: sampleById("starter-arithmetic").code,
+    sheet: starterArithmeticEvalSheet,
     runnable: "main",
     expectedStdout: ["9", "9", "9", "3", "12"],
   },
   {
     sampleId: "starter-arithmetic",
     name: "logos intro main arithmetic and snippets",
-    sheet: sampleById("starter-arithmetic").code,
+    sheet: starterArithmeticEvalSheet,
     runnable: "main",
     expectedStdout: ["9", "9", "9", "3", "12"],
   },

@@ -1212,8 +1212,8 @@ h2 {
 .snippet-panel {
   position: relative;
   display: flex;
-  flex: 0 0 38%;
-  min-height: 188px;
+  flex: 0 0 20%;
+  min-height: 132px;
   max-height: 72%;
   flex-direction: column;
   border-top: 1px solid var(--border);
@@ -1517,6 +1517,21 @@ h2 {
 .monaco-editor .runnable-play-glyph-disabled::before {
   color: #74767a;
   cursor: not-allowed;
+}
+
+.monaco-editor .monaco-hover,
+.monaco-editor .monaco-hover .hover-contents,
+.monaco-editor .monaco-hover .markdown-hover {
+  font-size: 0.68rem !important;
+  line-height: 1.25 !important;
+}
+
+.monaco-editor .monaco-hover .hover-contents {
+  padding: 4px 6px !important;
+}
+
+.monaco-editor .monaco-hover .hover-row {
+  min-height: 0 !important;
 }
 
 @keyframes glyph-pulse {
