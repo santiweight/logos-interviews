@@ -535,10 +535,10 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   renderLineHighlight: "none",
   tabSize: 2,
   insertSpaces: true,
-  glyphMargin: false,
+  glyphMargin: true,
   lineNumbers: "off",
   lineNumbersMinChars: 0,
-  lineDecorationsWidth: 0,
+  lineDecorationsWidth: 8,
   folding: false,
   readOnly: true,
   domReadOnly: true,
@@ -549,9 +549,9 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   "semanticHighlighting.enabled": false,
   guides: {
     indentation: true,
-    highlightActiveIndentation: "always",
+    highlightActiveIndentation: false,
   },
-  padding: { top: 10, bottom: 10 },
+  padding: { top: 12, bottom: 12 },
 });
 
 const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });

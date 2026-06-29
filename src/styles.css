@@ -1283,7 +1283,10 @@ h2 {
 .snippet-preview {
   flex: 1;
   min-height: 0;
-  padding-left: 10px;
+}
+
+.snippet-preview .cursor {
+  display: none !important;
 }
 
 .agent-log {
