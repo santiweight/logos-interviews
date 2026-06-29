@@ -74,7 +74,7 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/session-events") {
+    if (url.pathname === "/api/session-events" || url.pathname.startsWith("/api/session-events/")) {
       await handleSessionEvents(req, res);
       return;
     }

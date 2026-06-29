@@ -1,3 +1,5 @@
+import { record, takeFullSnapshot } from "rrweb";
+
 export type JsonValue =
   | null
   | boolean
@@ -33,6 +35,9 @@ const flushAtEvents = 20;
 const maxEventsPerRequest = 100;
 const maxQueuedEvents = 500;
 const maxBeaconBytes = 60_000;
+const replayFullSnapshotIntervalMs = 30_000;
+const replaySettledSnapshotDelaysMs = [250, 1_000, 2_500];
+const lifecycleCaptureThrottleMs = 500;
 
 export function createSessionCapture(options: SessionCaptureOptions): SessionCapture {
   const endpoint = options.endpoint ?? "/api/session-events";
@@ -100,6 +105,76 @@ export function createSessionCapture(options: SessionCaptureOptions): SessionCap
     { capture: true },
   );
 
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      capture.track("focus_in", { target: describeTarget(event.target) });
+    },
+    { capture: true },
+  );
+
+  document.addEventListener(
+    "focusout",
+    (event) => {
+      capture.track("focus_out", { target: describeTarget(event.target) });
+    },
+    { capture: true },
+  );
+
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      capture.track("keydown", {
+        target: describeTarget(event.target),
+        key: safeKeyboardKey(event),
+        code: event.code,
+        repeat: event.repeat,
+        modifiers: {
+          alt: event.altKey,
+          ctrl: event.ctrlKey,
+          meta: event.metaKey,
+          shift: event.shiftKey,
+        },
+      });
+    },
+    { capture: true },
+  );
+
+  document.addEventListener(
+    "copy",
+    (event) => {
+      capture.track("clipboard_copy", { target: describeTarget(event.target) });
+    },
+    { capture: true },
+  );
+
+  document.addEventListener(
+    "cut",
+    (event) => {
+      capture.track("clipboard_cut", { target: describeTarget(event.target) }, true);
+    },
+    { capture: true },
+  );
+
+  document.addEventListener(
+    "paste",
+    (event) => {
+      capture.track("clipboard_paste", {
+        target: describeTarget(event.target),
+        textLength: event.clipboardData?.getData("text/plain").length ?? null,
+      }, true);
+    },
+    { capture: true },
+  );
+
+  window.addEventListener("resize", throttle(() => {
+    capture.track("viewport_resize", viewportSnapshot(), true);
+  }, lifecycleCaptureThrottleMs));
+
+  window.addEventListener("scroll", throttle(() => {
+    capture.track("window_scroll", viewportSnapshot());
+  }, lifecycleCaptureThrottleMs), { passive: true });
+
   document.addEventListener("visibilitychange", () => {
     capture.track("visibility_change", { visibilityState: document.visibilityState }, true);
     if (document.visibilityState === "hidden") {
@@ -138,6 +213,7 @@ export function createSessionCapture(options: SessionCaptureOptions): SessionCap
   }, 5_000);
 
   capture.track("session_start", browserSnapshot(), true);
+  startDomReplayCapture(capture);
 
   async function flush(): Promise<void> {
     if (flushInFlight || queue.length === 0) {
@@ -209,6 +285,70 @@ export function createSessionCapture(options: SessionCaptureOptions): SessionCap
     if (queue.length > maxQueuedEvents) {
       queue.splice(0, queue.length - maxQueuedEvents);
     }
+  }
+}
+
+function startDomReplayCapture(capture: SessionCapture): void {
+  try {
+    let stopped = false;
+    const stop = record({
+      emit(event, isCheckout) {
+        capture.track("dom_replay", {
+          schema: "rrweb@2",
+          checkout: isCheckout === true,
+          event: event as JsonObject,
+        });
+      },
+      checkoutEveryNms: replayFullSnapshotIntervalMs,
+      maskAllInputs: false,
+      blockClass: "rr-block",
+      blockSelector: "[data-session-capture-block]",
+      ignoreClass: "rr-ignore",
+      inlineStylesheet: true,
+      recordCanvas: false,
+      collectFonts: true,
+      sampling: {
+        mousemove: 50,
+        scroll: 150,
+        input: "last",
+        media: 800,
+      },
+      errorHandler(error) {
+        capture.track("dom_replay_error", {
+          error: error instanceof Error ? error.message : String(error),
+        }, true);
+        return true;
+      },
+    });
+
+    scheduleSettledReplaySnapshots(() => !stopped);
+
+    window.addEventListener("pagehide", () => {
+      stopped = true;
+      stop?.();
+    }, { once: true });
+  } catch (error) {
+    capture.track("dom_replay_error", {
+      error: error instanceof Error ? error.message : String(error),
+    }, true);
+  }
+}
+
+function scheduleSettledReplaySnapshots(isActive: () => boolean): void {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (isActive()) {
+        takeFullSnapshot(true);
+      }
+    });
+  });
+
+  for (const delay of replaySettledSnapshotDelaysMs) {
+    window.setTimeout(() => {
+      if (isActive()) {
+        takeFullSnapshot(true);
+      }
+    }, delay);
   }
 }
 
@@ -302,6 +442,18 @@ function describeFormEvent(target: EventTarget | null): JsonObject {
   return { target: describeTarget(target) };
 }
 
+function safeKeyboardKey(event: KeyboardEvent): string {
+  if (event.target instanceof HTMLInputElement && event.target.type === "password") {
+    return "[redacted]";
+  }
+
+  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    return "[text]";
+  }
+
+  return event.key;
+}
+
 function describeTarget(target: EventTarget | null): JsonObject {
   if (!(target instanceof HTMLElement)) {
     return { kind: target === null ? "null" : "non-element" };
@@ -332,4 +484,33 @@ function targetText(target: HTMLElement): string | undefined {
   }
 
   return undefined;
+}
+
+function throttle(callback: () => void, waitMs: number): () => void {
+  let lastRun = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  return () => {
+    const now = Date.now();
+    const remaining = waitMs - (now - lastRun);
+    if (remaining <= 0) {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      lastRun = now;
+      callback();
+      return;
+    }
+
+    if (timer !== null) {
+      return;
+    }
+
+    timer = setTimeout(() => {
+      timer = null;
+      lastRun = Date.now();
+      callback();
+    }, remaining);
+  };
 }

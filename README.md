@@ -68,9 +68,20 @@ agent messages, viewport, focus state, and URL. Capture records are written as
 newline-delimited JSON, one object per request, to avoid unsafe append writes to
 object storage.
 
-This captures browser-visible and application state only. Browsers do not expose
-arbitrary OS or machine state to web apps; for full reproduction, replay against
-the captured app snapshots and API responses for a given `sessionId`.
+The client also records an `rrweb` DOM replay stream as `dom_replay` events.
+Those events are stored beside the semantic events under the same `sessionId`.
+When `SESSION_CAPTURE_READ_ENABLED=true`, `GET /api/session-events/<sessionId>`
+returns the normalized trace records plus `replayEvents`, an array that can be
+loaded into an rrweb `Replayer`. The bundled viewer is available at
+`/replay.html?sessionId=<sessionId>` when capture reads are enabled.
+
+Replay is close to what the user saw and did inside this web app, but it is not
+omniscient. It captures browser-visible DOM changes, inputs, clicks, scrolls,
+keyboard shortcuts, app snapshots, and first-party API metadata. Browsers do not
+expose arbitrary OS state, other tabs, browser extensions, network packets,
+cross-origin iframe internals, or uninstrumented backend side effects. For the
+best reproduction, use the rrweb replay stream for visual playback and the
+semantic trace/app snapshots/API responses for exact state inspection.
 
 ## Shared Sessions
 
