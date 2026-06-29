@@ -1801,6 +1801,30 @@ math.sqrt(5)`;
     `);
   });
 
+  it("strips prose prefixes from natural-language statement completions", async () => {
+    const completed = await runCodeSheet(
+      `def test():
+  \`print hello\``,
+      "test",
+      {
+        complete: () => `Here is the replacement code for the natural-language fragment:
+print("hello")`,
+      },
+    );
+
+    expect({
+      source: completed.completed.source,
+      run: simplifyRunResult(completed),
+    }).toEqual({
+      source: `def test():
+  print("hello")`,
+      run: {
+        ok: true,
+        stdout: ["hello"],
+      },
+    });
+  });
+
   it("can observe the first stdout line from a generated delayed loop before later sleeps finish", async () => {
     const delayMs = 500;
     const fractalSheet = `def add(x: int, y: int) -> int

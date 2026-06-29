@@ -1727,7 +1727,7 @@ function normalizeSnippet(
   const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
 
   if (kind === "natural") {
-    return lines.join("\n").trim();
+    return extractNaturalPythonLines(lines).join("\n").trim();
   }
 
   if (kind === "class") {
@@ -1766,6 +1766,29 @@ function normalizeSnippet(
   return extractSingleTopLevelDefinition(lines, definitionIndex, {
     includeTrailingPrivateHelpers: true,
   });
+}
+
+function extractNaturalPythonLines(lines: string[]): string[] {
+  const trimmedOuter = trimOuterBlankLines(lines);
+  const firstSignificant = trimmedOuter.findIndex((line) => line.trim().length > 0);
+  if (firstSignificant < 0 || isLikelyPythonNaturalLine(trimmedOuter[firstSignificant].trim())) {
+    return trimmedOuter;
+  }
+
+  const firstPythonLine = trimmedOuter.findIndex((line, index) => {
+    return index > firstSignificant && isLikelyPythonNaturalLine(line.trim());
+  });
+
+  return firstPythonLine < 0 ? trimmedOuter : trimmedOuter.slice(firstPythonLine);
+}
+
+function isLikelyPythonNaturalLine(line: string): boolean {
+  return (
+    /^(?:import|from|def|class|for|if|elif|else\b|while|try\b|except|finally\b|with|return|raise|print|pass|break|continue|assert|yield)\b/.test(line) ||
+    /^[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]]+\])?\s*(?:=|\+=|-=|\*=|\/=|\/\/=)/.test(line) ||
+    /^[A-Za-z_][A-Za-z0-9_.]*\s*\(/.test(line) ||
+    /^[\[{('"0-9-]/.test(line)
+  );
 }
 
 function requestedFunctionNames(snippet: string): string[] {
