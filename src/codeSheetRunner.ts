@@ -328,7 +328,7 @@ function interactiveStrategy(options: RunOptions): CompilationStrategy {
 }
 
 function strategyOrder(): RunnerStrategy[] {
-  return ["parallel", "sequential", "agentic-methods", "agentic"];
+  return ["parallel", "sequential", "agentic"];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {

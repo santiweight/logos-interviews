@@ -461,7 +461,7 @@ function isBenchmarkMode(value: string): value is BenchmarkMode {
 }
 
 function strategyOrder(): Array<Exclude<CompilationMode, "auto">> {
-  return ["parallel", "sequential", "agentic-methods", "agentic"];
+  return ["parallel", "sequential", "agentic"];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {
