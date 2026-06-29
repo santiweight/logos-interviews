@@ -1162,7 +1162,7 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
       end < lines.length &&
       !coveredLines.has(end + 1) &&
       !lineOverlapsRanges(lineStarts, lines, end, naturalRanges) &&
-      (isIncompleteTopLevelFunction(lines[end]) || isIndentedComment(lines[end]))
+      isIndentedComment(lines[end])
     ) {
       end += 1;
     }

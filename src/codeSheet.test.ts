@@ -141,6 +141,37 @@ def main():
     ]);
   });
 
+  it("keeps adjacent top-level function signatures as separate snippets", () => {
+    const parsed = parse(`def foo(x, y) -> int
+def bar(x, y) -> int`);
+
+    expect(parsed.incompleteSnippets.map((snippet) => ({
+      kind: snippet.kind,
+      line: snippet.line,
+      snippet: snippet.snippet,
+    }))).toEqual([
+      {
+        kind: "function",
+        line: 1,
+        snippet: "def foo(x, y) -> int",
+      },
+      {
+        kind: "function",
+        line: 2,
+        snippet: "def bar(x, y) -> int",
+      },
+    ]);
+    expect(definitionReadiness(parsed, new Map()).map(({ name, line, ready, reason }) => ({
+      name,
+      line,
+      ready,
+      reason,
+    }))).toEqual([
+      { name: "foo", line: 1, ready: false, reason: "implementation" },
+      { name: "bar", line: 2, ready: false, reason: "implementation" },
+    ]);
+  });
+
   it("trims function and class completions to the requested symbol", async () => {
     const fractalSheet = `class AsciiArt:
   def render() -> str
@@ -989,7 +1020,7 @@ class Cell:
     });
   });
 
-  it("completes adjacent parser helper signatures as one snippet", async () => {
+  it("completes adjacent parser helper signatures as separate snippets", async () => {
     const parserSheet = `type CellAddress = (str, int)
 
 def parse_expr(str) -> Expr | None
@@ -1001,23 +1032,20 @@ def test():
 
     await completeSheet(new Map(), parserSheet, (prompt) => {
       prompts.push(prompt);
-      return `def parse_expr(source) -> None:
-  return None
-def parse_cell(source) -> CellAddress | None:
+      const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+      if (target.includes("def parse_cell")) {
+        return `def parse_cell(source) -> CellAddress | None:
   return ("A", 1)`;
+      }
+
+      return `def parse_expr(source) -> None:
+  return None`;
     });
 
-    expect(prompts.map((prompt) => prompt.split("Your job is to finish the implementation of:").at(-1)?.trim())).toMatchInlineSnapshot(`
-      [
-        "def parse_expr(str) -> Expr | None
-      def parse_cell(str) -> CellAddress | None
-
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
-      Use normal Python. Prefer dataclasses and match statements for sum types.
-      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
-      ]
-    `);
+    expect(prompts.map(completionPromptTarget)).toEqual([
+      "def parse_expr(str) -> Expr | None",
+      "def parse_cell(str) -> CellAddress | None",
+    ]);
   });
 
   it("supports the CellAddress shorthand helper as a separate parser migration", async () => {
@@ -1032,23 +1060,20 @@ def test():
 
     await completeSheet(new Map(), parserSheet, (prompt) => {
       prompts.push(prompt);
-      return `def parse_expr(source) -> None:
-  return None
-def c(source) -> CellAddress:
+      const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+      if (target.includes("def c")) {
+        return `def c(source) -> CellAddress:
   return ("A", 1)`;
+      }
+
+      return `def parse_expr(source) -> None:
+  return None`;
     });
 
-    expect(prompts.map((prompt) => prompt.split("Your job is to finish the implementation of:").at(-1)?.trim())).toMatchInlineSnapshot(`
-      [
-        "def parse_expr(str) -> Expr | None
-      def c(str) -> CellAddress
-
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
-      Use normal Python. Prefer dataclasses and match statements for sum types.
-      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
-      ]
-    `);
+    expect(prompts.map(completionPromptTarget)).toEqual([
+      "def parse_expr(str) -> Expr | None",
+      "def c(str) -> CellAddress",
+    ]);
   });
 
   it("uses dependency-aware completion hashes", () => {
@@ -1923,6 +1948,15 @@ def gen_magic_square():
     expect(cache.size).toBe(2);
   });
 });
+
+function completionPromptTarget(prompt: string): string {
+  const match = prompt.match(/Your job is to finish the implementation of:\n\n([\s\S]*?)\n\nReturn just/);
+  if (!match) {
+    throw new Error(`Could not extract completion target from prompt: ${prompt}`);
+  }
+
+  return match[1];
+}
 
 function simplifyRunResult(result: RunResult): { ok: true; stdout: string[] } | { ok: false; error: string; stdout: string[] } {
   if (result.ok) {
