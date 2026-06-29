@@ -71,7 +71,6 @@ export type CompileOptions = {
   emitProgress?: boolean;
   abortCurrentCompletion?: boolean;
   strategy?: CompilationStrategy;
-  experimentalParallelCompletions?: boolean;
 };
 
 export type CompilationStrategy = "sequential" | "parallel" | "agentic";
@@ -606,11 +605,7 @@ export async function* compile(
 }
 
 function compileInParallel(options: CompileOptions): boolean {
-  if (options.strategy !== undefined) {
-    return options.strategy === "parallel";
-  }
-
-  return options.experimentalParallelCompletions === true;
+  return options.strategy === "parallel";
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {
@@ -2123,7 +2118,7 @@ function isLogosAnnotationLine(line: string): boolean {
   return /^\s*@logos(?:\.|\s*\(|\s*$)/.test(line);
 }
 
-function buildCompletionPrompt(
+export function buildCompletionPrompt(
   sheet: CodeSheet,
   snippet: string,
   kind: IncompleteSnippet["kind"],
@@ -2208,7 +2203,7 @@ function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidan
   };
 }
 
-function normalizeSnippet(
+export function normalizeSnippet(
   source: string,
   kind: IncompleteSnippet["kind"],
   requestedSnippet = "",

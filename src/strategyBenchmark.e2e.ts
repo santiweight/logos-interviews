@@ -29,11 +29,25 @@ type CompletionTrace = {
   responsePath?: string;
 };
 
+type CompletionSummary = {
+  calls: number;
+  promptChars: number;
+  completionChars: number;
+  elapsedMs: number;
+  slowest?: {
+    target: string;
+    elapsedMs: number;
+    completionChars?: number;
+  };
+  targets: string[];
+};
+
 type StrategyAttempt = {
   strategy: Exclude<CompilationMode, "auto">;
   elapsedMs: number;
   completionCalls: number;
   completionMs: number;
+  completionSummary: CompletionSummary;
   runtimeOk: boolean;
   semanticOk: boolean;
   stdout: string[];
@@ -275,6 +289,7 @@ async function runStrategyAttempt(
     elapsedMs,
     completionCalls: completions.length,
     completionMs: roundMs(completions.reduce((sum, item) => sum + item.elapsedMs, 0)),
+    completionSummary: summarizeCompletions(completions),
     runtimeOk,
     semanticOk,
     stdout,
@@ -453,6 +468,7 @@ function selectedModes(): BenchmarkMode[] {
 
 function isBenchmarkMode(value: string): value is BenchmarkMode {
   return value === "parallel" ||
+    value === "parallel-methods" ||
     value === "sequential" ||
     value === "agentic" ||
     value === "agentic-methods" ||
@@ -461,7 +477,7 @@ function isBenchmarkMode(value: string): value is BenchmarkMode {
 }
 
 function strategyOrder(): Array<Exclude<CompilationMode, "auto">> {
-  return ["parallel", "sequential", "agentic-methods", "agentic"];
+  return ["parallel", "sequential", "agentic"];
 }
 
 function commitCache(target: CodeCache, source: CodeCache): void {
@@ -491,6 +507,15 @@ function summarize(results: BenchmarkResult[]): Array<{
   semanticSuccesses: number;
   runtimeSuccesses: number;
   elapsedMs: { min: number; mean: number; max: number };
+  strategyAttempts: { min: number; mean: number; max: number };
+  completionCalls: { min: number; mean: number; max: number };
+  completionMs: { min: number; mean: number; max: number };
+  completionChars: { min: number; mean: number; max: number };
+  slowestCompletion?: {
+    target: string;
+    elapsedMs: number;
+    completionChars?: number;
+  };
 }> {
   const groups = new Map<string, BenchmarkResult[]>();
   for (const result of results) {
@@ -498,22 +523,57 @@ function summarize(results: BenchmarkResult[]): Array<{
     groups.set(key, [...(groups.get(key) ?? []), result]);
   }
 
-  return Array.from(groups.values()).map((items) => ({
-    case: items[0].case,
-    model: items[0].model,
-    mode: items[0].mode,
-    attempts: items.length,
-    semanticSuccesses: items.filter((item) => item.semanticOk).length,
-    runtimeSuccesses: items.filter((item) => item.runtimeOk).length,
-    elapsedMs: stats(items.map((item) => item.elapsedMs)),
-  }));
+  return Array.from(groups.values()).map((items) => {
+    const attempts = items.flatMap((item) => item.strategyAttempts);
+    const slowest = attempts
+      .flatMap((attempt) => attempt.completionSummary.slowest ? [attempt.completionSummary.slowest] : [])
+      .sort((left, right) => right.elapsedMs - left.elapsedMs)[0];
+    return {
+      case: items[0].case,
+      model: items[0].model,
+      mode: items[0].mode,
+      attempts: items.length,
+      semanticSuccesses: items.filter((item) => item.semanticOk).length,
+      runtimeSuccesses: items.filter((item) => item.runtimeOk).length,
+      elapsedMs: stats(items.map((item) => item.elapsedMs)),
+      strategyAttempts: stats(items.map((item) => item.strategyAttempts.length)),
+      completionCalls: stats(attempts.map((attempt) => attempt.completionSummary.calls)),
+      completionMs: stats(attempts.map((attempt) => attempt.completionSummary.elapsedMs)),
+      completionChars: stats(attempts.map((attempt) => attempt.completionSummary.completionChars)),
+      ...(slowest === undefined ? {} : { slowestCompletion: slowest }),
+    };
+  });
 }
 
 function stats(values: number[]): { min: number; mean: number; max: number } {
+  if (values.length === 0) {
+    return { min: 0, mean: 0, max: 0 };
+  }
+
   return {
     min: Math.min(...values),
     mean: roundMs(values.reduce((sum, value) => sum + value, 0) / values.length),
     max: Math.max(...values),
+  };
+}
+
+function summarizeCompletions(completions: CompletionTrace[]): CompletionSummary {
+  const slowest = [...completions].sort((left, right) => right.elapsedMs - left.elapsedMs)[0];
+  return {
+    calls: completions.length,
+    promptChars: completions.reduce((sum, item) => sum + item.promptChars, 0),
+    completionChars: completions.reduce((sum, item) => sum + (item.completionChars ?? 0), 0),
+    elapsedMs: roundMs(completions.reduce((sum, item) => sum + item.elapsedMs, 0)),
+    targets: completions.map((item) => item.target),
+    ...(slowest === undefined
+      ? {}
+      : {
+          slowest: {
+            target: slowest.target,
+            elapsedMs: slowest.elapsedMs,
+            ...(slowest.completionChars === undefined ? {} : { completionChars: slowest.completionChars }),
+          },
+        }),
   };
 }
 
