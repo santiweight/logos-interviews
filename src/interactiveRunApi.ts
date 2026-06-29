@@ -122,6 +122,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     if (!entry) {
       sendJson(res, 404, {
         ok: false,
+        errorCode: "run_session_not_found",
         error: "Run session not found",
         chunks: [],
       });
@@ -150,7 +151,11 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     const { sessionId } = await readJson(req);
     const entry = getSession(sessionId);
     if (!entry) {
-      sendJson(res, 404, { ok: false, error: "Run session not found" });
+      sendJson(res, 404, {
+        ok: false,
+        errorCode: "run_session_not_found",
+        error: "Run session not found",
+      });
       return;
     }
 

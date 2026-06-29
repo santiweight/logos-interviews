@@ -130,6 +130,10 @@ type InteractiveRunPollResponse = {
   status: RunStatus;
 };
 
+type RunOnceResponse =
+  | { ok: true; stdout: string[]; implementation: string }
+  | { ok: false; stdout: string[]; error: string; implementation: string };
+
 const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
@@ -221,7 +225,7 @@ function renderFeedbackControls(panel: string, options: { includeShare?: boolean
     <div class="feedback-controls" data-feedback-controls="${panel}" aria-label="${panel} feedback">
       <span class="feedback-receipt" data-feedback-receipt aria-live="polite"></span>
       ${options.includeShare
-        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share session link" title="Share link">
+        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share current session" title="Share link">
           ${shareIcon}
         </button>`
         : ""}
@@ -447,6 +451,7 @@ type ToolTabId = string | null;
 type RunTab = {
   id: string;
   runnable: Runnable;
+  source: string;
   sessionId: string | null;
   sourceHash: string;
   terminalText: string;
@@ -880,12 +885,17 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     return;
   }
 
-  const runTab = createRunTab(runnable, definitionHash(source));
+  const runTab = createRunTab(runnable, source, definitionHash(source));
   sessionCapture.track("run_requested", { runnable, source }, true);
   runStatus.textContent = `Running ${runnable} · last run ${lastRunLabel}`;
   runStatus.dataset.state = "";
   setActiveTab(runTab.id);
   renderRunTabs();
+
+  if (!shouldUseInteractiveRun(source, latestImplementationSource)) {
+    await runNonInteractiveTab(runTab.id);
+    return;
+  }
 
   const result = await startInteractiveRunViaDevApi(source, runnable).catch((error: unknown) => ({
     ok: false as const,
@@ -922,6 +932,39 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   finishInteractiveRun(currentTab, result.status, result.implementation);
+}
+
+async function runNonInteractiveTab(runTabId: string): Promise<void> {
+  const tab = runTabById(runTabId);
+  if (!tab) {
+    return;
+  }
+
+  const result = await runCodeSheetViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
+    ok: false as const,
+    stdout: [] as string[],
+    error: error instanceof Error ? error.message : String(error),
+    implementation: tab.implementation,
+  }));
+  const currentTab = runTabById(runTabId);
+  if (!currentTab) {
+    return;
+  }
+
+  currentTab.sessionId = null;
+  currentTab.terminalText = result.stdout.length === 0 ? "" : `${result.stdout.join("\n")}\n`;
+  currentTab.implementation = result.implementation;
+
+  if (result.ok) {
+    finishInteractiveRun(currentTab, { state: "exited", code: 0, signal: null }, result.implementation);
+    return;
+  }
+
+  finishInteractiveRun(
+    currentTab,
+    { state: "exited", code: null, signal: null, error: result.error },
+    result.implementation,
+  );
 }
 
 async function resetWorkspace(): Promise<void> {
@@ -2615,6 +2658,14 @@ function firstRunnable(source: string): Runnable | null {
   return runnables(source)[0]?.name ?? null;
 }
 
+function shouldUseInteractiveRun(source: string, implementation: string): boolean {
+  return (
+    /\binput\s*\(/.test(source) ||
+    /\binput\s*\(/.test(implementation) ||
+    /\b(interactive|stdin|cli loop|user types|prompt)\b/i.test(source)
+  );
+}
+
 function formatRunTime(date: Date): string {
   return date.toLocaleTimeString([], {
     hour: "numeric",
@@ -2623,10 +2674,11 @@ function formatRunTime(date: Date): string {
   });
 }
 
-function createRunTab(runnable: Runnable, sourceHash: string): RunTab {
+function createRunTab(runnable: Runnable, source: string, sourceHash: string): RunTab {
   const tab: RunTab = {
     id: createRunTabId(runnable),
     runnable,
+    source,
     sessionId: null,
     sourceHash,
     terminalText: "",
@@ -2836,10 +2888,20 @@ async function pollRunTab(runTabId: string): Promise<void> {
     return;
   }
 
-  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch((error: unknown) => ({
-    ok: false as const,
-    error: error instanceof Error ? error.message : String(error),
-  }));
+  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(async (error: unknown) => {
+    if (error instanceof RunSessionNotFoundError) {
+      await recoverMissingRunSession(runTabId);
+      return null;
+    }
+
+    return {
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  });
+  if (result === null) {
+    return;
+  }
   const currentTab = runTabById(runTabId);
   if (!currentTab) {
     return;
@@ -2870,6 +2932,44 @@ async function pollRunTab(runTabId: string): Promise<void> {
   }
 
   finishInteractiveRun(currentTab, result.status, result.implementation);
+}
+
+async function recoverMissingRunSession(runTabId: string): Promise<void> {
+  const tab = runTabById(runTabId);
+  if (!tab) {
+    return;
+  }
+
+  tab.sessionId = null;
+  runStatus.textContent = `Recovering ${tab.runnable} · last run ${lastRunLabel}`;
+  runStatus.dataset.state = "";
+  renderRunTab(tab);
+
+  const result = await runCodeSheetViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
+    ok: false as const,
+    stdout: [] as string[],
+    error: error instanceof Error ? error.message : String(error),
+    implementation: tab.implementation,
+  }));
+  const currentTab = runTabById(runTabId);
+  if (!currentTab) {
+    return;
+  }
+
+  currentTab.sessionId = null;
+  currentTab.terminalText = result.stdout.length === 0 ? "" : `${result.stdout.join("\n")}\n`;
+  currentTab.implementation = result.implementation;
+
+  if (result.ok) {
+    finishInteractiveRun(currentTab, { state: "exited", code: 0, signal: null }, result.implementation);
+    return;
+  }
+
+  finishInteractiveRun(
+    currentTab,
+    { state: "exited", code: null, signal: null, error: result.error },
+    result.implementation,
+  );
 }
 
 function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: string): void {
@@ -3274,6 +3374,7 @@ async function pollInteractiveRunViaDevApi(
     chunks?: RunChunk[];
     status?: RunStatus;
     error?: string;
+    errorCode?: string;
     implementation?: string;
   };
 
@@ -3285,6 +3386,10 @@ async function pollInteractiveRunViaDevApi(
     !isRunStatus(payload.status) ||
     typeof payload.implementation !== "string"
   ) {
+    if (response.status === 404 && payload.errorCode === "run_session_not_found") {
+      throw new RunSessionNotFoundError(payload.error ?? "Run session not found");
+    }
+
     throw new Error(payload.error ?? "Run poll failed");
   }
 
@@ -3293,6 +3398,50 @@ async function pollInteractiveRunViaDevApi(
     runnable: payload.runnable,
     chunks: payload.chunks,
     status: payload.status,
+    implementation: payload.implementation,
+  };
+}
+
+async function runCodeSheetViaDevApi(sheet: string, runnable: Runnable): Promise<RunOnceResponse> {
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/run",
+    body: { sheet, runnable },
+  });
+  const response = await fetch("/api/run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet, runnable }),
+  });
+  const payload = (await response.json()) as {
+    ok?: boolean;
+    stdout?: string[];
+    error?: string;
+    implementation?: string;
+  };
+  sessionCapture.track("api_response", {
+    method: "POST",
+    path: "/api/run",
+    status: response.status,
+    body: payload,
+  });
+
+  const stdout =
+    Array.isArray(payload.stdout) && payload.stdout.every((line) => typeof line === "string")
+      ? payload.stdout
+      : null;
+  if (!response.ok || stdout === null || typeof payload.implementation !== "string") {
+    throw new Error(payload.error ?? "Run request failed");
+  }
+
+  if (payload.ok === true) {
+    return { ok: true, stdout, implementation: payload.implementation };
+  }
+
+  return {
+    ok: false,
+    stdout,
+    error: payload.error ?? "Run request failed",
     implementation: payload.implementation,
   };
 }
@@ -3345,6 +3494,13 @@ function isRunStatus(value: unknown): value is RunStatus {
     (typeof status.code === "number" || status.code === null) &&
     (typeof status.signal === "string" || status.signal === null)
   );
+}
+
+class RunSessionNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RunSessionNotFoundError";
+  }
 }
 
 async function runAgentTurn(): Promise<void> {
@@ -3650,6 +3806,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     runTabs = session.run.tabs.map((tab) => ({
       id: tab.id,
       runnable: tab.runnable,
+      source: active?.source ?? session.editor.value,
       sessionId: null,
       sourceHash: tab.sourceHash,
       terminalText: tab.terminalText,

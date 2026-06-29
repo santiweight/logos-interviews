@@ -75,6 +75,80 @@ describe("interactive run API", () => {
     });
   });
 
+  it("marks missing poll sessions with a stable error code", async () => {
+    const baseUrl = await listen(servers, new Map(), () => {
+      throw new Error("completion should not be called");
+    });
+
+    const response = await fetch(`${baseUrl}/api/run/poll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "missing-session" }),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      errorCode: "run_session_not_found",
+      error: "Run session not found",
+      chunks: [],
+    });
+  });
+
+  it("reproduces a fresh session miss when start and poll use different API instances", async () => {
+    const startApi = createInteractiveRunApi({
+      cache: new Map(),
+      complete: () => {
+        throw new Error("completion should not be called");
+      },
+    });
+    const pollApi = createInteractiveRunApi({
+      cache: new Map(),
+      complete: () => {
+        throw new Error("completion should not be called");
+      },
+    });
+    const server = createServer(async (req, res) => {
+      if (req.url === "/api/run/start") {
+        await startApi.handleStart(req, res);
+        return;
+      }
+
+      if (req.url === "/api/run/poll") {
+        await pollApi.handlePoll(req, res);
+        return;
+      }
+
+      sendJson(res, 404, { ok: false, error: "not found" });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Could not start test server");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheet: `def test():
+  print("fresh")`,
+      runnable: "test",
+    });
+    const response = await fetch(`${baseUrl}/api/run/poll`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: started.sessionId }),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      errorCode: "run_session_not_found",
+      error: "Run session not found",
+      chunks: [],
+    });
+  });
+
   it("runs repeated sessions for the same runnable without stale session errors", async () => {
     const baseUrl = await listen(servers, new Map(), completeRunSessionSheet);
     const started = await Promise.all(
