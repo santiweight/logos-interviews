@@ -50,7 +50,7 @@ type SourceTabState = {
   activeTabId: string | null;
 };
 
-type CompilationMode = "auto" | "parallel" | "parallel-methods" | "sequential" | "agentic" | "agentic-methods";
+type CompilationMode = "parallel" | "parallel-methods" | "sequential" | "agentic" | "agentic-methods";
 
 type AppSettings = {
   compilationStrategy: CompilationMode;
@@ -363,6 +363,7 @@ app.innerHTML = `
             tabindex="0"
           ></div>
           <header class="snippet-panel-header">
+            <span id="snippet-status-indicator" class="snippet-status-indicator" aria-hidden="true"></span>
             <h2 id="snippet-title">Compilation View</h2>
             ${renderFeedbackControls("compilation")}
           </header>
@@ -407,6 +408,7 @@ const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
+const snippetStatusIndicator = requiredQuery<HTMLSpanElement>("#snippet-status-indicator");
 const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
 const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
@@ -1820,13 +1822,13 @@ function renderSnippetPanel(): void {
       implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
       selectedDefinitionTarget.source;
 
-    setSnippetPanelTitle(selectedDefinitionTarget.name);
+    setSnippetPanelTitle(selectedDefinitionTarget.name, null);
     setSnippetPreviewSource(text);
     return;
   }
 
   if (selectedWholeFileImplementation) {
-    setSnippetPanelTitle("Whole file");
+    setSnippetPanelTitle("Whole file", null);
     setSnippetPreviewSource(previewImplementationSource());
     return;
   }
@@ -1836,7 +1838,7 @@ function renderSnippetPanel(): void {
     : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
 
   if (!target) {
-    setSnippetPanelTitle(null);
+    setSnippetPanelTitle(null, null);
     setSnippetPreviewSource("");
     return;
   }
@@ -1848,7 +1850,7 @@ function renderSnippetPanel(): void {
     preview?.snippet ??
     target.snippet;
 
-  setSnippetPanelTitle(target.label);
+  setSnippetPanelTitle(target.label, snippetPanelStatus(preview));
   setSnippetPreviewSource(text);
 }
 
@@ -1903,9 +1905,36 @@ function previewReplacementForSnippet(target: IncompleteSnippetTarget): string |
     (preview.streamed.length > 0 ? preview.streamed : null);
 }
 
-function setSnippetPanelTitle(label: string | null): void {
+function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPreviewState["status"] | null {
+  if (preview?.status === "complete" || preview?.status === "cached") {
+    return preview.status;
+  }
+
+  if (preview?.status === "generating" || compilationPending) {
+    return "generating";
+  }
+
+  return null;
+}
+
+function setSnippetPanelTitle(label: string | null, status: SnippetPreviewState["status"] | null): void {
   snippetTitle.textContent = label === null ? "Compilation View" : `Compilation View: ${label}`;
   snippetTitle.title = snippetTitle.textContent;
+  snippetStatusIndicator.dataset.state = status ?? "hidden";
+  snippetStatusIndicator.title = snippetStatusTitle(status);
+}
+
+function snippetStatusTitle(status: SnippetPreviewState["status"] | null): string {
+  switch (status) {
+    case "generating":
+      return "Compiling";
+    case "complete":
+    case "cached":
+      return "Ready";
+    case "stub":
+    case null:
+      return "";
+  }
 }
 
 function setSnippetPreviewSource(source: string): void {
@@ -4285,14 +4314,13 @@ function saveAppSettings(settings: AppSettings): void {
 
 function defaultAppSettings(): AppSettings {
   return {
-    compilationStrategy: "auto",
+    compilationStrategy: "parallel",
   };
 }
 
 function renderCompilationStrategyOptions(selected: CompilationMode): string {
   const stableOptions: Array<{ value: CompilationMode; label: string }> = [
-    { value: "auto", label: "Auto" },
-    { value: "parallel", label: "Parallel" },
+    { value: "parallel", label: "Parallel (default)" },
     { value: "sequential", label: "Sequential" },
     { value: "agentic", label: "Agentic" },
   ];
@@ -4319,10 +4347,9 @@ function compilationMode(value: unknown): CompilationMode {
     value === "parallel-methods" ||
     value === "sequential" ||
     value === "agentic" ||
-    value === "agentic-methods" ||
-    value === "auto"
+    value === "agentic-methods"
     ? value
-    : "auto";
+    : "parallel";
 }
 
 function isExperimentalCompilationMode(value: CompilationMode): boolean {
