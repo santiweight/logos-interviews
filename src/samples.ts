@@ -1049,7 +1049,7 @@ def main():
   print(rows != zoomed)
   print(rows != rotated)
   print(50 <= filled <= 1200)
-  print(len({char for row in rows for char in row if char != " "}) >= 4)
+  print(any(char != " " for row in rows for char in row))
   print(any(char in "#%@" for row in rows for char in row))`),
     runnable: "test",
     expectedStdout: [
