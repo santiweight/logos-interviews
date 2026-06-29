@@ -2123,7 +2123,7 @@ function rangesOverlap(left: SourceRange, right: SourceRange | undefined): boole
   return right !== undefined && left.start < right.end && right.start < left.end;
 }
 
-function indentNaturalReplacement(source: string, indent: string): string {
+export function indentNaturalReplacement(source: string, indent: string): string {
   const lines = normalizeNaturalReplacementBlockIndent(source.split("\n"));
   return lines
     .map((line, index) => {
@@ -2167,7 +2167,7 @@ function lineOpensIndentedContinuation(line: string): boolean {
   return /[:\\([{]$/.test(trimmed);
 }
 
-function splitNaturalReplacement(source: string): { imports: string[]; body: string } {
+export function splitNaturalReplacement(source: string): { imports: string[]; body: string } {
   const imports: string[] = [];
   const body: string[] = [];
 

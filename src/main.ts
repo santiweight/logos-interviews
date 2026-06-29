@@ -9,11 +9,13 @@ import {
   completionSnippetHashes,
   definitionReadiness,
   hashCompletionInput,
+  indentNaturalReplacement,
   implementationBlockForTarget,
   implementationTargetAtLine,
   parse,
   runnables,
   selectionContextAtPosition,
+  splitNaturalReplacement,
   type DefinitionReadiness,
   type IncompleteSnippet,
   type ImplementationTarget,
@@ -1867,6 +1869,8 @@ function directPreviewForDefinitionTarget(target: ImplementationTarget): string 
 function previewImplementationSource(): string {
   const source = editor.getValue();
   const lineStarts = sourceLineStartOffsets(source);
+  const imports: string[] = [];
+  const seenImports = new Set<string>();
   const replacements = Array.from(incompleteSnippetByHash.values())
     .map((target) => {
       const replacement = previewReplacementForSnippet(target);
@@ -1874,10 +1878,13 @@ function previewImplementationSource(): string {
         return null;
       }
 
+      const start = editorPositionToOffset(lineStarts, target.startLine, target.startColumn);
+      const renderedReplacement = previewRenderedReplacement(source, start, target, replacement, imports, seenImports);
+
       return {
-        start: editorPositionToOffset(lineStarts, target.startLine, target.startColumn),
+        start,
         end: editorPositionToOffset(lineStarts, target.endLine, target.endColumn),
-        replacement,
+        replacement: renderedReplacement,
       };
     })
     .filter((item): item is { start: number; end: number; replacement: string } => item !== null)
@@ -1892,7 +1899,39 @@ function previewImplementationSource(): string {
     preview = `${preview.slice(0, replacement.start)}${replacement.replacement}${preview.slice(replacement.end)}`;
   }
 
+  if (imports.length > 0) {
+    preview = `${imports.join("\n")}\n\n${preview}`;
+  }
+
   return preview;
+}
+
+function previewRenderedReplacement(
+  source: string,
+  start: number,
+  target: IncompleteSnippetTarget,
+  replacement: string,
+  imports: string[],
+  seenImports: Set<string>,
+): string {
+  if (target.kind !== "natural") {
+    return replacement;
+  }
+
+  const splitReplacement = splitNaturalReplacement(replacement);
+  for (const importLine of splitReplacement.imports) {
+    if (!seenImports.has(importLine)) {
+      seenImports.add(importLine);
+      imports.push(importLine);
+    }
+  }
+
+  return indentNaturalReplacement(splitReplacement.body, indentationBeforeOffset(source, start));
+}
+
+function indentationBeforeOffset(source: string, offset: number): string {
+  const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
+  return source.slice(lineStart, offset).match(/^\s*/)?.[0] ?? "";
 }
 
 function previewReplacementForSnippet(target: IncompleteSnippetTarget): string | null {
