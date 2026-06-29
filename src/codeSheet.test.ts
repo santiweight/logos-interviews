@@ -16,11 +16,13 @@ import {
   type CompilationEvent,
 } from "./codeSheet";
 import {
+  buildPythonProgram,
   runCodeSheet,
   startInteractiveCodeSheet,
   type InteractivePythonRun,
   type RunResult,
 } from "./codeSheetRunner";
+import { sampleEvalCases } from "./samples";
 import { typeCheck } from "./typeCheck";
 
 const sheet = `def add(x: int, y: int) -> int
@@ -141,6 +143,37 @@ def main():
     ]);
   });
 
+  it("keeps adjacent top-level function signatures as separate snippets", () => {
+    const parsed = parse(`def foo(x, y) -> int
+def bar(x, y) -> int`);
+
+    expect(parsed.incompleteSnippets.map((snippet) => ({
+      kind: snippet.kind,
+      line: snippet.line,
+      snippet: snippet.snippet,
+    }))).toEqual([
+      {
+        kind: "function",
+        line: 1,
+        snippet: "def foo(x, y) -> int",
+      },
+      {
+        kind: "function",
+        line: 2,
+        snippet: "def bar(x, y) -> int",
+      },
+    ]);
+    expect(definitionReadiness(parsed, new Map()).map(({ name, line, ready, reason }) => ({
+      name,
+      line,
+      ready,
+      reason,
+    }))).toEqual([
+      { name: "foo", line: 1, ready: false, reason: "implementation" },
+      { name: "bar", line: 2, ready: false, reason: "implementation" },
+    ]);
+  });
+
   it("trims function and class completions to the requested symbol", async () => {
     const fractalSheet = `class AsciiArt:
   def render() -> str
@@ -192,6 +225,49 @@ def main():
       mandelbrotDefinitions: 1,
       mainDefinitions: 1,
     });
+  });
+
+  it("preserves private helper functions returned with a single function completion", async () => {
+    const parserSheet = `def parse_expr(str) -> int
+
+def test():
+  print(parse_expr("7"))`;
+
+    const result = await runCodeSheet(parserSheet, "test", {
+      complete() {
+        return `def parse_expr(source) -> int:
+  tokens = _tokenize(source)
+  return _parse_expr_tokens(tokens)
+
+def _tokenize(source):
+  return [int(source)]
+
+def _parse_expr_tokens(tokens):
+  return tokens[0]
+
+def unrelated_public():
+  return "bad"`;
+      },
+    });
+
+    expect({
+      result: simplifyRunResult(result),
+      hasPrivateTokenizeHelper: result.completed.source.includes("def _tokenize"),
+      hasPrivateParserHelper: result.completed.source.includes("def _parse_expr_tokens"),
+      hasUnrelatedPublicFunction: result.completed.source.includes("def unrelated_public"),
+    }).toEqual({
+      result: { ok: true, stdout: ["7"] },
+      hasPrivateTokenizeHelper: true,
+      hasPrivateParserHelper: true,
+      hasUnrelatedPublicFunction: false,
+    });
+  });
+
+  it("executes sheets with postponed annotation evaluation", () => {
+    expect(
+      buildPythonProgram("class AsciiArt:\n  def rotate(self) -> AsciiArt:\n    return self", "main")
+        .startsWith("from __future__ import annotations\n\n"),
+    ).toBe(true);
   });
 
   it("captures run outputs", async () => {
@@ -300,10 +376,12 @@ def test():
 
       def add(x: int, y: int) -> int
 
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+      For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
           "You are an expert software engineer building programs.
 
       You are tasked with assisting on the following Python code sheet:
@@ -320,10 +398,12 @@ def test():
 
       def mul(x: int, y: int) -> int
 
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+      For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
           "You are an expert software engineer building programs.
 
       You are tasked with assisting on the following Python code sheet:
@@ -348,10 +428,12 @@ def test():
         def get(self, col: str, row: int) -> int | None
         def set(self, col: str, row: int, val: int) -> None
 
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+      For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
         ],
         "spreadsheetClassTest": {
           "ok": true,
@@ -368,6 +450,221 @@ def test():
         },
       }
     `);
+  });
+
+  it("prompts class implementations to treat sibling result types as dependencies", async () => {
+    const prompts: string[] = [];
+    const spreadsheetResultSheet = `class Spreadsheet:
+  def eval(self) -> SpreadsheetResult
+
+class SpreadsheetResult:
+  sheet: Spreadsheet
+
+  def __init__(self, sheet: Spreadsheet) -> None:
+    self.sheet = sheet`;
+
+    await completeSheet(new Map(), spreadsheetResultSheet, (prompt) => {
+      prompts.push(prompt);
+      return `class Spreadsheet:
+  def eval(self) -> SpreadsheetResult:
+    return SpreadsheetResult(self)`;
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("class SpreadsheetResult:");
+    expect(prompts[0]).toContain("Do not add sibling top-level definitions that are not already in the requested snippet.");
+    expect(prompts[0]).toContain(
+      "If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.",
+    );
+    expect(prompts[0]).toContain("For a requested class, return only that class definition and its members.");
+  });
+
+  it("runs the formula spreadsheet eval sample with separate class completions", async () => {
+    const fixture = sampleEvalCases.find((item) => item.name === "formula spreadsheet precedence and parentheses");
+    expect(fixture).toBeDefined();
+    if (fixture === undefined || !("expectedStdout" in fixture)) {
+      throw new Error("Missing formula spreadsheet fixture");
+    }
+
+    const result = await runCodeSheet(fixture.sheet, fixture.runnable, {
+      complete(prompt) {
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        if (target.includes("def parse_expr(str) -> Expr | None")) {
+          return `def parse_expr(source):
+  text = source.strip()
+
+  def tokenize(raw):
+    tokens = []
+    index = 0
+    while index < len(raw):
+      ch = raw[index]
+      if ch.isspace():
+        index += 1
+      elif ch.isdigit():
+        start = index
+        while index < len(raw) and raw[index].isdigit():
+          index += 1
+        tokens.append(("int", int(raw[start:index])))
+      elif ch.isalpha():
+        start = index
+        while index < len(raw) and raw[index].isalpha():
+          index += 1
+        col = raw[start:index]
+        start = index
+        while index < len(raw) and raw[index].isdigit():
+          index += 1
+        if start == index:
+          return []
+        tokens.append(("cell", col, int(raw[start:index])))
+      elif ch in "+-*/()":
+        tokens.append(ch)
+        index += 1
+      else:
+        return []
+    return tokens
+
+  def parse_tokens(tokens):
+    position = 0
+
+    def parse_factor():
+      nonlocal position
+      if position >= len(tokens):
+        return None
+      token = tokens[position]
+      if isinstance(token, tuple) and token[0] == "int":
+        position += 1
+        return Val(token[1])
+      if isinstance(token, tuple) and token[0] == "cell":
+        position += 1
+        return Cell(token[1], token[2])
+      if token == "(":
+        position += 1
+        expr = parse_sum()
+        if expr is None or position >= len(tokens) or tokens[position] != ")":
+          return None
+        position += 1
+        return expr
+      return None
+
+    def parse_product():
+      nonlocal position
+      expr = parse_factor()
+      while expr is not None and position < len(tokens) and tokens[position] in ("*", "/"):
+        op = tokens[position]
+        position += 1
+        right = parse_factor()
+        if right is None:
+          return None
+        expr = BinOp(Mul() if op == "*" else Div(), expr, right)
+      return expr
+
+    def parse_sum():
+      nonlocal position
+      expr = parse_product()
+      while expr is not None and position < len(tokens) and tokens[position] in ("+", "-"):
+        op = tokens[position]
+        position += 1
+        right = parse_product()
+        if right is None:
+          return None
+        expr = BinOp(Add() if op == "+" else Sub(), expr, right)
+      return expr
+
+    expr = parse_sum()
+    if expr is None or position != len(tokens):
+      return None
+    return expr
+
+  parsed = parse_tokens(tokenize(text))
+  if parsed is None and text.endswith(")"):
+    parsed = parse_tokens(tokenize(text[:-1]))
+  return parsed`;
+        }
+
+        if (target.includes("def pretty_expr(expr) -> str")) {
+          return `def pretty_expr(expr) -> str:
+  return str(expr)`;
+        }
+
+        if (target.includes("def c(str) -> CellAddress")) {
+          return `def c(source):
+  return ("".join(ch for ch in source if ch.isalpha()), int("".join(ch for ch in source if ch.isdigit())))`;
+        }
+
+        if (target.includes("class SpreadsheetResult:")) {
+          return `class SpreadsheetResult:
+  sheet: Spreadsheet
+  cache: dict
+
+  def __init__(self, sheet):
+    self.sheet = sheet
+    self.cache = {}
+
+  def eval(self, cell):
+    return self.eval_inner([], cell)
+
+  def eval_inner(self, stack, cell):
+    if cell in stack:
+      return RecursiveError(stack + [cell])
+    col, row = cell
+    if col in self.cache and row in self.cache[col]:
+      return self.cache[col][row]
+    expr = self.sheet.get(cell)
+    if expr is None:
+      return None
+    result = self.eval_expr(expr, stack + [cell])
+    self.cache.setdefault(col, {})[row] = result
+    return result
+
+  def eval_expr(self, expr, stack):
+    if isinstance(expr, Val):
+      return expr.value
+    if isinstance(expr, Cell):
+      return self.eval_inner(stack, (expr.col, expr.row))
+    left = self.eval_expr(expr.left, stack)
+    if isinstance(left, (RecursiveError, DivByZero)):
+      return left
+    right = self.eval_expr(expr.right, stack)
+    if isinstance(right, (RecursiveError, DivByZero)):
+      return right
+    if isinstance(expr.op, Add):
+      return left + right
+    if isinstance(expr.op, Sub):
+      return left - right
+    if isinstance(expr.op, Mul):
+      return left * right
+    if right == 0:
+      return DivByZero()
+    return left // right`;
+        }
+
+        if (target.includes("class Spreadsheet:")) {
+          return `class Spreadsheet:
+  cells: dict
+
+  def __init__(self):
+    self.cells = {}
+
+  def get(self, cell):
+    col, row = cell
+    return self.cells.get(col, {}).get(row)
+
+  def set(self, cell, expr):
+    col, row = cell
+    self.cells.setdefault(col, {})[row] = parse_expr(expr)
+
+  def eval(self):
+    return SpreadsheetResult(self)`;
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: fixture.expectedStdout,
+    });
   });
 
   it("supports interactive stdin while a run is active", async () => {
@@ -989,7 +1286,7 @@ class Cell:
     });
   });
 
-  it("completes adjacent parser helper signatures as one snippet", async () => {
+  it("completes adjacent parser helper signatures as separate snippets", async () => {
     const parserSheet = `type CellAddress = (str, int)
 
 def parse_expr(str) -> Expr | None
@@ -1001,23 +1298,20 @@ def test():
 
     await completeSheet(new Map(), parserSheet, (prompt) => {
       prompts.push(prompt);
-      return `def parse_expr(source) -> None:
-  return None
-def parse_cell(source) -> CellAddress | None:
+      const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+      if (target.includes("def parse_cell")) {
+        return `def parse_cell(source) -> CellAddress | None:
   return ("A", 1)`;
+      }
+
+      return `def parse_expr(source) -> None:
+  return None`;
     });
 
-    expect(prompts.map((prompt) => prompt.split("Your job is to finish the implementation of:").at(-1)?.trim())).toMatchInlineSnapshot(`
-      [
-        "def parse_expr(str) -> Expr | None
-      def parse_cell(str) -> CellAddress | None
-
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
-      Use normal Python. Prefer dataclasses and match statements for sum types.
-      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
-      ]
-    `);
+    expect(prompts.map(completionPromptTarget)).toEqual([
+      "def parse_expr(str) -> Expr | None",
+      "def parse_cell(str) -> CellAddress | None",
+    ]);
   });
 
   it("supports the CellAddress shorthand helper as a separate parser migration", async () => {
@@ -1032,23 +1326,20 @@ def test():
 
     await completeSheet(new Map(), parserSheet, (prompt) => {
       prompts.push(prompt);
-      return `def parse_expr(source) -> None:
-  return None
-def c(source) -> CellAddress:
+      const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+      if (target.includes("def c")) {
+        return `def c(source) -> CellAddress:
   return ("A", 1)`;
+      }
+
+      return `def parse_expr(source) -> None:
+  return None`;
     });
 
-    expect(prompts.map((prompt) => prompt.split("Your job is to finish the implementation of:").at(-1)?.trim())).toMatchInlineSnapshot(`
-      [
-        "def parse_expr(str) -> Expr | None
-      def c(str) -> CellAddress
-
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
-      Use normal Python. Prefer dataclasses and match statements for sum types.
-      Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
-      ]
-    `);
+    expect(prompts.map(completionPromptTarget)).toEqual([
+      "def parse_expr(str) -> Expr | None",
+      "def c(str) -> CellAddress",
+    ]);
   });
 
   it("uses dependency-aware completion hashes", () => {
@@ -1269,14 +1560,26 @@ def test():
 
 class Greeter:
   def greet(self, name: str) -> str:
-    return f"{PREFIX}, {name}"`,
+    return Entry(f"{PREFIX}, {name}{SUFFIX}").value
+
+SUFFIX = "!"
+
+class Entry:
+  def __init__(self, value: str):
+    self.value = value
+
+class Unused:
+  pass`,
     );
 
     expect(completed.source).toContain(`PREFIX = "Hello"`);
+    expect(completed.source).toContain(`SUFFIX = "!"`);
+    expect(completed.source).toContain("class Entry:");
     expect(completed.source).toContain("class Greeter:");
+    expect(completed.source).not.toContain("class Unused:");
     expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
       ok: true,
-      stdout: ["Hello, Ada"],
+      stdout: ["Hello, Ada!"],
     });
   });
 
@@ -1591,6 +1894,66 @@ on its own line
     expect(Array.from(cache.values())).toEqual(["(1 + 2) * 3", "print(total)"]);
   });
 
+  it("does not double-indent mixed-indentation fenced statement completions", async () => {
+    const sheet = `# Render fractals in the command line.
+# Outputs are 24 characters tall, 64 characters wide.
+# Use only these density characters, from empty to bright: " .:-=+*#%@".
+# Keep the background mostly empty, with detail clustered into readable forms.
+
+class AsciiArt:
+  def render() -> str
+  def rotate() -> AsciiArt
+
+# Return a deterministic ASCII mandelbrot fractal.
+def mandelbrot() -> AsciiArt
+
+def main():
+  \`\`\`
+  print mandelbrot regularly and then rotated by 90*
+  \`\`\``;
+
+    const result = await runCodeSheet(sheet, "main", {
+      cache: new Map(),
+      complete(prompt) {
+        if (prompt.includes("Your job is to replace this natural-language Python fragment")) {
+          return `art = mandelbrot()
+  print(art.render())
+  print()
+  rotated = art.rotate()
+  print(rotated.render())`;
+        }
+
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        if (target.includes("class AsciiArt:")) {
+          return `class AsciiArt:
+  def __init__(self, value: str):
+    self.value = value
+
+  def render(self) -> str:
+    return self.value
+
+  def rotate(self) -> AsciiArt:
+    return AsciiArt(f"{self.value} rotated")`;
+        }
+
+        if (target.includes("def mandelbrot() -> AsciiArt")) {
+          return `def mandelbrot() -> AsciiArt:
+  return AsciiArt("@")`;
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["@", "", "@ rotated"] });
+    expect(result.completed.source).toContain(`def main():
+  art = mandelbrot()
+  print(art.render())
+  print()
+  rotated = art.rotate()
+  print(rotated.render())`);
+  });
+
   it("does not lower code-like text inside fenced natural-language snippets", async () => {
     const sheet = `def test():
   \`\`\`
@@ -1863,6 +2226,15 @@ def gen_magic_square():
     expect(cache.size).toBe(2);
   });
 });
+
+function completionPromptTarget(prompt: string): string {
+  const match = prompt.match(/Your job is to finish the implementation of:\n\n([\s\S]*?)\n\nReturn (?:just|only implementations)/);
+  if (!match) {
+    throw new Error(`Could not extract completion target from prompt: ${prompt}`);
+  }
+
+  return match[1];
+}
 
 function simplifyRunResult(result: RunResult): { ok: true; stdout: string[] } | { ok: false; error: string; stdout: string[] } {
   if (result.ok) {

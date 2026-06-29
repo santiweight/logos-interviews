@@ -1162,7 +1162,7 @@ function discoverIncompleteSnippets(codeSheet: CodeSheet): IncompleteSnippet[] {
       end < lines.length &&
       !coveredLines.has(end + 1) &&
       !lineOverlapsRanges(lineStarts, lines, end, naturalRanges) &&
-      (isIncompleteTopLevelFunction(lines[end]) || isIndentedComment(lines[end]))
+      isIndentedComment(lines[end])
     ) {
       end += 1;
     }
@@ -1591,7 +1591,7 @@ function rangesOverlap(left: SourceRange, right: SourceRange | undefined): boole
 }
 
 function indentNaturalReplacement(source: string, indent: string): string {
-  const lines = source.split("\n");
+  const lines = normalizeNaturalReplacementBlockIndent(source.split("\n"));
   return lines
     .map((line, index) => {
       if (index === 0 || line.trim().length === 0) {
@@ -1601,6 +1601,37 @@ function indentNaturalReplacement(source: string, indent: string): string {
       return `${indent}${line}`;
     })
     .join("\n");
+}
+
+function normalizeNaturalReplacementBlockIndent(lines: string[]): string[] {
+  const firstSignificant = lines.find((line) => line.trim().length > 0);
+  if (!firstSignificant || indentWidth(firstSignificant) > 0 || lineOpensIndentedContinuation(firstSignificant)) {
+    return lines;
+  }
+
+  const laterSignificant = lines.slice(1).filter((line) => line.trim().length > 0);
+  const laterIndents = laterSignificant.map(indentWidth).filter((width) => width > 0);
+  if (laterIndents.length === 0 || laterIndents.length !== laterSignificant.length) {
+    return lines;
+  }
+
+  const correction = Math.min(...laterIndents);
+  if (correction <= 0) {
+    return lines;
+  }
+
+  return lines.map((line, index) => {
+    if (index === 0 || line.trim().length === 0) {
+      return line;
+    }
+
+    return line.slice(Math.min(correction, indentWidth(line)));
+  });
+}
+
+function lineOpensIndentedContinuation(line: string): boolean {
+  const trimmed = line.trimEnd();
+  return /[:\\([{]$/.test(trimmed);
 }
 
 function splitNaturalReplacement(source: string): { imports: string[]; body: string } {
@@ -1656,10 +1687,12 @@ Your job is to finish the implementation of:
 
 ${snippet}
 
-Return just the function or class snippet, including any standard-library imports required by that snippet.
+Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
 Use normal Python. Prefer dataclasses and match statements for sum types.
 Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-If helper functions are needed, include them in the returned snippet or define them inside the requested function.`;
+Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
 }
 
 function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidance: string } | null {
@@ -1707,7 +1740,11 @@ function normalizeSnippet(
       return unfenced.trimEnd();
     }
 
-    return extractSingleTopLevelDefinition(lines, classIndex);
+    return extractSingleTopLevelDefinition(lines, classIndex, {
+      includeTrailingHelperConstants: true,
+      includeTrailingPrivateHelpers: true,
+      includeTrailingReferencedHelpers: true,
+    });
   }
 
   const requestedName = parseFunctionHeader(requestedSnippet.split("\n")[0])?.name;
@@ -1722,7 +1759,20 @@ function normalizeSnippet(
     return fallbackIndex < 0 ? unfenced.trimEnd() : extractTopLevelDefinitions(lines, fallbackIndex);
   }
 
-  return extractSingleTopLevelDefinition(lines, definitionIndex);
+  if (requestedFunctionNames(requestedSnippet).length > 1) {
+    return extractTopLevelDefinitions(lines, startOfDefinitionWithImportsAndDecorators(lines, definitionIndex));
+  }
+
+  return extractSingleTopLevelDefinition(lines, definitionIndex, {
+    includeTrailingPrivateHelpers: true,
+  });
+}
+
+function requestedFunctionNames(snippet: string): string[] {
+  return snippet
+    .split("\n")
+    .map((line) => parseFunctionHeader(line.trimStart())?.name)
+    .filter((name): name is string => name !== undefined);
 }
 
 function dedentLines(lines: string[]): string[] {
@@ -1758,12 +1808,21 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
 }
 
-function extractSingleTopLevelDefinition(lines: string[], definitionIndex: number): string {
+function extractSingleTopLevelDefinition(
+  lines: string[],
+  definitionIndex: number,
+  options: {
+    includeTrailingHelperConstants?: boolean;
+    includeTrailingPrivateHelpers?: boolean;
+    includeTrailingReferencedHelpers?: boolean;
+  } = {},
+): string {
   const start = startOfDefinitionWithImportsAndDecorators(lines, definitionIndex);
   const snippet: string[] = [];
   let seenRequestedDefinition = false;
 
-  for (const line of lines.slice(start)) {
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
     const trimmed = line.trimStart();
     const isBlank = line.trim().length === 0;
     const isNested = /^\s+/.test(line);
@@ -1797,10 +1856,55 @@ function extractSingleTopLevelDefinition(lines: string[], definitionIndex: numbe
       continue;
     }
 
+    const includedSource = snippet.join("\n");
+    const trailingHelperName = helperNameFromTopLevelLine(trimmed);
+    if (
+      (options.includeTrailingHelperConstants && isHelperConstant) ||
+      (options.includeTrailingPrivateHelpers && isPrivateHelperDefinitionLine(trimmed)) ||
+      (
+        options.includeTrailingReferencedHelpers &&
+        trailingHelperName !== null &&
+        referencesName(includedSource, trailingHelperName)
+      )
+    ) {
+      snippet.push(line.trimEnd());
+      continue;
+    }
+
     break;
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
+function helperNameFromTopLevelLine(trimmed: string): string | null {
+  const functionHeader = parseFunctionHeader(trimmed);
+  if (functionHeader) {
+    return functionHeader.name;
+  }
+
+  return (
+    trimmed.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ??
+    trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*[^=]+)?\s*=/)?.[1] ??
+    null
+  );
+}
+
+function referencesName(source: string, name: string): boolean {
+  return new RegExp(`\\b${escapeRegExp(name)}\\b`).test(source);
+}
+
+function escapeRegExp(source: string): string {
+  return source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isPrivateHelperDefinitionLine(trimmed: string): boolean {
+  const header = parseFunctionHeader(trimmed);
+  if (header && header.name.startsWith("_")) {
+    return true;
+  }
+
+  return /^class\s+_[A-Za-z_][A-Za-z0-9_]*/.test(trimmed);
 }
 
 function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIndex: number): number {

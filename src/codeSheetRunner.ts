@@ -74,8 +74,10 @@ export async function startInteractiveCodeSheet(
   };
 }
 
-function buildPythonProgram(source: string, runnable: Runnable): string {
-  return `${source}
+export function buildPythonProgram(source: string, runnable: Runnable): string {
+  return `from __future__ import annotations
+
+${source}
 
 if __name__ == "__main__":
   ${runnable}()

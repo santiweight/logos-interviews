@@ -4,19 +4,6 @@ on:
   schedule:
     # Weekdays at 9am, 1pm, and 5pm US/Eastern during daylight saving time.
     - cron: "0 13,17,21 * * 1-5"
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/anthropic-e2e.yml"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "src/anthropicComplete.ts"
-      - "src/codeSheet.ts"
-      - "src/codeSheet.e2e.ts"
-      - "src/codeSheetRunner.ts"
-      - "src/samples.ts"
-      - "src/samples.test.ts"
   workflow_dispatch:
 
 concurrency:
