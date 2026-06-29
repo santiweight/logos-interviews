@@ -377,8 +377,12 @@ def test():
       def add(x: int, y: int) -> int
 
       Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Use only Python built-ins and standard-library modules; do not import third-party packages.
       Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
       For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+      Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+      Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
+      Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -399,8 +403,12 @@ def test():
       def mul(x: int, y: int) -> int
 
       Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Use only Python built-ins and standard-library modules; do not import third-party packages.
       Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
       For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+      Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+      Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
+      Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -429,8 +437,12 @@ def test():
         def set(self, col: str, row: int, val: int) -> None
 
       Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Use only Python built-ins and standard-library modules; do not import third-party packages.
       Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
       For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+      Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+      Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
+      Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -1726,13 +1738,17 @@ def main():
 
       Return only the replacement code for the fragment, without backticks or fences.
       This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.
-      If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Use only Python built-ins and standard-library modules; do not import third-party packages.
+      If standard-library imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
           "\`multiply 3 and 4\`
 
       Return only the replacement code for the fragment, without backticks or fences.
       This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.
-      If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Use only Python built-ins and standard-library modules; do not import third-party packages.
+      If standard-library imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
         ],
         "first": {
@@ -1889,6 +1905,30 @@ math.sqrt(5)`;
             print(candidate)",
       }
     `);
+  });
+
+  it("strips prose prefixes from natural-language statement completions", async () => {
+    const completed = await runCodeSheet(
+      `def test():
+  \`print hello\``,
+      "test",
+      {
+        complete: () => `Here is the replacement code for the natural-language fragment:
+print("hello")`,
+      },
+    );
+
+    expect({
+      source: completed.completed.source,
+      run: simplifyRunResult(completed),
+    }).toEqual({
+      source: `def test():
+  print("hello")`,
+      run: {
+        ok: true,
+        stdout: ["hello"],
+      },
+    });
   });
 
   it("can observe the first stdout line from a generated delayed loop before later sleeps finish", async () => {
@@ -2315,6 +2355,103 @@ def gen_magic_square():
     expect(calls).toHaveLength(2);
     expect(cache.size).toBe(2);
   });
+
+  it("can start independent completions in parallel", async () => {
+    const started: string[] = [];
+    const resolvers: Array<(replacement: string) => void> = [];
+
+    const eventsPromise = (async () => {
+      const events: CompilationEvent[] = [];
+      for await (const event of compile(
+        new Map(),
+        multiIncompleteSheet,
+        (prompt) => {
+          const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
+          started.push(target);
+          return new Promise<string>((resolve) => {
+            resolvers.push(resolve);
+          });
+        },
+        { experimentalParallelCompletions: true },
+      )) {
+        events.push(event);
+      }
+      return events;
+    })();
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[0](`def add(x: int, y: int) -> int:
+  return x + y`);
+    resolvers[1](`def mul(x: int, y: int) -> int:
+  return x * y`);
+
+    const events = await eventsPromise;
+    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(2);
+    expect(events.at(-1)?.kind).toBe("compiled");
+  });
+
+  it("passes parallel strategy through the runner", async () => {
+    const started: string[] = [];
+    const resolvers: Array<(replacement: string) => void> = [];
+
+    const runPromise = runCodeSheet(multiIncompleteSheet, "test", {
+      compilationStrategy: "parallel",
+      complete(prompt) {
+        const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
+        started.push(target);
+        return new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    });
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[0](`def add(x: int, y: int) -> int:
+  return x + y`);
+    resolvers[1](`def mul(x: int, y: int) -> int:
+  return x * y`);
+
+    expect(simplifyRunResult(await runPromise)).toEqual({
+      ok: true,
+      stdout: ["2"],
+    });
+  });
+
+  it("auto strategy commits only the first successful strategy cache fork", async () => {
+    const cache: CodeCache = new Map();
+    const calls: string[] = [];
+    let mulCalls = 0;
+    const badMul = `def mul(x: int, y: int) -> int:
+  raise RuntimeError("parallel failed")`;
+    const goodMul = `def mul(x: int, y: int) -> int:
+  return x * y`;
+
+    const result = await runCodeSheet(multiIncompleteSheet, "test", {
+      cache,
+      compilationStrategy: "auto",
+      complete(prompt) {
+        const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
+        calls.push(target);
+        if (target === "mul") {
+          mulCalls += 1;
+          return mulCalls === 1 ? badMul : goodMul;
+        }
+
+        return `def add(x: int, y: int) -> int:
+  return x + y`;
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["2"],
+    });
+    expect(calls).toEqual(["add", "mul", "add", "mul"]);
+    expect([...cache.values()]).toContain(goodMul);
+    expect([...cache.values()]).not.toContain(badMul);
+  });
 });
 
 function completionPromptTarget(prompt: string): string {
@@ -2365,4 +2502,19 @@ async function waitForInteractiveExit(session: InteractivePythonRun): Promise<vo
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function eventually(assertion: () => void): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(5);
+    }
+  }
+
+  throw lastError;
 }

@@ -2,6 +2,7 @@ node_modules
 dist
 dist-server
 logs
+.strategy-benchmark
 .DS_Store
 *.log
 .env

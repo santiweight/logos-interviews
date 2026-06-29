@@ -65,8 +65,11 @@ export type CompileOptions = {
   signal?: AbortSignal;
   streamTokens?: boolean;
   abortCurrentCompletion?: boolean;
+  strategy?: CompilationStrategy;
   experimentalParallelCompletions?: boolean;
 };
+
+export type CompilationStrategy = "sequential" | "parallel" | "agentic";
 
 export type DefinitionReadiness = {
   name: string;
@@ -271,9 +274,10 @@ export async function completeSheet(
   codeCache: CodeCache,
   codeSheet: CodeSheet,
   complete?: CompleteFunction,
+  options: CompileOptions = {},
 ): Promise<CompletedCodeSheet> {
   let compiled: CompletedCodeSheet | null = null;
-  for await (const event of compile(codeCache, codeSheet, complete)) {
+  for await (const event of compile(codeCache, codeSheet, complete, options)) {
     if (event.kind === "compiled") {
       compiled = event.completed;
     }
@@ -312,7 +316,7 @@ export async function* compile(
     totalSnippets,
   };
 
-  if (options.experimentalParallelCompletions && complete) {
+  if (compileInParallel(options) && complete) {
     const missing: Array<{
       node: Extract<CompilationNode, { kind: "incomplete" }>;
       hash: SnippetHash;
@@ -487,6 +491,14 @@ export async function* compile(
       ir,
     },
   };
+}
+
+function compileInParallel(options: CompileOptions): boolean {
+  if (options.strategy !== undefined) {
+    return options.strategy === "parallel";
+  }
+
+  return options.experimentalParallelCompletions === true;
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {
@@ -1784,7 +1796,9 @@ ${snippet}
 
 Return only the replacement code for the fragment, without backticks or fences.
 ${naturalPolicy}
-If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+Use only Python built-ins and standard-library modules; do not import third-party packages.
+If standard-library imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
 Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
   }
 
@@ -1799,8 +1813,12 @@ Your job is to finish the implementation of:
 ${snippet}
 
 Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+Use only Python built-ins and standard-library modules; do not import third-party packages.
 Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
 For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
+Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
 Use normal Python. Prefer dataclasses and match statements for sum types.
 Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
@@ -1838,7 +1856,7 @@ function normalizeSnippet(
   const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
 
   if (kind === "natural") {
-    return lines.join("\n").trim();
+    return extractNaturalPythonLines(lines).join("\n").trim();
   }
 
   if (kind === "class") {
@@ -1882,6 +1900,29 @@ function normalizeSnippet(
   return extractSingleTopLevelDefinition(lines, definitionIndex, {
     includeTrailingPrivateHelpers: true,
   });
+}
+
+function extractNaturalPythonLines(lines: string[]): string[] {
+  const trimmedOuter = trimOuterBlankLines(lines);
+  const firstSignificant = trimmedOuter.findIndex((line) => line.trim().length > 0);
+  if (firstSignificant < 0 || isLikelyPythonNaturalLine(trimmedOuter[firstSignificant].trim())) {
+    return trimmedOuter;
+  }
+
+  const firstPythonLine = trimmedOuter.findIndex((line, index) => {
+    return index > firstSignificant && isLikelyPythonNaturalLine(line.trim());
+  });
+
+  return firstPythonLine < 0 ? trimmedOuter : trimmedOuter.slice(firstPythonLine);
+}
+
+function isLikelyPythonNaturalLine(line: string): boolean {
+  return (
+    /^(?:import|from|def|class|for|if|elif|else\b|while|try\b|except|finally\b|with|return|raise|print|pass|break|continue|assert|yield)\b/.test(line) ||
+    /^[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]]+\])?\s*(?:=|\+=|-=|\*=|\/=|\/\/=)/.test(line) ||
+    /^[A-Za-z_][A-Za-z0-9_.]*\s*\(/.test(line) ||
+    /^[\[{('"0-9-]/.test(line)
+  );
 }
 
 function requestedFunctionNames(snippet: string): string[] {
