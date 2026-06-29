@@ -3,14 +3,15 @@
   --accent: #ec4e02;
   --accent-hover: #bb3e02;
   --accent-soft: #fee9dd;
-  --canvas: hsl(46deg 10% 98.02%);
+  --canvas: #f4f1eb;
   --ink: #07080a;
   --muted: #5c5f66;
-  --paper: #fcfcfc;
-  --paper-soft: hsl(46deg 10% 96%);
-  --paper-pressed: hsl(46deg 10% 93.98%);
-  --border: #d2d4d6;
-  --border-strong: #afb1b3;
+  --paper: #fbfaf6;
+  --paper-soft: #f1eee7;
+  --paper-pressed: #e9e4da;
+  --tab-strip: #eeeae1;
+  --border: #d4d0c8;
+  --border-strong: #b5afa5;
   --shadow: rgba(14, 21, 37, 0.08);
   color: var(--ink);
   background: var(--canvas);
@@ -520,7 +521,7 @@ h2 {
   min-width: 0;
   overflow: visible;
   border-bottom: 0;
-  background: var(--paper);
+  background: var(--tab-strip);
   padding: 0;
 }
 
@@ -529,7 +530,8 @@ h2 {
   align-items: stretch;
   flex: 1 1 auto;
   gap: 0;
-  width: auto;
+  width: 100%;
+  max-width: none;
   height: 100%;
   min-width: 0;
   overflow-x: auto;
@@ -542,11 +544,21 @@ h2 {
 
 .source-tab-shell {
   position: relative;
-  flex: 0 1 190px;
+  flex: 0 1 auto;
+  width: max-content;
   min-width: 118px;
   max-width: 190px;
   height: 29px;
   margin-right: 0;
+}
+
+.source-tabs::after {
+  min-width: 18px;
+  flex: 1 1 auto;
+  border-left: 1px solid var(--border);
+  background: var(--tab-strip);
+  box-shadow: inset 0 -1px 0 var(--border);
+  content: "";
 }
 
 .source-tab-shell + .source-tab-shell::before,
@@ -661,9 +673,10 @@ h2 {
   place-items: center;
   border: 1px solid var(--border);
   border-top: 0;
+  border-right: 0;
   border-bottom: 0;
   border-radius: 0;
-  background: var(--paper-soft);
+  background: var(--tab-strip);
   box-shadow: inset 0 -1px 0 var(--border);
   color: var(--muted);
   cursor: pointer;
@@ -676,7 +689,7 @@ h2 {
 
 .sample-menu[open] .source-add-tab,
 .source-add-tab:hover {
-  background: var(--paper);
+  background: var(--paper-soft);
   color: var(--accent);
 }
 
@@ -1113,6 +1126,7 @@ h2 {
 .run-placeholder.tab-panel.active {
   display: grid;
   place-items: center;
+  background: #ebe7de;
   color: var(--muted);
   text-align: center;
   white-space: normal;
@@ -1251,6 +1265,7 @@ h2 {
 .snippet-preview {
   flex: 1;
   min-height: 0;
+  padding-left: 10px;
 }
 
 .agent-log {
@@ -1344,34 +1359,34 @@ h2 {
 }
 
 .monaco-editor .incomplete-snippet-line {
-  background-color: rgba(245, 158, 11, 0.08) !important;
+  background-color: transparent !important;
   cursor: pointer;
 }
 
 .monaco-editor .incomplete-snippet-line-selected {
   cursor: pointer;
-  background-color: rgba(50, 103, 214, 0.055) !important;
+  background-color: transparent !important;
 }
 
 .monaco-editor .snippet-source-inline-selected {
-  background-color: rgba(50, 103, 214, 0.09) !important;
+  background-color: transparent !important;
 }
 
 .monaco-editor .natural-snippet-inline {
-  border-radius: 3px;
-  background-color: rgba(245, 158, 11, 0.16) !important;
+  border-radius: 2px;
+  background-color: rgba(236, 78, 2, 0.018) !important;
   cursor: pointer;
 }
 
 .monaco-editor .natural-snippet-inline-selected {
   cursor: pointer;
-  background-color: rgba(50, 103, 214, 0.11) !important;
-  outline: 1px solid rgba(50, 103, 214, 0.18);
+  background-color: rgba(236, 78, 2, 0.045) !important;
+  outline: none;
 }
 
 .monaco-editor .natural-snippet-plain,
 .monaco-editor .natural-snippet-plain * {
-  color: #334155 !important;
+  color: #b74716 !important;
   font-style: normal !important;
   font-weight: 400 !important;
   text-decoration: none !important;
@@ -1379,36 +1394,28 @@ h2 {
 
 .monaco-editor .definition-implementation-line-selected {
   cursor: pointer;
-  background-color: rgba(50, 103, 214, 0.035) !important;
+  background-color: transparent !important;
 }
 
-.monaco-editor .selected-implementation-gutter {
-  position: relative;
-}
-
-.monaco-editor .selected-implementation-gutter::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 2px;
-  width: 2px;
-  background: rgba(50, 103, 214, 0.32);
-  content: "";
+.monaco-editor .margin {
+  border-right: 0;
+  background-color: var(--paper) !important;
 }
 
 .monaco-editor .not-ready-glyph-dot::before {
-  display: inline-block;
+  display: block;
   width: 7px;
   height: 7px;
-  margin: 0 0 1px 9px;
+  margin: 7px 1px 0 auto;
   border-radius: 999px;
   background: #bf3a2e;
   content: "";
 }
 
 .monaco-editor .runnable-play-glyph::before {
-  display: inline-block;
-  margin-left: 5px;
+  display: block;
+  margin-left: auto;
+  margin-right: 1px;
   color: var(--accent);
   content: "▶";
   cursor: pointer;

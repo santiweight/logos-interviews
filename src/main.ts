@@ -234,7 +234,7 @@ app.innerHTML = `
             <h2 id="snippet-title">Compilation View</h2>
             ${renderFeedbackControls("compilation")}
           </header>
-          <pre id="snippet-preview" class="output snippet-preview"></pre>
+          <div id="snippet-preview" class="snippet-preview" aria-label="Compilation preview"></div>
         </section>
       </section>
 
@@ -276,7 +276,7 @@ const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
 const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
-const snippetPreview = requiredQuery<HTMLPreElement>("#snippet-preview");
+const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
@@ -357,18 +357,64 @@ registerLogosPythonLanguage();
 
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
-  inherit: true,
+  inherit: false,
   rules: [
-    { token: "naturalSnippet", foreground: "9a4f00" },
-    { token: "naturalSnippet.delimiter", foreground: "c2410c" },
+    { token: "", foreground: "20242a" },
+    { token: "comment", foreground: "607fa0" },
+    { token: "keyword", foreground: "7a5268", fontStyle: "normal" },
+    { token: "identifier", foreground: "20242a" },
+    { token: "number", foreground: "3f6f6a" },
+    { token: "number.hex", foreground: "3f6f6a" },
+    { token: "string", foreground: "7a5a3a" },
+    { token: "string.escape", foreground: "8a6844" },
+    { token: "delimiter", foreground: "aca59b" },
+    { token: "delimiter.curly", foreground: "aca59b" },
+    { token: "delimiter.bracket", foreground: "aca59b" },
+    { token: "delimiter.parenthesis", foreground: "aca59b" },
+    { token: "operator", foreground: "8e8375" },
+    { token: "type", foreground: "3f6f6a" },
+    { token: "predefined", foreground: "4f677c" },
+    { token: "naturalSnippet", foreground: "b74716" },
+    { token: "naturalSnippet.delimiter", foreground: "9b4d2e" },
+    { token: "comment.logos-python", foreground: "607fa0" },
+    { token: "keyword.logos-python", foreground: "7a5268", fontStyle: "normal" },
+    { token: "identifier.logos-python", foreground: "20242a" },
+    { token: "number.logos-python", foreground: "3f6f6a" },
+    { token: "number.hex.logos-python", foreground: "3f6f6a" },
+    { token: "string.logos-python", foreground: "7a5a3a" },
+    { token: "string.escape.logos-python", foreground: "8a6844" },
+    { token: "delimiter.logos-python", foreground: "aca59b" },
+    { token: "delimiter.curly.logos-python", foreground: "aca59b" },
+    { token: "delimiter.bracket.logos-python", foreground: "aca59b" },
+    { token: "delimiter.parenthesis.logos-python", foreground: "aca59b" },
+    { token: "operator.logos-python", foreground: "8e8375" },
+    { token: "type.logos-python", foreground: "3f6f6a" },
+    { token: "predefined.logos-python", foreground: "4f677c" },
+    { token: "naturalSnippet.logos-python", foreground: "b74716" },
+    { token: "naturalSnippet.delimiter.logos-python", foreground: "9b4d2e" },
   ],
   colors: {
-    "editor.background": "#fcfcfc",
-    "editorGutter.background": "#f6f5f2",
+    "editor.background": "#fbfaf6",
+    "editorGutter.background": "#fbfaf6",
+    "editor.foreground": "#20242a",
     "editorLineNumber.foreground": "#74767a",
     "editorLineNumber.activeForeground": "#07080a",
-    "editor.selectionBackground": "#b2d9ff",
-    "editor.lineHighlightBackground": "#f6f5f2",
+    "editor.selectionBackground": "#d8e3eb",
+    "editor.lineHighlightBackground": "#f1eee7",
+    "editor.wordHighlightBackground": "#00000000",
+    "editor.wordHighlightStrongBackground": "#00000000",
+    "editor.wordHighlightTextBackground": "#00000000",
+    "editorBracketMatch.background": "#00000000",
+    "editorBracketMatch.border": "#00000000",
+    "editorBracketHighlight.foreground1": "#aca59b",
+    "editorBracketHighlight.foreground2": "#aca59b",
+    "editorBracketHighlight.foreground3": "#aca59b",
+    "editorBracketHighlight.foreground4": "#aca59b",
+    "editorBracketHighlight.foreground5": "#aca59b",
+    "editorBracketHighlight.foreground6": "#aca59b",
+    "editorBracketHighlight.unexpectedBracket.foreground": "#aca59b",
+    "editorIndentGuide.background1": "#e2ddd4",
+    "editorIndentGuide.activeBackground1": "#adc0d6",
   },
 });
 
@@ -384,11 +430,58 @@ const editor = monaco.editor.create(editorEl, {
   minimap: { enabled: false },
   overviewRulerLanes: 0,
   scrollBeyondLastLine: false,
+  renderLineHighlight: "none",
   tabSize: 2,
   insertSpaces: true,
   glyphMargin: true,
-  lineNumbersMinChars: 3,
+  lineNumbers: "off",
+  lineNumbersMinChars: 0,
+  lineDecorationsWidth: 8,
+  folding: false,
+  matchBrackets: "never",
+  occurrencesHighlight: "off",
+  selectionHighlight: false,
+  bracketPairColorization: { enabled: false },
+  "semanticHighlighting.enabled": false,
+  guides: {
+    indentation: true,
+    highlightActiveIndentation: "always",
+  },
   padding: { top: 12, bottom: 12 },
+});
+
+const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
+  value: "",
+  language: logosPythonLanguageId,
+  theme: "interview-light",
+  automaticLayout: true,
+  fontFamily:
+    '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  fontSize: 14,
+  lineHeight: 22,
+  minimap: { enabled: false },
+  overviewRulerLanes: 0,
+  scrollBeyondLastLine: false,
+  renderLineHighlight: "none",
+  tabSize: 2,
+  insertSpaces: true,
+  glyphMargin: false,
+  lineNumbers: "off",
+  lineNumbersMinChars: 0,
+  lineDecorationsWidth: 0,
+  folding: false,
+  readOnly: true,
+  domReadOnly: true,
+  matchBrackets: "never",
+  occurrencesHighlight: "off",
+  selectionHighlight: false,
+  bracketPairColorization: { enabled: false },
+  "semanticHighlighting.enabled": false,
+  guides: {
+    indentation: true,
+    highlightActiveIndentation: "always",
+  },
+  padding: { top: 10, bottom: 10 },
 });
 
 const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
@@ -1352,42 +1445,62 @@ function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
 }
 
 function updateIncompleteSnippetDecorations(): void {
-  const decorations = Array.from(incompleteSnippetByHash.values()).map((target) => ({
-    range: new monaco.Range(
-      target.startLine,
-      target.startColumn,
-      target.endLine,
-      target.endColumn,
-    ),
-    options: {
-      isWholeLine: target.kind !== "natural" || target.hash === selectedSnippetHash,
-      stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-      className: target.kind === "natural"
-        ? target.hash === selectedSnippetHash
-          ? "incomplete-snippet-line-selected"
-          : undefined
-        : target.hash === selectedSnippetHash
-          ? "incomplete-snippet-line incomplete-snippet-line-selected"
-          : "incomplete-snippet-line",
-      marginClassName: target.hash === selectedSnippetHash
-        ? "selected-implementation-gutter"
-        : undefined,
-      inlineClassName: target.kind !== "natural"
-        ? target.hash === selectedSnippetHash
-          ? "snippet-source-inline-selected"
-          : undefined
-        : target.hash === selectedSnippetHash
-          ? "natural-snippet-inline natural-snippet-plain natural-snippet-inline-selected"
-          : "natural-snippet-inline natural-snippet-plain",
-      hoverMessage: {
-        value: `Show generated implementation for ${target.label}.`,
+  const decorations = Array.from(incompleteSnippetByHash.values()).map((target) => {
+    const decorationRange = target.kind === "natural"
+      ? naturalSnippetBodyRange(target)
+      : new monaco.Range(
+        target.startLine,
+        target.startColumn,
+        target.endLine,
+        target.endColumn,
+      );
+
+    return {
+      range: decorationRange,
+      options: {
+        isWholeLine: false,
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        className: undefined,
+        marginClassName: undefined,
+        inlineClassName: target.kind === "natural"
+          ? target.hash === selectedSnippetHash
+            ? "natural-snippet-inline natural-snippet-plain natural-snippet-inline-selected"
+            : "natural-snippet-inline natural-snippet-plain"
+          : undefined,
+        hoverMessage: {
+          value: `Show generated implementation for ${target.label}.`,
+        },
       },
-    },
-  }));
+    };
+  });
 
   incompleteSnippetDecorations = editor.deltaDecorations(
     incompleteSnippetDecorations,
     decorations,
+  );
+}
+
+function naturalSnippetBodyRange(target: IncompleteSnippetTarget): monaco.Range {
+  const delimiterLength = target.snippet.startsWith("```") ? 3 : 1;
+  const bodyStartOffset = delimiterLength;
+  const bodyEndOffset = Math.max(bodyStartOffset, target.snippet.length - delimiterLength);
+  return snippetOffsetRangeToEditorRange(target, bodyStartOffset, bodyEndOffset);
+}
+
+function snippetOffsetRangeToEditorRange(
+  target: IncompleteSnippetTarget,
+  startOffset: number,
+  endOffset: number,
+): monaco.Range {
+  const lineStarts = sourceLineStartOffsets(target.snippet);
+  const start = offsetToEditorPosition(lineStarts, startOffset);
+  const end = offsetToEditorPosition(lineStarts, endOffset);
+
+  return new monaco.Range(
+    target.startLine + start.line - 1,
+    start.line === 1 ? target.startColumn + start.column - 1 : start.column,
+    target.startLine + end.line - 1,
+    end.line === 1 ? target.startColumn + end.column - 1 : end.column,
   );
 }
 
@@ -1404,7 +1517,7 @@ function updateSelectedDefinitionDecorations(): void {
           options: {
             isWholeLine: true,
             className: "definition-implementation-line-selected",
-            marginClassName: "selected-implementation-gutter",
+            marginClassName: undefined,
           },
         }],
   );
@@ -1417,13 +1530,13 @@ function renderSnippetPanel(): void {
       selectedDefinitionTarget.source;
 
     setSnippetPanelTitle(selectedDefinitionTarget.name);
-    setHighlightedPythonCode(snippetPreview, text);
+    setSnippetPreviewSource(text);
     return;
   }
 
   if (selectedWholeFileImplementation) {
     setSnippetPanelTitle("Whole file");
-    setHighlightedPythonCode(snippetPreview, latestImplementationSource);
+    setSnippetPreviewSource(latestImplementationSource);
     return;
   }
 
@@ -1433,7 +1546,7 @@ function renderSnippetPanel(): void {
 
   if (!target) {
     setSnippetPanelTitle(null);
-    snippetPreview.textContent = "";
+    setSnippetPreviewSource("");
     return;
   }
 
@@ -1445,7 +1558,7 @@ function renderSnippetPanel(): void {
     target.snippet;
 
   setSnippetPanelTitle(target.label);
-  setHighlightedPythonCode(snippetPreview, text);
+  setSnippetPreviewSource(text);
 }
 
 function setSnippetPanelTitle(label: string | null): void {
@@ -1453,26 +1566,10 @@ function setSnippetPanelTitle(label: string | null): void {
   snippetTitle.title = snippetTitle.textContent;
 }
 
-function setHighlightedPythonCode(element: HTMLPreElement, source: string): void {
-  const version = Number(element.dataset.highlightVersion ?? "0") + 1;
-  element.dataset.highlightVersion = String(version);
-  element.textContent = source;
-  const colorized = document.createElement("pre");
-  colorized.textContent = source;
-
-  void monaco.editor.colorizeElement(colorized, {
-    mimeType: "text/x-logos-python",
-    tabSize: 2,
-    theme: "interview-light",
-  }).then(() => {
-    if (element.dataset.highlightVersion === String(version)) {
-      element.innerHTML = colorized.innerHTML;
-    }
-  }).catch(() => {
-    if (element.dataset.highlightVersion === String(version)) {
-      element.textContent = source;
-    }
-  });
+function setSnippetPreviewSource(source: string): void {
+  if (snippetPreviewEditor.getValue() !== source) {
+    snippetPreviewEditor.setValue(source);
+  }
 }
 
 function registerLogosPythonLanguage(): void {
@@ -1596,7 +1693,7 @@ function updateNaturalSnippetEditorMode(): void {
 
   naturalSnippetEditorMode = mode;
   editor.updateOptions({
-    matchBrackets: inNaturalSnippet ? "never" : "always",
+    matchBrackets: "never",
   });
 }
 
@@ -2804,7 +2901,7 @@ function appSnapshot(): JsonObject {
         : {
             hash: selectedSnippetHash,
             label: incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
-            preview: snippetPreview.textContent ?? "",
+            preview: snippetPreviewEditor.getValue(),
           },
     },
     agent: {
