@@ -1,6 +1,5 @@
-import { mkdir, appendFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve } from "node:path";
+import { writeSessionCaptureRecords } from "./captureStorage";
 
 type SessionCapturePayload = {
   sessionId?: unknown;
@@ -22,7 +21,7 @@ export async function handleSessionEvents(
   try {
     const payload = await readJson(req);
     const records = normalizePayload(payload, req);
-    await writeSessionRecords(records);
+    await writeSessionCaptureRecords(records);
     sendJson(res, 200, { ok: true, captured: records.length });
   } catch (error) {
     const statusCode = error instanceof SessionCaptureError ? error.statusCode : 500;
@@ -121,17 +120,6 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
   }
 
   return String(value);
-}
-
-async function writeSessionRecords(records: Array<Record<string, unknown>>): Promise<void> {
-  if (records.length === 0) {
-    return;
-  }
-
-  const logDir = resolve(process.env.SESSION_CAPTURE_DIR ?? "logs");
-  await mkdir(logDir, { recursive: true });
-  const body = records.map((record) => JSON.stringify(record)).join("\n");
-  await appendFile(resolve(logDir, "session-events.jsonl"), `${body}\n`, "utf8");
 }
 
 function sendJson(

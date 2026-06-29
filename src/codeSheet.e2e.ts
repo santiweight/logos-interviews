@@ -843,7 +843,11 @@ describe("codeSheet definition syntax evals", () => {
           }
         }
 
-        if (prompt.includes("print results of each step") || prompt.includes("excel-like table")) {
+        if (
+          prompt.includes("print results of each step") ||
+          prompt.includes("excel-like table") ||
+          prompt.includes("unevaluated expressions")
+        ) {
           return `print(f"A1 -> {sheet.get(c('A1'))}")
 sheet.set(c("A1"), "7")
 print("A1 = 7")
@@ -882,7 +886,9 @@ print("+-------+")`;
     if (!result.ok) {
       throw new Error(`${result.error}\n\n${result.completed.source}`);
     }
-    expect(stdoutCheck.matches(result.stdout)).toBe(true);
+    if (!stdoutCheck.matches(result.stdout)) {
+      throw new Error(`Rendered spreadsheet stdout did not match:\n${result.stdout.join("\n")}`);
+    }
   });
 
   it("documents the current broken behavior when a natural snippet names a class generically", async () => {
