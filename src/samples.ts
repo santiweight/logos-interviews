@@ -34,7 +34,9 @@ export const sampleGroups: SampleGroup[] = [
         id: "interactive-reverse",
         label: "Reverse CLI",
         code: `def main():
-  \`an interactive cli loop, where user types a word, and the program prints back the reverse of the word\``,
+  \`\`\`
+  A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
+  \`\`\``,
       },
       {
         id: "cart-promotions",

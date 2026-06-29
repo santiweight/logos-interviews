@@ -6,7 +6,6 @@ import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicC
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
-import { runCodeSheet, type CompilationMode } from "./codeSheetRunner";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
@@ -51,11 +50,6 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/run/stop") {
       await interactiveRunApi.handleStop(req, res);
-      return;
-    }
-
-    if (url.pathname === "/api/run") {
-      await handleRun(req, res);
       return;
     }
 
@@ -104,53 +98,6 @@ const server = createServer(async (req, res) => {
 server.listen(port, "0.0.0.0", () => {
   console.log(`logos-interviews listening on ${port}`);
 });
-
-async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.method !== "POST") {
-    sendJson(res, 405, { ok: false, error: "Method not allowed", stdout: [] });
-    return;
-  }
-
-  const { sheet, runnable, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
-  if (typeof sheet !== "string" || typeof runnable !== "string") {
-    sendJson(res, 400, {
-      ok: false,
-      error: "Missing sheet or runnable",
-      stdout: [],
-    });
-    return;
-  }
-
-  const result = await runCodeSheet(sheet, runnable, {
-    cache: codeCache,
-    complete: completeWithAnthropic,
-    compilationStrategy: compilationMode(compilationStrategy, experimentalParallelCompletions),
-  });
-
-  if (result.ok) {
-    sendJson(res, 200, {
-      ok: true,
-      stdout: result.stdout,
-      implementation: result.completed.source,
-    });
-    return;
-  }
-
-  sendJson(res, 200, {
-    ok: false,
-    error: result.error,
-    stdout: result.stdout,
-    implementation: result.completed.source,
-  });
-}
-
-function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
-  if (strategy === "auto" || strategy === "parallel" || strategy === "sequential" || strategy === "agentic") {
-    return strategy;
-  }
-
-  return experimentalParallelCompletions === true ? "parallel" : "sequential";
-}
 
 async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== "DELETE") {

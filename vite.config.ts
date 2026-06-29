@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { runCodeSheet } from "./src/codeSheetRunner";
 import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
@@ -94,48 +93,6 @@ function anthropicCompletionPlugin() {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           sendJson(res, 500, { ok: false, error: message });
-        }
-      });
-
-      server.middlewares.use("/api/run", async (req, res) => {
-        if (req.method !== "POST") {
-          sendJson(res, 405, { error: "Method not allowed", stdout: [] });
-          return;
-        }
-
-        try {
-          const { sheet, runnable } = await readJson(req);
-          if (typeof sheet !== "string" || typeof runnable !== "string") {
-            sendJson(res, 400, {
-              ok: false,
-              error: "Missing sheet or runnable",
-              stdout: [],
-            });
-            return;
-          }
-
-          const result = await runCodeSheet(sheet, runnable, {
-            cache: codeCache,
-            complete,
-          });
-
-          if (result.ok) {
-            sendJson(res, 200, {
-              ok: true,
-              stdout: result.stdout,
-              implementation: result.completed.source,
-            });
-          } else {
-            sendJson(res, 200, {
-              ok: false,
-              error: result.error,
-              stdout: result.stdout,
-              implementation: result.completed.source,
-            });
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          sendJson(res, 500, { ok: false, error: message, stdout: [] });
         }
       });
 

@@ -28,8 +28,9 @@ The `Anthropic E2E` GitHub Actions workflow runs that live eval on relevant
 when the current `main` SHA has already passed.
 
 The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
-Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
-memory for the lifetime of the process.
+Vite build from `dist`, exposes interactive run session endpoints under
+`/api/run/*`, and caches completed snippets in memory for the lifetime of the
+process.
 
 ## Session Capture
 
