@@ -225,6 +225,42 @@ def main():
     });
   });
 
+  it("preserves private helper functions returned with a single function completion", async () => {
+    const parserSheet = `def parse_expr(str) -> int
+
+def test():
+  print(parse_expr("7"))`;
+
+    const result = await runCodeSheet(parserSheet, "test", {
+      complete() {
+        return `def parse_expr(source) -> int:
+  tokens = _tokenize(source)
+  return _parse_expr_tokens(tokens)
+
+def _tokenize(source):
+  return [int(source)]
+
+def _parse_expr_tokens(tokens):
+  return tokens[0]
+
+def unrelated_public():
+  return "bad"`;
+      },
+    });
+
+    expect({
+      result: simplifyRunResult(result),
+      hasPrivateTokenizeHelper: result.completed.source.includes("def _tokenize"),
+      hasPrivateParserHelper: result.completed.source.includes("def _parse_expr_tokens"),
+      hasUnrelatedPublicFunction: result.completed.source.includes("def unrelated_public"),
+    }).toEqual({
+      result: { ok: true, stdout: ["7"] },
+      hasPrivateTokenizeHelper: true,
+      hasPrivateParserHelper: true,
+      hasUnrelatedPublicFunction: false,
+    });
+  });
+
   it("captures run outputs", async () => {
     const prompts: string[] = [];
     const cache: CodeCache = new Map();

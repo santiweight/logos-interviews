@@ -1757,7 +1757,9 @@ function normalizeSnippet(
     return extractTopLevelDefinitions(lines, startOfDefinitionWithImportsAndDecorators(lines, definitionIndex));
   }
 
-  return extractSingleTopLevelDefinition(lines, definitionIndex);
+  return extractSingleTopLevelDefinition(lines, definitionIndex, {
+    includeTrailingPrivateHelpers: true,
+  });
 }
 
 function requestedFunctionNames(snippet: string): string[] {
@@ -1800,12 +1802,17 @@ function extractTopLevelDefinitions(lines: string[], start: number): string {
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
 }
 
-function extractSingleTopLevelDefinition(lines: string[], definitionIndex: number): string {
+function extractSingleTopLevelDefinition(
+  lines: string[],
+  definitionIndex: number,
+  options: { includeTrailingPrivateHelpers?: boolean } = {},
+): string {
   const start = startOfDefinitionWithImportsAndDecorators(lines, definitionIndex);
   const snippet: string[] = [];
   let seenRequestedDefinition = false;
 
-  for (const line of lines.slice(start)) {
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index];
     const trimmed = line.trimStart();
     const isBlank = line.trim().length === 0;
     const isNested = /^\s+/.test(line);
@@ -1839,10 +1846,24 @@ function extractSingleTopLevelDefinition(lines: string[], definitionIndex: numbe
       continue;
     }
 
+    if (options.includeTrailingPrivateHelpers && isPrivateHelperDefinitionLine(trimmed)) {
+      snippet.push(line.trimEnd());
+      continue;
+    }
+
     break;
   }
 
   return trimTrailingBlankLines(snippet).join("\n").trimEnd();
+}
+
+function isPrivateHelperDefinitionLine(trimmed: string): boolean {
+  const header = parseFunctionHeader(trimmed);
+  if (header && header.name.startsWith("_")) {
+    return true;
+  }
+
+  return /^class\s+_[A-Za-z_][A-Za-z0-9_]*/.test(trimmed);
 }
 
 function startOfDefinitionWithImportsAndDecorators(lines: string[], definitionIndex: number): number {
