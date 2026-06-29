@@ -453,6 +453,7 @@ function selectedModes(): BenchmarkMode[] {
 
 function isBenchmarkMode(value: string): value is BenchmarkMode {
   return value === "parallel" ||
+    value === "parallel-methods" ||
     value === "sequential" ||
     value === "agentic" ||
     value === "agentic-methods" ||

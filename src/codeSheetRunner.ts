@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   buildCompilationIR,
+  buildCompletionPrompt,
   completeSheet,
   type CodeCache,
   type CodeSheet,
@@ -11,6 +12,7 @@ import {
   type CompilationStrategy,
   hashSnippet,
   lower,
+  normalizeSnippet,
   parse,
   renderImplementation,
   type Runnable,
@@ -30,8 +32,8 @@ export type RunOptions = {
   agenticMaxIterations?: number;
 };
 
-export type AgenticMethodStrategy = "agentic-methods";
-export type CompilationMode = CompilationStrategy | AgenticMethodStrategy | "auto";
+export type MethodStrategy = "parallel-methods" | "agentic-methods";
+export type CompilationMode = CompilationStrategy | MethodStrategy | "auto";
 
 export type RunChunk = {
   stream: "stdout" | "stderr";
@@ -70,12 +72,20 @@ type AgenticObservation = {
   stderr: string;
 };
 
-type RunnerStrategy = CompilationStrategy | AgenticMethodStrategy;
+type RunnerStrategy = CompilationStrategy | MethodStrategy;
 
 type MethodAgentTask = {
   snippet: string;
   prompt: string;
   synthesized?: string;
+};
+
+type ParallelMethodTask = {
+  snippet: string;
+  kind: "function" | "class" | "natural";
+  prompt: string;
+  synthesized?: string;
+  method?: boolean;
 };
 
 export async function runCodeSheet(
@@ -130,6 +140,10 @@ async function compileAndRun(
 ): Promise<RunResult> {
   if (strategy === "agentic") {
     return compileAndRunAgentically(cache, codeSheet, runnable, options);
+  }
+
+  if (strategy === "parallel-methods") {
+    return compileAndRunParallelMethods(cache, codeSheet, runnable, options);
   }
 
   if (strategy === "agentic-methods") {
@@ -304,6 +318,59 @@ async function compileAndRunAgenticMethods(
   return runResult(executed, completed);
 }
 
+async function compileAndRunParallelMethods(
+  cache: CodeCache,
+  codeSheet: CodeSheet,
+  runnable: Runnable,
+  options: RunOptions,
+): Promise<RunResult> {
+  if (!options.complete) {
+    return compileAndRun(cache, codeSheet, runnable, options, "parallel");
+  }
+
+  const parsed = parse(codeSheet);
+  let currentSource = renderImplementation(buildCompilationIR(parsed));
+  const tasks = buildParallelMethodTasks(currentSource, parsed.incompleteSnippets);
+  if (!tasks.some((task) => task.method)) {
+    return compileAndRun(cache, codeSheet, runnable, options, "parallel");
+  }
+
+  const replacements = await Promise.all(tasks.map(async (task) => {
+    const hash = hashSnippet(`parallel-methods:${task.kind}\n${task.snippet}`);
+    const cached = cache.get(hash);
+    if (cached !== undefined) {
+      return { snippet: task.snippet, replacement: cached };
+    }
+
+    const replacement = task.synthesized ?? normalizeParallelMethodReplacement(
+      await collectCompletionResult(options.complete?.(task.prompt) ?? ""),
+      task,
+    );
+    cache.set(hash, replacement);
+    return { snippet: task.snippet, replacement };
+  }));
+
+  for (const replacement of replacements) {
+    currentSource = replaceAgenticSnippet(currentSource, replacement.snippet, replacement.replacement);
+  }
+
+  const completed = completedAgenticSheet(
+    codeSheet,
+    currentSource,
+    hashSnippet(`parallel-methods:${runnable}\n${codeSheet}`),
+    false,
+  );
+  const executed = await runPython(
+    buildPythonProgram(completed.source, runnable),
+    options.python ?? "python3",
+    options.onStdoutLine,
+  );
+  if (!executed.ok) {
+    return compileAndRun(cache, codeSheet, runnable, options, "parallel");
+  }
+  return runResult(executed, completed);
+}
+
 function compileOptions(options: RunOptions, strategy: CompilationStrategy): CompileOptions {
   return {
     strategy,
@@ -324,7 +391,7 @@ function interactiveStrategy(options: RunOptions): CompilationStrategy {
   if (mode === "auto") {
     return "parallel";
   }
-  return mode === "agentic-methods" ? "agentic" : mode;
+  return mode === "agentic-methods" ? "agentic" : mode === "parallel-methods" ? "parallel" : mode;
 }
 
 function strategyOrder(): RunnerStrategy[] {
@@ -395,6 +462,83 @@ function buildMethodAgentTasks(
         : { prompt: "", synthesized }),
     }];
   });
+}
+
+function buildParallelMethodTasks(
+  currentSource: CodeSheet,
+  snippets: Array<{ kind: "function" | "class" | "natural"; snippet: string }>,
+): ParallelMethodTask[] {
+  const classNames = classNamesFromSnippets(snippets.map((snippet) => snippet.snippet));
+  return snippets.flatMap((snippet) => {
+    if (snippet.kind === "class") {
+      const methodSnippets = methodHeadersFromClassSnippet(snippet.snippet);
+      return methodSnippets.map((methodSnippet) => ({
+        snippet: methodSnippet,
+        kind: "function" as const,
+        method: true,
+        prompt: buildParallelMethodPrompt(currentSource, methodSnippet),
+      }));
+    }
+
+    const synthesized = synthesizeAgenticFactory(snippet.snippet, classNames);
+    return [{
+      snippet: snippet.snippet,
+      kind: snippet.kind,
+      ...(synthesized === null
+        ? { prompt: buildCompletionPrompt(currentSource, snippet.snippet, snippet.kind) }
+        : { prompt: "", synthesized }),
+    }];
+  });
+}
+
+function buildParallelMethodPrompt(currentSource: CodeSheet, methodSnippet: string): string {
+  return `${buildCompletionPrompt(currentSource, methodSnippet, "function")}
+
+The requested declaration is a method inside an existing class.
+Return only the requested method definition and any nested local helpers.
+Do not return the class header, sibling methods, top-level functions, runnable/test code, JSON, or prose.
+Preserve the method indentation from the requested snippet.
+Do not implement, redefine, restate, or include sibling methods.
+Parallel method completions are independent: do not depend on a sibling method or constructor adding hidden state unless the worksheet explicitly declares that state.
+If the class has no declared __init__, the method must work on a no-argument instance with no preexisting attributes.
+Use getattr defaults for optional state.
+If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
+When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
+Do not require undeclared attributes such as _cubes, _points, _width, or _height to exist before this method is called.`;
+}
+
+function normalizeParallelMethodReplacement(raw: string, task: ParallelMethodTask): string {
+  if (!task.method) {
+    return normalizeSnippet(raw, task.kind, task.snippet);
+  }
+
+  return indentMethodReplacement(
+    extractRequestedMethodReplacement(normalizeMethodAgentReplacement(raw), task.snippet),
+    methodIndent(task.snippet),
+  );
+}
+
+function methodIndent(snippet: string): string {
+  return snippet.match(/^\s*/)?.[0] ?? "";
+}
+
+function indentMethodReplacement(replacement: string, indent: string): string {
+  const lines = replacement.split("\n");
+  if (lines.length === 0) {
+    return replacement;
+  }
+
+  const firstIndent = lines[0].match(/^\s*/)?.[0] ?? "";
+  if (firstIndent.length >= indent.length && lines[0].startsWith(indent)) {
+    return replacement;
+  }
+
+  return lines.map((line, index) => {
+    if (line.trim().length === 0) {
+      return line;
+    }
+    return index === 0 || /^\s+/.test(line) ? `${indent}${line}` : line;
+  }).join("\n");
 }
 
 function methodHeadersFromClassSnippet(snippet: string): string[] {

@@ -148,6 +148,7 @@ function compilationMode(strategy: unknown, experimentalParallelCompletions: unk
   if (
     strategy === "auto" ||
     strategy === "parallel" ||
+    strategy === "parallel-methods" ||
     strategy === "sequential" ||
     strategy === "agentic" ||
     strategy === "agentic-methods"

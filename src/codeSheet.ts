@@ -1825,7 +1825,7 @@ function splitNaturalReplacement(source: string): { imports: string[]; body: str
   };
 }
 
-function buildCompletionPrompt(
+export function buildCompletionPrompt(
   sheet: CodeSheet,
   snippet: string,
   kind: IncompleteSnippet["kind"],
@@ -1895,7 +1895,7 @@ function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidan
   };
 }
 
-function normalizeSnippet(
+export function normalizeSnippet(
   source: string,
   kind: IncompleteSnippet["kind"],
   requestedSnippet = "",

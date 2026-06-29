@@ -2537,6 +2537,44 @@ def test():
     });
   });
 
+  it("parallel methods strategy completes sibling class methods with single-shot prompts", async () => {
+    const methodSheet = `class IsoScene:
+  def render(self) -> str
+  def rotate_y(self, turns: int = 1) -> "IsoScene"
+
+def cube_stack() -> IsoScene
+
+def test():
+  print(cube_stack().render())
+  print(cube_stack().rotate_y().render())`;
+    const started: string[] = [];
+    const resolvers: Array<(replacement: string) => void> = [];
+
+    const runPromise = runCodeSheet(methodSheet, "test", {
+      compilationStrategy: "parallel-methods",
+      complete(prompt) {
+        const targetSnippet = completionPromptTarget(prompt);
+        const target = targetSnippet.includes("def rotate_y(") ? "rotate_y" : "render";
+        started.push(target);
+        return new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    });
+
+    await eventually(() => expect([...started].sort()).toEqual(["render", "rotate_y"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[started.indexOf("render")](`def render(self) -> str:
+  return "ok"`);
+    resolvers[started.indexOf("rotate_y")](`def rotate_y(self, turns: int = 1) -> "IsoScene":
+  return self`);
+
+    expect(simplifyRunResult(await runPromise)).toEqual({
+      ok: true,
+      stdout: ["ok", "ok"],
+    });
+  });
+
   it("synthesizes zero-argument class factories without skipping parameterized factories", async () => {
     const factorySheet = `class IsoScene:
   def render(self) -> str
