@@ -1,7 +1,6 @@
-import { mkdir, appendFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { writeFeedbackCaptureRecord } from "./captureStorage";
 
 type FeedbackPayload = {
   sessionId?: unknown;
@@ -26,7 +25,7 @@ export async function handleFeedback(
   try {
     const payload = await readJson(req);
     const record = normalizePayload(payload, req);
-    await writeFeedbackRecord(record);
+    await writeFeedbackCaptureRecord(record);
     sendJson(res, 200, { ok: true, feedbackId: record.feedbackId });
   } catch (error) {
     const statusCode = error instanceof FeedbackCaptureError ? error.statusCode : 500;
@@ -130,16 +129,6 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
   }
 
   return String(value);
-}
-
-async function writeFeedbackRecord(record: Record<string, unknown>): Promise<void> {
-  const logDir = resolve(
-    process.env.FEEDBACK_CAPTURE_DIR ??
-      process.env.SESSION_CAPTURE_DIR ??
-      "logs",
-  );
-  await mkdir(logDir, { recursive: true });
-  await appendFile(resolve(logDir, "feedback.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
 }
 
 function sendJson(

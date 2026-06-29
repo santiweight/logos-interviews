@@ -183,7 +183,7 @@ function sanitizeJson(value: unknown, depth = 0): unknown {
 }
 
 function sharedSessionStore(): SharedSessionStore {
-  const s3Bucket = process.env.SHARED_SESSION_S3_BUCKET;
+  const s3Bucket = process.env.SHARED_SESSION_S3_BUCKET ?? process.env.BUCKET_NAME;
   if (s3Bucket) {
     return s3SharedSessionStore(s3Bucket);
   }
@@ -207,7 +207,7 @@ function fileSharedSessionStore(): SharedSessionStore {
 function s3SharedSessionStore(bucket: string): SharedSessionStore {
   const client = new S3Client({
     region: process.env.SHARED_SESSION_S3_REGION ?? process.env.AWS_REGION ?? "auto",
-    endpoint: process.env.SHARED_SESSION_S3_ENDPOINT,
+    endpoint: process.env.SHARED_SESSION_S3_ENDPOINT ?? process.env.AWS_ENDPOINT_URL_S3,
     forcePathStyle: process.env.SHARED_SESSION_S3_FORCE_PATH_STYLE === "true",
   });
 

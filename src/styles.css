@@ -1427,31 +1427,59 @@ h2 {
   background-color: var(--paper) !important;
 }
 
-.monaco-editor .not-ready-glyph-dot::before {
+.monaco-editor .not-ready-glyph-spinner,
+.monaco-editor .runnable-play-glyph {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+}
+
+.monaco-editor .not-ready-glyph-spinner::before {
   display: block;
+  box-sizing: border-box;
   width: 7px;
   height: 7px;
-  margin: 7px 1px 0 auto;
+  margin-right: 3px;
+  background: var(--accent);
   border-radius: 999px;
-  background: #bf3a2e;
+  animation: glyph-pulse 0.9s ease-in-out infinite;
   content: "";
+  transform-origin: center;
 }
 
 .monaco-editor .runnable-play-glyph::before {
-  display: block;
-  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
   margin-right: 1px;
   color: var(--accent);
   content: "▶";
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: 0.72rem;
   font-weight: 850;
-  line-height: 1;
+  line-height: 12px;
 }
 
 .monaco-editor .runnable-play-glyph-disabled::before {
   color: #74767a;
   cursor: not-allowed;
+}
+
+@keyframes glyph-pulse {
+  0%,
+  100% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.55;
+    transform: scale(0.88);
+  }
 }
 
 @media (max-width: 1080px) {

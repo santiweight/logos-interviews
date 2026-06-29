@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
-import { runCodeSheet } from "./src/codeSheetRunner";
+import { createGlobalCodeCache } from "./src/codeCache";
 import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./src/anthropicComplete";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
@@ -50,7 +50,7 @@ function availablePort(host: string): Promise<number> {
 }
 
 function anthropicCompletionPlugin() {
-  const codeCache: CodeCache = new Map();
+  const codeCache: CodeCache = createGlobalCodeCache();
   const complete = completeWithAnthropic;
   const compileComplete = streamCompleteWithAnthropic;
   const interactiveRunApi = createInteractiveRunApi({
@@ -97,48 +97,6 @@ function anthropicCompletionPlugin() {
         }
       });
 
-      server.middlewares.use("/api/run", async (req, res) => {
-        if (req.method !== "POST") {
-          sendJson(res, 405, { error: "Method not allowed", stdout: [] });
-          return;
-        }
-
-        try {
-          const { sheet, runnable } = await readJson(req);
-          if (typeof sheet !== "string" || typeof runnable !== "string") {
-            sendJson(res, 400, {
-              ok: false,
-              error: "Missing sheet or runnable",
-              stdout: [],
-            });
-            return;
-          }
-
-          const result = await runCodeSheet(sheet, runnable, {
-            cache: codeCache,
-            complete,
-          });
-
-          if (result.ok) {
-            sendJson(res, 200, {
-              ok: true,
-              stdout: result.stdout,
-              implementation: result.completed.source,
-            });
-          } else {
-            sendJson(res, 200, {
-              ok: false,
-              error: result.error,
-              stdout: result.stdout,
-              implementation: result.completed.source,
-            });
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          sendJson(res, 500, { ok: false, error: message, stdout: [] });
-        }
-      });
-
       server.middlewares.use("/api/compile", async (req, res) => {
         try {
           await handleCompileStream(req, res, codeCache, compileComplete);
@@ -148,15 +106,21 @@ function anthropicCompletionPlugin() {
         }
       });
 
-      server.middlewares.use("/api/cache", (req, res) => {
+      server.middlewares.use("/api/cache", async (req, res) => {
         if (req.method !== "DELETE") {
           sendJson(res, 405, { ok: false, error: "Method not allowed" });
           return;
         }
 
-        const cleared = codeCache.size;
-        codeCache.clear();
-        sendJson(res, 200, { ok: true, cleared });
+        try {
+          const cleared = codeCache.size;
+          codeCache.clear();
+          await codeCache.clearRemote?.();
+          sendJson(res, 200, { ok: true, cleared });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message });
+        }
       });
 
       server.middlewares.use("/api/complete", async (req, res) => {

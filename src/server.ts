@@ -3,17 +3,16 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicComplete";
+import { createGlobalCodeCache } from "./codeCache";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
-import { runCodeSheet, type CompilationMode } from "./codeSheetRunner";
-import { isCompilationMode } from "./compilationStrategies/types";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
-const codeCache: CodeCache = new Map();
+const codeCache: CodeCache = createGlobalCodeCache();
 const interactiveRunApi = createInteractiveRunApi({
   cache: codeCache,
   complete: completeWithAnthropic,
@@ -52,11 +51,6 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/run/stop") {
       await interactiveRunApi.handleStop(req, res);
-      return;
-    }
-
-    if (url.pathname === "/api/run") {
-      await handleRun(req, res);
       return;
     }
 
@@ -106,53 +100,6 @@ server.listen(port, "0.0.0.0", () => {
   console.log(`logos-interviews listening on ${port}`);
 });
 
-async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.method !== "POST") {
-    sendJson(res, 405, { ok: false, error: "Method not allowed", stdout: [] });
-    return;
-  }
-
-  const { sheet, runnable, compilationStrategy } = await readJson(req);
-  if (typeof sheet !== "string" || typeof runnable !== "string") {
-    sendJson(res, 400, {
-      ok: false,
-      error: "Missing sheet or runnable",
-      stdout: [],
-    });
-    return;
-  }
-
-  const result = await runCodeSheet(sheet, runnable, {
-    cache: codeCache,
-    complete: completeWithAnthropic,
-    compilationStrategy: compilationMode(compilationStrategy),
-  });
-
-  if (result.ok) {
-    sendJson(res, 200, {
-      ok: true,
-      stdout: result.stdout,
-      implementation: result.completed.source,
-    });
-    return;
-  }
-
-  sendJson(res, 200, {
-    ok: false,
-    error: result.error,
-    stdout: result.stdout,
-    implementation: result.completed.source,
-  });
-}
-
-function compilationMode(strategy: unknown): CompilationMode {
-  if (isCompilationMode(strategy)) {
-    return strategy;
-  }
-
-  return "sequential";
-}
-
 async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (req.method !== "DELETE") {
     sendJson(res, 405, { ok: false, error: "Method not allowed" });
@@ -161,6 +108,7 @@ async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<v
 
   const cleared = codeCache.size;
   codeCache.clear();
+  await codeCache.clearRemote?.();
   sendJson(res, 200, { ok: true, cleared });
 }
 

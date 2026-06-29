@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   compile,
+  completionSnippetHashes,
   definitionReadiness,
   completeSheet,
   hashCompletionInput,
@@ -385,6 +386,8 @@ def test():
       Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
       When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
+      Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+      For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -413,6 +416,8 @@ def test():
       Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
       When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
+      Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+      For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -449,6 +454,8 @@ def test():
       Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
       When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
+      Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+      For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -880,6 +887,39 @@ def test():
     `);
   });
 
+  it("lowers multiline commented sum types with logos annotations", async () => {
+    const sudokuSyntaxSheet = `type SudokuStrategy =
+  UniqueBoxSolve # there is only one square for a number to go in, in a box
+  | UniqueLineSolve # there is only one square for a number to go in, in a row/column
+  | HiddenDoubleInBox # two numbers
+  | # a row/col is complete except for values in the same box
+    # the same box
+    LineCompleteExceptForBox
+  | HiddenSingle
+type CellAnnotation = Solved(int) | Annotations(list[int])
+
+class SudokuState:
+  grid: list[list[CellAnnotation]]
+
+@logos.debug.print()
+def main():
+  print(UniqueBoxSolve())
+  print(Solved(7))`;
+
+    const lowered = lower(parse(sudokuSyntaxSheet)).source;
+
+    expect(lowered).toContain("class UniqueBoxSolve:");
+    expect(lowered).toContain("class LineCompleteExceptForBox:");
+    expect(lowered).toContain("class Solved:");
+    expect(lowered).not.toContain("type SudokuStrategy");
+    const completed = await runCodeSheet(sudokuSyntaxSheet, "main", { cache: new Map() });
+    expect(completed.completed.source).not.toContain("@logos.debug.print()");
+    expect(simplifyRunResult(completed)).toEqual({
+      ok: true,
+      stdout: ["UniqueBoxSolve()", "Solved(value=7)"],
+    });
+  });
+
   it("lowers tuple type aliases used by parser helpers", () => {
     const parsedSheet = `type Operator = Mul | Div | Add | Sub
 type Expr = Val(int) | Cell(str, int)
@@ -1154,6 +1194,21 @@ fn test():
     expect(simplifyRunResult(result)).toEqual({ ok: true, stdout: ["3"] });
     expect(prompts[0]).toContain("Your job is to finish the implementation of:\n\ndef add");
     expect(prompts[0]).not.toContain("Your job is to finish the implementation of:\n\nfn add");
+  });
+
+  it("exposes compiler hashes for lowered snippets", () => {
+    const fnSheet = `fn add(x: int, y: int) -> int
+
+fn test():
+  print(add(1, 2))`;
+    const parsed = parse(fnSheet);
+
+    expect(hashCompletionInput(parsed, parsed.incompleteSnippets[0]!.snippet)).not.toBe(
+      completionSnippetHashes(parsed)[0],
+    );
+    expect(completionSnippetHashes(parsed)[0]).toBe(
+      hashCompletionInput(parsed, "def add(x: int, y: int) -> int"),
+    );
   });
 
   it("completes methods inside dataclass shorthand classes", async () => {
@@ -1500,14 +1555,14 @@ print(square.pretty())`;
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
       "implementation",
+      "readiness",
       "llm-start",
       "llm-token",
       "llm-token",
       "llm-complete",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
     expect(renderImplementation(compiled.completed.ir)).toContain(
@@ -1583,8 +1638,8 @@ def test():
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
     expect(compiled.completed.completions).toEqual([]);
@@ -1607,12 +1662,37 @@ def test():
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
-      "implementation",
       "cache-hit",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
+    ]);
+  });
+
+  it("can compile cached sheets without emitting intermediate progress", async () => {
+    const cache: CodeCache = new Map();
+    const first = await completeSheet(cache, sheet, () => `def add(x: int, y: int) -> int:
+  return x + y`);
+    const events: CompilationEvent[] = [];
+
+    for await (const event of compile(cache, sheet, () => {
+      throw new Error("should not complete cached snippet");
+    }, {
+      emitProgress: false,
+      streamTokens: false,
+    })) {
+      events.push(event);
+    }
+
+    const compiled = events[0];
+    if (compiled?.kind !== "compiled") {
+      throw new Error("expected compiled event");
+    }
+
+    expect(first.completions).toHaveLength(1);
+    expect(events.map((event) => event.kind)).toEqual(["compiled"]);
+    expect(compiled.completed.completions).toEqual([
+      expect.objectContaining({ cached: true, replacement: first.completions[0].replacement }),
     ]);
   });
 
@@ -1691,6 +1771,62 @@ class Store:
     expect(result.completed.source).not.toContain("def unrelated_helper");
   });
 
+  it("preserves top-level helper functions returned with class completions", async () => {
+    const completed = await completeSheet(
+      new Map(),
+      `class Greeter:
+  def greet(self, name: str) -> str
+
+def test():
+  print(Greeter().greet("Ada"))
+  print(shout("bye"))`,
+      () => `def prefix() -> str:
+  return "Hello"
+
+class Greeter:
+  def greet(self, name: str) -> str:
+    return f"{prefix()}, {name}"
+
+def shout(message: str) -> str:
+  return message.upper()`,
+    );
+
+    expect(completed.source).toContain("def prefix() -> str:");
+    expect(completed.source).toContain("class Greeter:");
+    expect(completed.source).toContain("def shout(message: str) -> str:");
+    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
+      ok: true,
+      stdout: ["Hello, Ada", "BYE"],
+    });
+  });
+
+  it("preserves top-level helper functions returned with function completions", async () => {
+    const completed = await completeSheet(
+      new Map(),
+      `def greet(name: str) -> str
+
+def test():
+  print(greet("Ada"))
+  print(shout("bye"))`,
+      () => `def prefix() -> str:
+  return "Hello"
+
+def greet(name: str) -> str:
+  return f"{prefix()}, {name}"
+
+def shout(message: str) -> str:
+  return message.upper()`,
+    );
+
+    expect(completed.source).toContain("def prefix() -> str:");
+    expect(completed.source).toContain("def greet(name: str) -> str:");
+    expect(completed.source).toContain("def shout(message: str) -> str:");
+    expect(simplifyRunResult(await runCodeSheet(completed.source, "test"))).toEqual({
+      ok: true,
+      stdout: ["Hello, Ada", "BYE"],
+    });
+  });
+
   it("supports natural-language backtick expressions anywhere", async () => {
     const cache: CodeCache = new Map();
     const calls: string[] = [];
@@ -1744,16 +1880,18 @@ def main():
 
       Return only the replacement code for the fragment, without backticks or fences.
       This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.
-      Use only Python built-ins and standard-library modules; do not import third-party packages.
-      If standard-library imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+      For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
       Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
           "\`multiply 3 and 4\`
 
       Return only the replacement code for the fragment, without backticks or fences.
       This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.
-      Use only Python built-ins and standard-library modules; do not import third-party packages.
-      If standard-library imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
+      Use only Python's standard library and code already present in the sheet; do not import third-party packages.
+      For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.
       Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
       Use normal Python and preserve the intended public behavior shown in the runnable/test functions.",
         ],
@@ -1871,6 +2009,106 @@ math.sqrt(5)`;
         print(sum(candidate for candidate in range(2, 50) if all(candidate % divisor != 0 for divisor in range(2, candidate))))",
       }
     `);
+  });
+
+  it("injects logos debug print annotation context into natural block completion prompts", async () => {
+    const calls: string[] = [];
+    const annotatedSheet = [
+      "@logos.debug.print()",
+      "def test():",
+      "  ```",
+      "  define a sheet",
+      "  A1 -> None",
+      "  A1 = 7",
+      "  A1 -> 7",
+      "  ```",
+    ].join("\n");
+
+    const completed = await completeSheet(new Map(), annotatedSheet, (prompt) => {
+      calls.push(prompt);
+      expect(prompt).toContain("This is a triple-backtick natural-language block.");
+      expect(prompt).toContain("Apply these Logos annotation contexts while generating the replacement:");
+      expect(prompt).toContain(
+        "logos.debug.print(): when generating code, make sure to add thoughtful and reasonable print statements",
+      );
+      expect(prompt).not.toContain("@logos.debug.print()");
+      return [
+        "sheet = {}",
+        'print("A1 ->", sheet.get("A1"))',
+        'sheet["A1"] = 7',
+        'print("A1 ->", sheet.get("A1"))',
+      ].join("\n");
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(completed.source).not.toContain("@logos");
+    expect(completed.source).toMatchInlineSnapshot(`
+      "def test():
+        sheet = {}
+        print("A1 ->", sheet.get("A1"))
+        sheet["A1"] = 7
+        print("A1 ->", sheet.get("A1"))"
+    `);
+  });
+
+  it("includes logos annotation contexts in natural snippet completion hashes", () => {
+    const plainSheet = [
+      "def test():",
+      "  ```",
+      "  define a sheet",
+      "  A1 -> None",
+      "  ```",
+    ].join("\n");
+    const annotatedSheet = [
+      "@logos.debug.print()",
+      "def test():",
+      "  ```",
+      "  define a sheet",
+      "  A1 -> None",
+      "  ```",
+    ].join("\n");
+    const plainParsed = parse(plainSheet);
+    const annotatedParsed = parse(annotatedSheet);
+    const plainSnippet = plainParsed.incompleteSnippets[0];
+    const annotatedSnippet = annotatedParsed.incompleteSnippets[0];
+
+    expect(annotatedSnippet?.annotationContexts).toEqual([
+      expect.objectContaining({
+        annotation: "logos.debug.print()",
+        cacheKey: "logos.debug.print-v1",
+      }),
+    ]);
+    expect(plainSnippet?.snippet).toBe(annotatedSnippet?.snippet);
+    expect(
+      hashCompletionInput(plainParsed, plainSnippet?.snippet ?? "", plainSnippet?.annotationContexts),
+    ).not.toBe(
+      hashCompletionInput(
+        annotatedParsed,
+        annotatedSnippet?.snippet ?? "",
+        annotatedSnippet?.annotationContexts,
+      ),
+    );
+  });
+
+  it("strips logos annotations from runnable functions without snippets", async () => {
+    const completed = await runCodeSheet(
+      `@logos.debug.print()
+def test():
+  print("ready")`,
+      "test",
+    );
+
+    expect({
+      source: completed.completed.source,
+      run: simplifyRunResult(completed),
+    }).toEqual({
+      source: `def test():
+  print("ready")`,
+      run: {
+        ok: true,
+        stdout: ["ready"],
+      },
+    });
   });
 
   it("supports natural-language backtick statements anywhere", async () => {
@@ -2326,8 +2564,8 @@ def gen_magic_square():
     expect(firstEvents.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
       "implementation",
+      "readiness",
       "llm-start",
     ]);
     expect(calls).toHaveLength(1);
@@ -2347,15 +2585,13 @@ def gen_magic_square():
     expect(secondEvents.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
-      "implementation",
       "cache-hit",
-      "readiness",
       "implementation",
+      "readiness",
       "llm-start",
       "llm-complete",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
     expect(calls).toHaveLength(2);

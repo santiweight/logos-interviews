@@ -28,8 +28,9 @@ The `Anthropic E2E` GitHub Actions workflow runs that live eval on relevant
 when the current `main` SHA has already passed.
 
 The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
-Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
-memory for the lifetime of the process.
+Vite build from `dist`, exposes interactive run session endpoints under
+`/api/run/*`, and caches completed snippets in a process-local map backed by
+durable storage. Local development uses `CODE_CACHE_DIR` or `logs/code-cache`.
 
 ## Session Capture
 
@@ -40,10 +41,31 @@ agent turns. Important events include an app snapshot with the current editor
 contents, output, implementation view, selected sample, active tab, run status,
 agent messages, viewport, focus state, and URL.
 
-The server appends JSONL records to `SESSION_CAPTURE_DIR/session-events.jsonl`.
-If `SESSION_CAPTURE_DIR` is unset, it writes to `logs/session-events.jsonl`.
-Each line includes `sessionId`, request metadata, receive time, and the captured
-event. The log directory is ignored by git.
+For durable production capture, configure S3-compatible object storage. The
+server writes one newline-delimited JSON object per request under
+`<prefix>/session-events/YYYY/MM/DD/*.jsonl`; feedback records are written under
+`<prefix>/feedback/YYYY/MM/DD/*.jsonl`. This layout avoids unsafe append writes
+to object storage.
+
+```sh
+SESSION_CAPTURE_S3_BUCKET=...
+SESSION_CAPTURE_S3_REGION=...
+SESSION_CAPTURE_S3_ENDPOINT=... # optional for Tigris, R2, MinIO, etc.
+SESSION_CAPTURE_S3_PREFIX=session-capture
+SESSION_CAPTURE_S3_FORCE_PATH_STYLE=false
+FEEDBACK_CAPTURE_S3_BUCKET=... # optional; falls back to session bucket
+FEEDBACK_CAPTURE_S3_PREFIX=... # optional; defaults below session prefix
+```
+
+Fly/Tigris-style `BUCKET_NAME` and `AWS_ENDPOINT_URL_S3` are also accepted when
+the capture-specific bucket or endpoint variables are unset. Credentials use
+the standard AWS SDK environment variables, such as `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY`.
+
+If S3-compatible storage is not configured, the server appends JSONL records to
+`SESSION_CAPTURE_DIR/session-events.jsonl`, or `logs/session-events.jsonl` when
+`SESSION_CAPTURE_DIR` is unset. This local fallback is useful for development
+but is not durable across replacement machines or image rebuilds.
 
 This captures browser-visible and application state only. Browsers do not expose
 arbitrary OS or machine state to web apps; for full reproduction, replay against
@@ -68,12 +90,34 @@ SHARED_SESSION_S3_FORCE_PATH_STYLE=false
 Credentials use the standard AWS SDK environment variables, such as
 `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
+Fly/Tigris-style `BUCKET_NAME` and `AWS_ENDPOINT_URL_S3` are accepted for shared
+sessions too when the shared-session-specific bucket or endpoint variables are
+unset.
+
+## Code Cache
+
+Compile and run share a global code cache keyed by completion hash. In
+production, configure S3-compatible storage so Fly machines share completions:
+
+```sh
+CODE_CACHE_S3_BUCKET=...
+CODE_CACHE_S3_REGION=...
+CODE_CACHE_S3_ENDPOINT=... # optional for R2, Tigris, MinIO, etc.
+CODE_CACHE_S3_PREFIX=code-cache
+CODE_CACHE_S3_FORCE_PATH_STYLE=false
+```
+
+If `CODE_CACHE_S3_BUCKET` is unset but `SHARED_SESSION_S3_BUCKET` is set, the
+code cache reuses that bucket with the `code-cache` prefix.
+
 Fly deployment is configured with `Dockerfile`, `fly.toml`, and
 `.github/workflows/deploy.yml`. Configure the repository with:
 
 - `FLY_API_TOKEN` repository secret
 - `FLY_APP_NAME` repository variable
 - `ANTHROPIC_API_KEY` Fly secret
+- S3/Tigris capture storage secrets such as `BUCKET_NAME`,
+  `AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`
 
 The main code sheet compiler lives in `src/codeSheet.ts`. The runtime API lives
 in `src/codeSheetRunner.ts` and `src/server.ts`.

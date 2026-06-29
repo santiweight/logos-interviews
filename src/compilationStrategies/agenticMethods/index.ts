@@ -1,5 +1,7 @@
 import {
   buildCompilationIR,
+  cachedImplementation,
+  cacheImplementation,
   type CodeCache,
   type CodeSheet,
   parse,
@@ -41,7 +43,7 @@ export async function compileAndRunAgenticMethods(
   }
 
   const cacheKey = strategyCacheKey("agentic-methods", runnable, codeSheet);
-  const cachedSource = cache.get(cacheKey);
+  const cachedSource = await cachedImplementation(cache, cacheKey);
   if (cachedSource !== undefined) {
     const completed = completedStrategySheet(codeSheet, cachedSource, cacheKey, true);
     const executed = await runPython(
@@ -84,7 +86,7 @@ export async function compileAndRunAgenticMethods(
     options.onStdoutLine,
   );
   if (executed.ok) {
-    cache.set(cacheKey, currentSource);
+    await cacheImplementation(cache, cacheKey, currentSource);
   }
   return runResult(executed, completed);
 }

@@ -1,6 +1,8 @@
 import {
   buildCompilationIR,
   buildCompletionPrompt,
+  cachedImplementation,
+  cacheImplementation,
   type CodeCache,
   type CodeSheet,
   hashSnippet,
@@ -55,7 +57,7 @@ export async function compileAndRunParallelMethods(
 
   const replacements = await Promise.all(tasks.map(async (task) => {
     const hash = hashSnippet(`parallel-methods:${task.kind}\n${task.snippet}`);
-    const cached = cache.get(hash);
+    const cached = await cachedImplementation(cache, hash);
     if (cached !== undefined) {
       return { snippet: task.snippet, replacement: cached };
     }
@@ -64,7 +66,7 @@ export async function compileAndRunParallelMethods(
       await collectCompletionResult(options.complete?.(task.prompt) ?? ""),
       task,
     );
-    cache.set(hash, replacement);
+    await cacheImplementation(cache, hash, replacement);
     return { snippet: task.snippet, replacement };
   }));
 

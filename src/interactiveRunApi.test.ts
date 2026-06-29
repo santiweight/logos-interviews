@@ -1,5 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
+import { createGlobalCodeCache } from "./codeCache";
 import type { CodeCache, CompleteFunction } from "./codeSheet";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
@@ -251,6 +255,74 @@ describe("interactive run API", () => {
       { ok: true, chunks: [], status: { state: "exited", code: 0, signal: null } },
       { ok: true, chunks: [], status: { state: "exited", code: 0, signal: null } },
     ]);
+  });
+
+  it("starts from the global cache when compile and run use different cache instances", async () => {
+    const previousCodeCacheDir = process.env.CODE_CACHE_DIR;
+    const codeCacheDir = await mkdtemp(join(tmpdir(), "logos-code-cache-"));
+    process.env.CODE_CACHE_DIR = codeCacheDir;
+
+    try {
+      const compileCache = createGlobalCodeCache();
+      const runApi = createInteractiveRunApi({
+        cache: createGlobalCodeCache(),
+        complete: () => {
+          throw new Error("run should use the global cache");
+        },
+      });
+      const server = createServer(async (req, res) => {
+        if (req.url === "/api/compile") {
+          await handleCompileStream(req, res, compileCache, completeRunSessionSheet);
+          return;
+        }
+
+        if (req.url === "/api/run/start") {
+          await runApi.handleStart(req, res);
+          return;
+        }
+
+        if (req.url === "/api/run/poll") {
+          await runApi.handlePoll(req, res);
+          return;
+        }
+
+        sendJson(res, 404, { ok: false, error: "not found" });
+      });
+      servers.push(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Could not start test server");
+      }
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const compileEvents = await compileViaApi(baseUrl, exactRunSessionSheet);
+      const compiled = compileEvents.at(-1);
+
+      expect(compiled).toMatchObject({ kind: "compiled" });
+
+      const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+        sheet: exactRunSessionSheet,
+        runnable: "test_basic",
+      });
+      const completed = await pollUntilExited(baseUrl, started.sessionId, started.chunks);
+
+      expect({
+        ok: completed.ok,
+        status: completed.status,
+        output: completed.output.trimEnd().split("\n"),
+      }).toEqual({
+        ok: true,
+        status: { state: "exited", code: 0, signal: null },
+        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+      });
+    } finally {
+      await rm(codeCacheDir, { recursive: true, force: true });
+      if (previousCodeCacheDir === undefined) {
+        delete process.env.CODE_CACHE_DIR;
+      } else {
+        process.env.CODE_CACHE_DIR = previousCodeCacheDir;
+      }
+    }
   });
 });
 
