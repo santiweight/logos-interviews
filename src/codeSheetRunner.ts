@@ -1,39 +1,38 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
-  buildCompilationIR,
-  buildCompletionPrompt,
   completeSheet,
   type CodeCache,
   type CodeSheet,
   type CompleteFunction,
-  type CompleteResult,
   type CompletedCodeSheet,
   type CompileOptions,
   type CompilationStrategy,
-  hashSnippet,
-  lower,
-  normalizeSnippet,
-  parse,
-  renderImplementation,
   type Runnable,
 } from "./codeSheet";
+import { compileAndRunAgentically } from "./compilationStrategies/agenticFile";
+import { compileAndRunAgenticMethods } from "./compilationStrategies/agenticMethods";
+import { compileAndRunParallel } from "./compilationStrategies/parallel";
+import { compileAndRunParallelMethods } from "./compilationStrategies/parallelMethods";
+import { compileAndRunSequential } from "./compilationStrategies/sequential";
+import {
+  buildPythonProgram,
+  type RunResult,
+  type StrategyRunOptions,
+} from "./compilationStrategies/shared";
 
-export type RunResult =
-  | { ok: true; stdout: string[]; completed: CompletedCodeSheet }
-  | { ok: false; error: string; stdout: string[]; stderr: string; completed: CompletedCodeSheet };
+export type { RunResult } from "./compilationStrategies/shared";
+export { buildPythonProgram } from "./compilationStrategies/shared";
 
-export type RunOptions = {
+export type RunOptions = StrategyRunOptions & {
   complete?: CompleteFunction;
   cache?: CodeCache;
-  python?: string;
-  onStdoutLine?: (line: string) => void;
   compilationStrategy?: CompilationMode;
   experimentalParallelCompletions?: boolean;
-  agenticMaxIterations?: number;
 };
 
 export type MethodStrategy = "parallel-methods" | "agentic-methods";
 export type CompilationMode = CompilationStrategy | MethodStrategy | "auto";
+type RunnerStrategy = Exclude<CompilationMode, "auto">;
 
 export type RunChunk = {
   stream: "stdout" | "stderr";
@@ -49,45 +48,6 @@ export type InteractiveRunStart = {
   completed: CompletedCodeSheet;
 };
 
-type PythonExecution =
-  | { ok: true; stdout: string; stderr: string }
-  | { ok: false; code: number | null; stdout: string; stderr: string };
-
-type AgenticAction = {
-  tool: "replace_file" | "replace_snippets" | "finish";
-  source?: string;
-  replacements?: AgenticSnippetReplacement[];
-};
-
-type AgenticSnippetReplacement = {
-  snippet: string;
-  replacement: string;
-};
-
-type AgenticObservation = {
-  iteration: number;
-  action: AgenticAction["tool"];
-  ok: boolean;
-  stdout: string[];
-  stderr: string;
-};
-
-type RunnerStrategy = CompilationStrategy | MethodStrategy;
-
-type MethodAgentTask = {
-  snippet: string;
-  prompt: string;
-  synthesized?: string;
-};
-
-type ParallelMethodTask = {
-  snippet: string;
-  kind: "function" | "class" | "natural";
-  prompt: string;
-  synthesized?: string;
-  method?: boolean;
-};
-
 export async function runCodeSheet(
   codeSheet: CodeSheet,
   runnable: Runnable,
@@ -96,13 +56,13 @@ export async function runCodeSheet(
   const cache = options.cache ?? new Map();
   const mode = compilationMode(options);
   if (mode !== "auto") {
-    return compileAndRun(cache, codeSheet, runnable, options, mode);
+    return compileAndRunStrategy(cache, codeSheet, runnable, options, mode);
   }
 
   let lastResult: RunResult | null = null;
   for (const strategy of strategyOrder()) {
     const forkedCache = new Map(cache);
-    const result = await compileAndRun(forkedCache, codeSheet, runnable, options, strategy);
+    const result = await compileAndRunStrategy(forkedCache, codeSheet, runnable, options, strategy);
     if (result.ok) {
       commitCache(cache, forkedCache);
       return result;
@@ -131,244 +91,43 @@ export async function startInteractiveCodeSheet(
   };
 }
 
-async function compileAndRun(
+function compileAndRunStrategy(
   cache: CodeCache,
   codeSheet: CodeSheet,
   runnable: Runnable,
   options: RunOptions,
   strategy: RunnerStrategy,
 ): Promise<RunResult> {
-  if (strategy === "agentic") {
-    return compileAndRunAgentically(cache, codeSheet, runnable, options);
+  switch (strategy) {
+    case "sequential":
+      return compileAndRunSequential(cache, codeSheet, runnable, options);
+    case "parallel":
+      return compileAndRunParallel(cache, codeSheet, runnable, options);
+    case "agentic":
+      return compileAndRunAgentically(
+        cache,
+        codeSheet,
+        runnable,
+        options,
+        () => compileAndRunStrategy(cache, codeSheet, runnable, options, "sequential"),
+      );
+    case "parallel-methods":
+      return compileAndRunParallelMethods(
+        cache,
+        codeSheet,
+        runnable,
+        options,
+        () => compileAndRunStrategy(cache, codeSheet, runnable, options, "parallel"),
+      );
+    case "agentic-methods":
+      return compileAndRunAgenticMethods(
+        cache,
+        codeSheet,
+        runnable,
+        options,
+        () => compileAndRunStrategy(cache, codeSheet, runnable, options, "agentic"),
+      );
   }
-
-  if (strategy === "parallel-methods") {
-    return compileAndRunParallelMethods(cache, codeSheet, runnable, options);
-  }
-
-  if (strategy === "agentic-methods") {
-    return compileAndRunAgenticMethods(cache, codeSheet, runnable, options);
-  }
-
-  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options, strategy));
-  const source = buildPythonProgram(completed.source, runnable);
-  const executed = await runPython(source, options.python ?? "python3", options.onStdoutLine);
-
-  if (executed.ok) {
-    return {
-      ok: true,
-      stdout: stdoutLines(executed.stdout),
-      completed,
-    };
-  }
-
-  return {
-    ok: false,
-    error: executed.stderr.trim() || executed.stdout.trim() || `Python exited ${executed.code}`,
-    stdout: stdoutLines(executed.stdout),
-    stderr: executed.stderr,
-    completed,
-  };
-}
-
-function runResult(executed: PythonExecution, completed: CompletedCodeSheet): RunResult {
-  if (executed.ok) {
-    return {
-      ok: true,
-      stdout: stdoutLines(executed.stdout),
-      completed,
-    };
-  }
-
-  return {
-    ok: false,
-    error: executed.stderr.trim() || executed.stdout.trim() || `Python exited ${executed.code}`,
-    stdout: stdoutLines(executed.stdout),
-    stderr: executed.stderr,
-    completed,
-  };
-}
-
-async function compileAndRunAgentically(
-  cache: CodeCache,
-  codeSheet: CodeSheet,
-  runnable: Runnable,
-  options: RunOptions,
-): Promise<RunResult> {
-  if (!options.complete) {
-    return compileAndRun(cache, codeSheet, runnable, options, "sequential");
-  }
-
-  const cacheKey = hashSnippet(`agentic-file:${runnable}\n${codeSheet}`);
-  const cachedSource = cache.get(cacheKey);
-  if (cachedSource !== undefined) {
-    const completed = completedAgenticSheet(codeSheet, cachedSource, cacheKey, true);
-    const executed = await runPython(
-      buildPythonProgram(completed.source, runnable),
-      options.python ?? "python3",
-      options.onStdoutLine,
-    );
-    return runResult(executed, completed);
-  }
-
-  const maxIterations = options.agenticMaxIterations ?? 4;
-  const parsed = parse(codeSheet);
-  const initialSource = renderImplementation(buildCompilationIR(parsed));
-  let currentSource = initialSource;
-  const observations: AgenticObservation[] = [];
-
-  for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
-    const prompt = buildAgenticFilePrompt({
-      codeSheet,
-      runnable,
-      currentSource,
-      incompleteSnippets: parsed.incompleteSnippets.map((snippet) => snippet.snippet),
-      observations,
-      iteration,
-      maxIterations,
-    });
-    const raw = await collectCompletionResult(options.complete(prompt));
-    const action = parseAgenticAction(raw);
-    currentSource = applyAgenticAction(currentSource, action);
-
-    const executed = await runPython(
-      buildPythonProgram(currentSource, runnable),
-      options.python ?? "python3",
-    );
-    observations.push({
-      iteration,
-      action: action.tool,
-      stdout: stdoutLines(executed.stdout),
-      stderr: executed.stderr.trim(),
-      ok: executed.ok,
-    });
-
-    if (executed.ok || action.tool === "finish") {
-      break;
-    }
-  }
-
-  const completed = completedAgenticSheet(codeSheet, currentSource, cacheKey, false);
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
-    options.onStdoutLine,
-  );
-  if (executed.ok) {
-    cache.set(cacheKey, currentSource);
-  }
-  return runResult(executed, completed);
-}
-
-async function compileAndRunAgenticMethods(
-  cache: CodeCache,
-  codeSheet: CodeSheet,
-  runnable: Runnable,
-  options: RunOptions,
-): Promise<RunResult> {
-  if (!options.complete) {
-    return compileAndRun(cache, codeSheet, runnable, options, "sequential");
-  }
-
-  const cacheKey = hashSnippet(`agentic-methods:${runnable}\n${codeSheet}`);
-  const cachedSource = cache.get(cacheKey);
-  if (cachedSource !== undefined) {
-    const completed = completedAgenticSheet(codeSheet, cachedSource, cacheKey, true);
-    const executed = await runPython(
-      buildPythonProgram(completed.source, runnable),
-      options.python ?? "python3",
-      options.onStdoutLine,
-    );
-    return runResult(executed, completed);
-  }
-
-  const parsed = parse(codeSheet);
-  let currentSource = renderImplementation(buildCompilationIR(parsed));
-  const tasks = buildMethodAgentTasks(codeSheet, runnable, parsed.incompleteSnippets.map((snippet) => snippet.snippet));
-  if (tasks.length === 0) {
-    return compileAndRunAgentically(cache, codeSheet, runnable, options);
-  }
-
-  const replacements = await Promise.all(tasks.map(async (task) => ({
-    snippet: task.snippet,
-    replacement: task.synthesized ?? parseMethodAgentReplacement(
-      await collectCompletionResult(options.complete?.(task.prompt) ?? ""),
-      task.snippet,
-    ),
-  })));
-
-  for (const replacement of replacements) {
-    currentSource = replaceAgenticSnippet(currentSource, replacement.snippet, replacement.replacement);
-  }
-
-  const trial = await runPython(buildPythonProgram(currentSource, runnable), options.python ?? "python3");
-  if (!trial.ok) {
-    return compileAndRunAgentically(cache, codeSheet, runnable, options);
-  }
-
-  const completed = completedAgenticSheet(codeSheet, currentSource, cacheKey, false);
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
-    options.onStdoutLine,
-  );
-  if (executed.ok) {
-    cache.set(cacheKey, currentSource);
-  }
-  return runResult(executed, completed);
-}
-
-async function compileAndRunParallelMethods(
-  cache: CodeCache,
-  codeSheet: CodeSheet,
-  runnable: Runnable,
-  options: RunOptions,
-): Promise<RunResult> {
-  if (!options.complete) {
-    return compileAndRun(cache, codeSheet, runnable, options, "parallel");
-  }
-
-  const parsed = parse(codeSheet);
-  let currentSource = renderImplementation(buildCompilationIR(parsed));
-  const tasks = buildParallelMethodTasks(currentSource, parsed.incompleteSnippets);
-  if (!tasks.some((task) => task.method)) {
-    return compileAndRun(cache, codeSheet, runnable, options, "parallel");
-  }
-
-  const replacements = await Promise.all(tasks.map(async (task) => {
-    const hash = hashSnippet(`parallel-methods:${task.kind}\n${task.snippet}`);
-    const cached = cache.get(hash);
-    if (cached !== undefined) {
-      return { snippet: task.snippet, replacement: cached };
-    }
-
-    const replacement = task.synthesized ?? normalizeParallelMethodReplacement(
-      await collectCompletionResult(options.complete?.(task.prompt) ?? ""),
-      task,
-    );
-    cache.set(hash, replacement);
-    return { snippet: task.snippet, replacement };
-  }));
-
-  for (const replacement of replacements) {
-    currentSource = replaceAgenticSnippet(currentSource, replacement.snippet, replacement.replacement);
-  }
-
-  const completed = completedAgenticSheet(
-    codeSheet,
-    currentSource,
-    hashSnippet(`parallel-methods:${runnable}\n${codeSheet}`),
-    false,
-  );
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
-    options.onStdoutLine,
-  );
-  if (!executed.ok) {
-    return compileAndRun(cache, codeSheet, runnable, options, "parallel");
-  }
-  return runResult(executed, completed);
 }
 
 function compileOptions(options: RunOptions, strategy: CompilationStrategy): CompileOptions {
@@ -403,490 +162,6 @@ function commitCache(target: CodeCache, source: CodeCache): void {
   for (const [key, value] of source) {
     target.set(key, value);
   }
-}
-
-function completedAgenticSheet(
-  codeSheet: CodeSheet,
-  source: string,
-  cacheKey: string,
-  cached: boolean,
-): CompletedCodeSheet {
-  const parsed = parse(codeSheet);
-  return {
-    source,
-    lowered: lower(parsed),
-    completions: [{
-      hash: cacheKey,
-      snippet: "<agentic-file>",
-      replacement: source,
-      cached,
-    }],
-    ir: buildCompilationIR(parsed),
-  };
-}
-
-function buildMethodAgentTasks(
-  codeSheet: CodeSheet,
-  runnable: Runnable,
-  snippets: string[],
-): MethodAgentTask[] {
-  const classNames = classNamesFromSnippets(snippets);
-  return snippets.flatMap((snippet) => {
-    if (snippet.trimStart().startsWith("class ")) {
-      const methodSnippets = methodHeadersFromClassSnippet(snippet);
-      return methodSnippets.map((methodSnippet) => ({
-        snippet: methodSnippet,
-        prompt: buildMethodAgentPrompt({
-          codeSheet,
-          runnable,
-          targetSnippet: methodSnippet,
-          siblingSnippets: methodSnippets.filter((sibling) => sibling !== methodSnippet),
-          targetKind: "method",
-        }),
-      }));
-    }
-
-    const synthesized = synthesizeAgenticFactory(snippet, classNames);
-    return [{
-      snippet,
-      ...(synthesized === null
-        ? {
-            prompt: buildMethodAgentPrompt({
-              codeSheet,
-              runnable,
-              targetSnippet: snippet,
-              siblingSnippets: snippets.filter((sibling) => sibling !== snippet),
-              targetKind: "snippet",
-            }),
-          }
-        : { prompt: "", synthesized }),
-    }];
-  });
-}
-
-function buildParallelMethodTasks(
-  currentSource: CodeSheet,
-  snippets: Array<{ kind: "function" | "class" | "natural"; snippet: string }>,
-): ParallelMethodTask[] {
-  const classNames = classNamesFromSnippets(snippets.map((snippet) => snippet.snippet));
-  return snippets.flatMap((snippet) => {
-    if (snippet.kind === "class") {
-      const methodSnippets = methodHeadersFromClassSnippet(snippet.snippet);
-      return methodSnippets.map((methodSnippet) => ({
-        snippet: methodSnippet,
-        kind: "function" as const,
-        method: true,
-        prompt: buildParallelMethodPrompt(currentSource, methodSnippet),
-      }));
-    }
-
-    const synthesized = synthesizeAgenticFactory(snippet.snippet, classNames);
-    return [{
-      snippet: snippet.snippet,
-      kind: snippet.kind,
-      ...(synthesized === null
-        ? { prompt: buildCompletionPrompt(currentSource, snippet.snippet, snippet.kind) }
-        : { prompt: "", synthesized }),
-    }];
-  });
-}
-
-function buildParallelMethodPrompt(currentSource: CodeSheet, methodSnippet: string): string {
-  return `${buildCompletionPrompt(currentSource, methodSnippet, "function")}
-
-The requested declaration is a method inside an existing class.
-Return only the requested method definition and any nested local helpers.
-Do not return the class header, sibling methods, top-level functions, runnable/test code, JSON, or prose.
-Preserve the method indentation from the requested snippet.
-Do not implement, redefine, restate, or include sibling methods.
-Parallel method completions are independent: do not depend on a sibling method or constructor adding hidden state unless the worksheet explicitly declares that state.
-If the class has no declared __init__, the method must work on a no-argument instance with no preexisting attributes.
-Use getattr defaults for optional state.
-If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
-When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
-Do not require undeclared attributes such as _cubes, _points, _width, or _height to exist before this method is called.`;
-}
-
-function normalizeParallelMethodReplacement(raw: string, task: ParallelMethodTask): string {
-  if (!task.method) {
-    return normalizeSnippet(raw, task.kind, task.snippet);
-  }
-
-  return indentMethodReplacement(
-    extractRequestedMethodReplacement(normalizeMethodAgentReplacement(raw), task.snippet),
-    methodIndent(task.snippet),
-  );
-}
-
-function methodIndent(snippet: string): string {
-  return snippet.match(/^\s*/)?.[0] ?? "";
-}
-
-function indentMethodReplacement(replacement: string, indent: string): string {
-  const lines = replacement.split("\n");
-  if (lines.length === 0) {
-    return replacement;
-  }
-
-  const firstIndent = lines[0].match(/^\s*/)?.[0] ?? "";
-  if (firstIndent.length >= indent.length && lines[0].startsWith(indent)) {
-    return replacement;
-  }
-
-  return lines.map((line, index) => {
-    if (line.trim().length === 0) {
-      return line;
-    }
-    return index === 0 || /^\s+/.test(line) ? `${indent}${line}` : line;
-  }).join("\n");
-}
-
-function methodHeadersFromClassSnippet(snippet: string): string[] {
-  return snippet.split("\n").filter((line) => {
-    return /^\s+/.test(line) && methodHeaderWithoutColon(line) !== null;
-  }).map((line) => line.trimEnd());
-}
-
-function methodHeaderWithoutColon(line: string): RegExpMatchArray | null {
-  return line.match(/^\s+def\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*[^:]+)?\s*$/);
-}
-
-function classNamesFromSnippets(snippets: string[]): Set<string> {
-  return new Set(snippets.flatMap((snippet) => {
-    const match = snippet.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/);
-    return match ? [match[1]] : [];
-  }));
-}
-
-function synthesizeAgenticFactory(snippet: string, classNames: Set<string>): string | null {
-  const match = snippet.match(/^def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*\)\s*->\s*([A-Z][A-Za-z0-9_]*)\s*$/);
-  if (!match || !classNames.has(match[2])) {
-    return null;
-  }
-
-  return `def ${match[1]}() -> ${match[2]}:\n  return ${match[2]}()`;
-}
-
-function buildMethodAgentPrompt(options: {
-  codeSheet: CodeSheet;
-  runnable: Runnable;
-  targetSnippet: string;
-  siblingSnippets: string[];
-  targetKind: "method" | "snippet";
-}): string {
-  return `You are one of several parallel coding agents compiling a Python worksheet.
-
-Return exactly one JSON object and no other text: {"replacement":"<complete Python code that replaces the target snippet>"}.
-The first character of your response must be "{" and the last character must be "}". Do not include markdown, prose, notes, or reasoning.
-
-Rules:
-- You own exactly the target snippet and no other declaration.
-- Replace only the exact target snippet.
-- Do not implement, redefine, restate, or include any sibling method, class, top-level function, runnable, or test.
-- If another declaration is needed, assume it will be implemented separately and only call it by its declared name.
-- Preserve the public behavior required by the runnable/test function.
-- Use only the Python standard library.
-- Keep the replacement concise.
-- For class methods, the replacement is inserted inside the existing class at the same indentation as the target method.
-- For class methods, return only the requested method definition and its nested local helpers. Do not include sibling methods, the class header, or top-level functions.
-- Helpers are allowed only when nested inside the requested declaration.
-- For top-level functions, do not define nested replacements for methods on declared classes. Construct the declared class and set ordinary instance state only.
-- Do not monkey-patch declared classes or assign methods onto instances or classes. Avoid MethodType, setattr for methods, and assignments such as obj.render = ... or ClassName.render = ....
-- For classes without __init__, methods must work with no-argument construction. Use getattr defaults and dynamic attributes rather than requiring constructor arguments.
-- Parallel agents may complete sibling methods independently, so do not depend on a sibling method adding hidden state during construction.
-- If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
-- When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
-- Do not include an if __name__ == "__main__" block.
-
-Runnable to satisfy: ${options.runnable}
-Target kind: ${options.targetKind}
-
-Worksheet:
-\`\`\`python
-${options.codeSheet}
-\`\`\`
-
-Sibling declarations for context only. Do not implement these:
-\`\`\`python
-${options.siblingSnippets.join("\n")}
-\`\`\`
-
-Target snippet:
-\`\`\`python
-${options.targetSnippet}
-\`\`\``;
-}
-
-function parseMethodAgentReplacement(raw: string, targetSnippet: string): string {
-  const candidates = [
-    raw.trim(),
-    raw.trim().match(/```(?:json)?\s*\n([\s\S]*?)```/)?.[1]?.trim(),
-    raw.trim().match(/({[\s\S]*})/)?.[1]?.trim(),
-  ].filter((value): value is string => value !== undefined && value.length > 0);
-
-  for (const candidate of candidates) {
-    try {
-      const value = JSON.parse(candidate) as { replacement?: unknown };
-      if (typeof value.replacement === "string") {
-        return extractRequestedMethodReplacement(
-          normalizeMethodAgentReplacement(value.replacement),
-          targetSnippet,
-        );
-      }
-    } catch {
-      // Try the next extraction shape.
-    }
-  }
-
-  return extractRequestedMethodReplacement(normalizeMethodAgentReplacement(raw), targetSnippet);
-}
-
-function normalizeMethodAgentReplacement(source: string): string {
-  const withoutCarriageReturns = normalizeAgenticLineEndings(source);
-  const fenced = withoutCarriageReturns.trim().match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1];
-  return (fenced ?? withoutCarriageReturns).replace(/^\n+/, "").trimEnd();
-}
-
-function extractRequestedMethodReplacement(replacement: string, targetSnippet: string): string {
-  const target = methodNameAndIndent(targetSnippet);
-  if (!target) {
-    return replacement;
-  }
-
-  const lines = replacement.split("\n");
-  const start = lines.findIndex((line) => {
-    const match = methodNameAndIndent(line);
-    return match?.name === target.name;
-  });
-  if (start < 0) {
-    return replacement;
-  }
-
-  const result = [lines[start].trimEnd()];
-  for (const line of lines.slice(start + 1)) {
-    if (line.trim().length === 0) {
-      result.push(line);
-      continue;
-    }
-
-    const indent = line.match(/^\s*/)?.[0].length ?? 0;
-    if (indent <= target.indent && methodNameAndIndent(line)) {
-      break;
-    }
-    result.push(line.trimEnd());
-  }
-
-  return trimOuterBlankLines(result).join("\n").trimEnd();
-}
-
-function methodNameAndIndent(line: string): { name: string; indent: number } | null {
-  const match = line.match(/^(\s*)def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
-  return match ? { name: match[2], indent: match[1].length } : null;
-}
-
-function buildAgenticFilePrompt(options: {
-  codeSheet: CodeSheet;
-  runnable: Runnable;
-  currentSource: string;
-  incompleteSnippets: string[];
-  observations: AgenticObservation[];
-  iteration: number;
-  maxIterations: number;
-}): string {
-  return `Your job is to compile this worksheet into one complete Python file.
-
-You are a stateful coding agent editing a single Python source file. Use the tool protocol below instead of returning prose.
-
-Tool protocol:
-- Return exactly one JSON object.
-- Prefer small edits: {"tool":"replace_snippets","replacements":[{"snippet":"<exact current snippet>","replacement":"<complete replacement code>"}]}
-- To replace the whole file: {"tool":"replace_file","source":"<complete Python source without a __main__ block>"}
-- To finish with the current or supplied file: {"tool":"finish"} or {"tool":"finish","source":"<complete Python source without a __main__ block>"}
-
-Rules:
-- Preserve the public behavior required by the runnable/test function.
-- Use only the Python standard library.
-- Keep declarations top-level unless nesting is explicitly required.
-- If the worksheet declares a class without __init__, no-argument construction must produce a valid default object.
-- Prefer concise code. Avoid comments, docstrings, and copied worksheet prose unless they are needed for behavior.
-- Do not include an if __name__ == "__main__" block; the runner adds it.
-
-Runnable to satisfy: ${options.runnable}
-Iteration: ${options.iteration} of ${options.maxIterations}
-
-Worksheet:
-\`\`\`python
-${options.codeSheet}
-\`\`\`
-
-Current file:
-\`\`\`python
-${options.currentSource}
-\`\`\`
-
-Exact snippets you may replace:
-\`\`\`json
-${JSON.stringify(options.incompleteSnippets, null, 2)}
-\`\`\`
-
-Prior tool results:
-\`\`\`json
-${JSON.stringify(options.observations, null, 2)}
-\`\`\``;
-}
-
-function parseAgenticAction(raw: string): AgenticAction {
-  const parsed = parseJsonAction(raw);
-  if (parsed) {
-    return parsed;
-  }
-
-  return {
-    tool: "replace_file",
-    source: raw,
-  };
-}
-
-function parseJsonAction(raw: string): AgenticAction | null {
-  const candidates = [
-    raw.trim(),
-    raw.trim().match(/```(?:json)?\s*\n([\s\S]*?)```/)?.[1]?.trim(),
-    raw.trim().match(/({[\s\S]*})/)?.[1]?.trim(),
-  ].filter((value): value is string => value !== undefined && value.length > 0);
-
-  for (const candidate of candidates) {
-    try {
-      const value = JSON.parse(candidate) as {
-        tool?: unknown;
-        source?: unknown;
-        replacements?: unknown;
-      };
-      if (value.tool !== "replace_file" && value.tool !== "replace_snippets" && value.tool !== "finish") {
-        continue;
-      }
-
-      return {
-        tool: value.tool,
-        ...(typeof value.source === "string" ? { source: value.source } : {}),
-        ...(value.tool === "replace_snippets"
-          ? { replacements: parseAgenticSnippetReplacements(value.replacements) }
-          : {}),
-      };
-    } catch {
-      // Try the next extraction shape.
-    }
-  }
-
-  return null;
-}
-
-function parseAgenticSnippetReplacements(value: unknown): AgenticSnippetReplacement[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.flatMap((item) => {
-    if (
-      typeof item === "object" &&
-      item !== null &&
-      "snippet" in item &&
-      "replacement" in item &&
-      typeof item.snippet === "string" &&
-      typeof item.replacement === "string"
-    ) {
-      return [{
-        snippet: item.snippet,
-        replacement: item.replacement,
-      }];
-    }
-
-    return [];
-  });
-}
-
-function applyAgenticAction(source: string, action: AgenticAction): string {
-  if (action.source !== undefined) {
-    return normalizeAgenticSource(action.source);
-  }
-
-  if (action.tool !== "replace_snippets") {
-    return source;
-  }
-
-  return action.replacements?.reduce((current, replacement) => {
-    return replaceAgenticSnippet(
-      current,
-      normalizeAgenticLineEndings(replacement.snippet).trimEnd(),
-      normalizeAgenticSnippet(replacement.replacement),
-    );
-  }, source) ?? source;
-}
-
-function replaceAgenticSnippet(source: string, snippet: string, replacement: string): string {
-  const normalizedSource = normalizeAgenticLineEndings(source);
-  const index = normalizedSource.indexOf(snippet);
-  if (index < 0) {
-    return source;
-  }
-
-  return `${normalizedSource.slice(0, index)}${replacement}${normalizedSource.slice(index + snippet.length)}`;
-}
-
-function normalizeAgenticSource(source: string): string {
-  const trimmed = source.trim();
-  const fenced = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1] ?? trimmed;
-  const lines = normalizeAgenticLineEndings(fenced).split("\n");
-  const withoutFuture = lines.filter((line) => line.trim() !== "from __future__ import annotations");
-  const mainIndex = withoutFuture.findIndex((line) => /^if\s+__name__\s*==\s*["']__main__["']\s*:/.test(line.trim()));
-  return trimOuterBlankLines(mainIndex < 0 ? withoutFuture : withoutFuture.slice(0, mainIndex)).join("\n").trimEnd();
-}
-
-function normalizeAgenticSnippet(source: string): string {
-  const trimmed = source.trim();
-  const fenced = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1] ?? trimmed;
-  return normalizeAgenticLineEndings(fenced).trimEnd();
-}
-
-function normalizeAgenticLineEndings(source: string): string {
-  return source.replaceAll("\r\n", "\n");
-}
-
-function trimOuterBlankLines(lines: string[]): string[] {
-  let start = 0;
-  let end = lines.length;
-  while (start < end && lines[start].trim().length === 0) {
-    start += 1;
-  }
-  while (end > start && lines[end - 1].trim().length === 0) {
-    end -= 1;
-  }
-  return lines.slice(start, end);
-}
-
-async function collectCompletionResult(result: CompleteResult): Promise<string> {
-  if (!isAsyncIterable(result)) {
-    return await result;
-  }
-
-  let replacement = "";
-  for await (const token of result) {
-    replacement += token;
-  }
-  return replacement;
-}
-
-function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> {
-  return typeof value === "object" && value !== null && Symbol.asyncIterator in value;
-}
-
-export function buildPythonProgram(source: string, runnable: Runnable): string {
-  return `from __future__ import annotations
-
-${source}
-
-if __name__ == "__main__":
-  ${runnable}()
-`;
 }
 
 export class InteractivePythonRun {
@@ -951,59 +226,4 @@ export class InteractivePythonRun {
 
     this.child.kill("SIGTERM");
   }
-}
-
-function runPython(
-  source: string,
-  command: string,
-  onStdoutLine?: (line: string) => void,
-): Promise<PythonExecution> {
-  return new Promise((resolve) => {
-    const child = spawn(command, ["-u", "-c", source], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let pendingStdout = "";
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout.push(chunk);
-      if (!onStdoutLine) {
-        return;
-      }
-
-      const text = pendingStdout + chunk.toString("utf8");
-      const lines = text.split("\n");
-      pendingStdout = lines.pop() ?? "";
-      for (const line of lines) {
-        onStdoutLine(line.endsWith("\r") ? line.slice(0, -1) : line);
-      }
-    });
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => {
-      resolve({
-        ok: false,
-        code: null,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: error.message,
-      });
-    });
-    child.on("close", (code) => {
-      if (onStdoutLine && pendingStdout.length > 0) {
-        onStdoutLine(pendingStdout.endsWith("\r") ? pendingStdout.slice(0, -1) : pendingStdout);
-      }
-
-      const out = Buffer.concat(stdout).toString("utf8");
-      const err = Buffer.concat(stderr).toString("utf8");
-      if (code === 0) {
-        resolve({ ok: true, stdout: out, stderr: err });
-      } else {
-        resolve({ ok: false, code, stdout: out, stderr: err });
-      }
-    });
-  });
-}
-
-function stdoutLines(stdout: string): string[] {
-  return stdout.trimEnd().length === 0 ? [] : stdout.trimEnd().split("\n");
 }
