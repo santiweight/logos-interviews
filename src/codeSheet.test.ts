@@ -21,6 +21,7 @@ import {
   type InteractivePythonRun,
   type RunResult,
 } from "./codeSheetRunner";
+import { sampleEvalCases } from "./samples";
 import { typeCheck } from "./typeCheck";
 
 const sheet = `def add(x: int, y: int) -> int
@@ -367,10 +368,12 @@ def test():
 
       def add(x: int, y: int) -> int
 
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+      For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
           "You are an expert software engineer building programs.
 
       You are tasked with assisting on the following Python code sheet:
@@ -387,10 +390,12 @@ def test():
 
       def mul(x: int, y: int) -> int
 
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+      For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
           "You are an expert software engineer building programs.
 
       You are tasked with assisting on the following Python code sheet:
@@ -415,10 +420,12 @@ def test():
         def get(self, col: str, row: int) -> int | None
         def set(self, col: str, row: int, val: int) -> None
 
-      Return just the function or class snippet, including any standard-library imports required by that snippet.
+      Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+      Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+      For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-      If helper functions are needed, include them in the returned snippet or define them inside the requested function.",
+      Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
         ],
         "spreadsheetClassTest": {
           "ok": true,
@@ -435,6 +442,221 @@ def test():
         },
       }
     `);
+  });
+
+  it("prompts class implementations to treat sibling result types as dependencies", async () => {
+    const prompts: string[] = [];
+    const spreadsheetResultSheet = `class Spreadsheet:
+  def eval(self) -> SpreadsheetResult
+
+class SpreadsheetResult:
+  sheet: Spreadsheet
+
+  def __init__(self, sheet: Spreadsheet) -> None:
+    self.sheet = sheet`;
+
+    await completeSheet(new Map(), spreadsheetResultSheet, (prompt) => {
+      prompts.push(prompt);
+      return `class Spreadsheet:
+  def eval(self) -> SpreadsheetResult:
+    return SpreadsheetResult(self)`;
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("class SpreadsheetResult:");
+    expect(prompts[0]).toContain("Do not add sibling top-level definitions that are not already in the requested snippet.");
+    expect(prompts[0]).toContain(
+      "If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.",
+    );
+    expect(prompts[0]).toContain("For a requested class, return only that class definition and its members.");
+  });
+
+  it("runs the formula spreadsheet eval sample with separate class completions", async () => {
+    const fixture = sampleEvalCases.find((item) => item.name === "formula spreadsheet precedence and parentheses");
+    expect(fixture).toBeDefined();
+    if (fixture === undefined || !("expectedStdout" in fixture)) {
+      throw new Error("Missing formula spreadsheet fixture");
+    }
+
+    const result = await runCodeSheet(fixture.sheet, fixture.runnable, {
+      complete(prompt) {
+        const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? "";
+        if (target.includes("def parse_expr(str) -> Expr | None")) {
+          return `def parse_expr(source):
+  text = source.strip()
+
+  def tokenize(raw):
+    tokens = []
+    index = 0
+    while index < len(raw):
+      ch = raw[index]
+      if ch.isspace():
+        index += 1
+      elif ch.isdigit():
+        start = index
+        while index < len(raw) and raw[index].isdigit():
+          index += 1
+        tokens.append(("int", int(raw[start:index])))
+      elif ch.isalpha():
+        start = index
+        while index < len(raw) and raw[index].isalpha():
+          index += 1
+        col = raw[start:index]
+        start = index
+        while index < len(raw) and raw[index].isdigit():
+          index += 1
+        if start == index:
+          return []
+        tokens.append(("cell", col, int(raw[start:index])))
+      elif ch in "+-*/()":
+        tokens.append(ch)
+        index += 1
+      else:
+        return []
+    return tokens
+
+  def parse_tokens(tokens):
+    position = 0
+
+    def parse_factor():
+      nonlocal position
+      if position >= len(tokens):
+        return None
+      token = tokens[position]
+      if isinstance(token, tuple) and token[0] == "int":
+        position += 1
+        return Val(token[1])
+      if isinstance(token, tuple) and token[0] == "cell":
+        position += 1
+        return Cell(token[1], token[2])
+      if token == "(":
+        position += 1
+        expr = parse_sum()
+        if expr is None or position >= len(tokens) or tokens[position] != ")":
+          return None
+        position += 1
+        return expr
+      return None
+
+    def parse_product():
+      nonlocal position
+      expr = parse_factor()
+      while expr is not None and position < len(tokens) and tokens[position] in ("*", "/"):
+        op = tokens[position]
+        position += 1
+        right = parse_factor()
+        if right is None:
+          return None
+        expr = BinOp(Mul() if op == "*" else Div(), expr, right)
+      return expr
+
+    def parse_sum():
+      nonlocal position
+      expr = parse_product()
+      while expr is not None and position < len(tokens) and tokens[position] in ("+", "-"):
+        op = tokens[position]
+        position += 1
+        right = parse_product()
+        if right is None:
+          return None
+        expr = BinOp(Add() if op == "+" else Sub(), expr, right)
+      return expr
+
+    expr = parse_sum()
+    if expr is None or position != len(tokens):
+      return None
+    return expr
+
+  parsed = parse_tokens(tokenize(text))
+  if parsed is None and text.endswith(")"):
+    parsed = parse_tokens(tokenize(text[:-1]))
+  return parsed`;
+        }
+
+        if (target.includes("def pretty_expr(expr) -> str")) {
+          return `def pretty_expr(expr) -> str:
+  return str(expr)`;
+        }
+
+        if (target.includes("def c(str) -> CellAddress")) {
+          return `def c(source):
+  return ("".join(ch for ch in source if ch.isalpha()), int("".join(ch for ch in source if ch.isdigit())))`;
+        }
+
+        if (target.includes("class SpreadsheetResult:")) {
+          return `class SpreadsheetResult:
+  sheet: Spreadsheet
+  cache: dict
+
+  def __init__(self, sheet):
+    self.sheet = sheet
+    self.cache = {}
+
+  def eval(self, cell):
+    return self.eval_inner([], cell)
+
+  def eval_inner(self, stack, cell):
+    if cell in stack:
+      return RecursiveError(stack + [cell])
+    col, row = cell
+    if col in self.cache and row in self.cache[col]:
+      return self.cache[col][row]
+    expr = self.sheet.get(cell)
+    if expr is None:
+      return None
+    result = self.eval_expr(expr, stack + [cell])
+    self.cache.setdefault(col, {})[row] = result
+    return result
+
+  def eval_expr(self, expr, stack):
+    if isinstance(expr, Val):
+      return expr.value
+    if isinstance(expr, Cell):
+      return self.eval_inner(stack, (expr.col, expr.row))
+    left = self.eval_expr(expr.left, stack)
+    if isinstance(left, (RecursiveError, DivByZero)):
+      return left
+    right = self.eval_expr(expr.right, stack)
+    if isinstance(right, (RecursiveError, DivByZero)):
+      return right
+    if isinstance(expr.op, Add):
+      return left + right
+    if isinstance(expr.op, Sub):
+      return left - right
+    if isinstance(expr.op, Mul):
+      return left * right
+    if right == 0:
+      return DivByZero()
+    return left // right`;
+        }
+
+        if (target.includes("class Spreadsheet:")) {
+          return `class Spreadsheet:
+  cells: dict
+
+  def __init__(self):
+    self.cells = {}
+
+  def get(self, cell):
+    col, row = cell
+    return self.cells.get(col, {}).get(row)
+
+  def set(self, cell, expr):
+    col, row = cell
+    self.cells.setdefault(col, {})[row] = parse_expr(expr)
+
+  def eval(self):
+    return SpreadsheetResult(self)`;
+        }
+
+        throw new Error(`unexpected prompt: ${prompt}`);
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: fixture.expectedStdout,
+    });
   });
 
   it("supports interactive stdin while a run is active", async () => {
@@ -1986,7 +2208,7 @@ def gen_magic_square():
 });
 
 function completionPromptTarget(prompt: string): string {
-  const match = prompt.match(/Your job is to finish the implementation of:\n\n([\s\S]*?)\n\nReturn just/);
+  const match = prompt.match(/Your job is to finish the implementation of:\n\n([\s\S]*?)\n\nReturn (?:just|only implementations)/);
   if (!match) {
     throw new Error(`Could not extract completion target from prompt: ${prompt}`);
   }

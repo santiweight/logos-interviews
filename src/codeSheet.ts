@@ -1687,10 +1687,12 @@ Your job is to finish the implementation of:
 
 ${snippet}
 
-Return just the function or class snippet, including any standard-library imports required by that snippet.
+Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
+Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
 Use normal Python. Prefer dataclasses and match statements for sum types.
 Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
-If helper functions are needed, include them in the returned snippet or define them inside the requested function.`;
+Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
 }
 
 function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidance: string } | null {
