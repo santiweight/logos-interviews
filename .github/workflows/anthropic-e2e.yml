@@ -1,0 +1,81 @@
+name: Anthropic E2E
+
+on:
+  schedule:
+    # Weekdays at 9am, 1pm, and 5pm US/Eastern during daylight saving time.
+    - cron: "0 13,17,21 * * 1-5"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/anthropic-e2e.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "src/anthropicComplete.ts"
+      - "src/codeSheet.ts"
+      - "src/codeSheet.e2e.ts"
+      - "src/codeSheetRunner.ts"
+      - "src/samples.ts"
+      - "src/samples.test.ts"
+  workflow_dispatch:
+
+concurrency:
+  group: anthropic-e2e-main
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  anthropic-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide whether scheduled run is needed
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          should_run=true
+          reason="event '${{ github.event_name }}' should run"
+
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            runs_json="$(curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/anthropic-e2e.yml/runs?branch=main&status=success&per_page=20")"
+
+            if echo "$runs_json" | jq -e --arg sha "$GITHUB_SHA" '.workflow_runs[] | select(.head_sha == $sha)' >/dev/null; then
+              should_run=false
+              reason="this main SHA already has a successful Anthropic E2E run"
+            else
+              reason="scheduled run found no successful Anthropic E2E result for this main SHA"
+            fi
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          echo "$reason"
+
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.should_run == 'true'
+      - uses: actions/setup-node@v6
+        if: steps.gate.outputs.should_run == 'true'
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        if: steps.gate.outputs.should_run == 'true'
+        run: corepack enable
+      - name: Install dependencies
+        if: steps.gate.outputs.should_run == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Run Anthropic E2E
+        if: steps.gate.outputs.should_run == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_E2E_MODEL: ${{ vars.ANTHROPIC_E2E_MODEL || 'claude-sonnet-4-6' }}
+          RUN_ANTHROPIC_E2E: "true"
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo "Missing ANTHROPIC_API_KEY repository secret"; exit 1; }
+          pnpm exec vitest run --config vitest.e2e.config.ts src/codeSheet.e2e.ts

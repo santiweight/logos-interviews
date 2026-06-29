@@ -23,6 +23,9 @@ pnpm start
 builds and serves the deployable app with a production Node server.
 `pnpm test:e2e` runs deterministic end-to-end tests. The live Anthropic
 reliability eval is opt-in with `RUN_ANTHROPIC_E2E=true pnpm test:e2e`.
+The `Anthropic E2E` GitHub Actions workflow runs that live eval on relevant
+`main` changes and on a weekday work-hours cadence, skipping scheduled runs
+when the current `main` SHA has already passed.
 
 The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
 Vite build from `dist`, exposes `/api/run`, and caches completed snippets in
