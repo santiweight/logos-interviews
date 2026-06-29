@@ -217,7 +217,8 @@ textarea:disabled {
 
 .menu-setting-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   border-radius: 4px;
   color: var(--ink);
@@ -229,18 +230,24 @@ textarea:disabled {
   background: var(--accent-hover-soft);
 }
 
-.settings-checkbox {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
-  margin: 2px 0 0;
-  accent-color: var(--accent);
-}
-
 .settings-toggle-copy {
   display: grid;
   min-width: 0;
   gap: 2px;
+}
+
+.settings-select {
+  min-width: 92px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 580;
+  line-height: 1.2;
+  padding: 4px 6px;
 }
 
 .settings-toggle-title {
@@ -1367,7 +1374,7 @@ h2 {
 .send-button:focus-visible,
 .agent-toggle-button:focus-visible,
 .sidebar-menu-trigger:focus-visible,
-.settings-checkbox:focus-visible,
+.settings-select:focus-visible,
 .source-add-tab:focus-visible,
 .sample-menu-group-title:focus-visible,
 .menu-item:focus-visible,

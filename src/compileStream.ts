@@ -3,6 +3,7 @@ import {
   compile,
   type CodeCache,
   type CompilationEvent,
+  type CompilationStrategy,
   type CompleteFunction,
 } from "./codeSheet";
 
@@ -17,7 +18,7 @@ export async function handleCompileStream(
     return;
   }
 
-  const { sheet, experimentalParallelCompletions } = await readJson(req);
+  const { sheet, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
   if (typeof sheet !== "string") {
     sendJson(res, 400, { ok: false, error: "Missing sheet" });
     return;
@@ -36,7 +37,7 @@ export async function handleCompileStream(
     for await (const event of compile(cache, sheet, complete, {
       signal: abortController.signal,
       streamTokens: true,
-      experimentalParallelCompletions: experimentalParallelCompletions === true,
+      strategy: compileStrategy(compilationStrategy, experimentalParallelCompletions),
     })) {
       if (abortController.signal.aborted || res.destroyed) {
         return;
@@ -55,6 +56,18 @@ export async function handleCompileStream(
     res.write(`${JSON.stringify({ kind: "error", error: message })}\n`);
     res.end();
   }
+}
+
+function compileStrategy(strategy: unknown, experimentalParallelCompletions: unknown): CompilationStrategy {
+  if (strategy === "parallel" || strategy === "sequential" || strategy === "agentic") {
+    return strategy;
+  }
+
+  if (strategy === "auto" || experimentalParallelCompletions === true) {
+    return "parallel";
+  }
+
+  return "sequential";
 }
 
 function toWireEvent(event: CompilationEvent): Record<string, unknown> {

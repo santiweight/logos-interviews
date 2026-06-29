@@ -65,8 +65,11 @@ export type CompileOptions = {
   signal?: AbortSignal;
   streamTokens?: boolean;
   abortCurrentCompletion?: boolean;
+  strategy?: CompilationStrategy;
   experimentalParallelCompletions?: boolean;
 };
+
+export type CompilationStrategy = "sequential" | "parallel" | "agentic";
 
 export type DefinitionReadiness = {
   name: string;
@@ -313,7 +316,7 @@ export async function* compile(
     totalSnippets,
   };
 
-  if (options.experimentalParallelCompletions && complete) {
+  if (compileInParallel(options) && complete) {
     const missing: Array<{
       node: Extract<CompilationNode, { kind: "incomplete" }>;
       hash: SnippetHash;
@@ -488,6 +491,14 @@ export async function* compile(
       ir,
     },
   };
+}
+
+function compileInParallel(options: CompileOptions): boolean {
+  if (options.strategy !== undefined) {
+    return options.strategy === "parallel";
+  }
+
+  return options.experimentalParallelCompletions === true;
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {
@@ -1802,6 +1813,8 @@ ${snippet}
 Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
 Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
 For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
 Use normal Python. Prefer dataclasses and match statements for sum types.
 Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;

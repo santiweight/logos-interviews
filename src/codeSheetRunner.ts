@@ -6,6 +6,7 @@ import {
   type CompleteFunction,
   type CompletedCodeSheet,
   type CompileOptions,
+  type CompilationStrategy,
   type Runnable,
 } from "./codeSheet";
 
@@ -18,8 +19,11 @@ export type RunOptions = {
   cache?: CodeCache;
   python?: string;
   onStdoutLine?: (line: string) => void;
+  compilationStrategy?: CompilationMode;
   experimentalParallelCompletions?: boolean;
 };
+
+export type CompilationMode = CompilationStrategy | "auto";
 
 export type RunChunk = {
   stream: "stdout" | "stderr";
@@ -41,7 +45,51 @@ export async function runCodeSheet(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options));
+  const mode = compilationMode(options);
+  if (mode !== "auto") {
+    return compileAndRun(cache, codeSheet, runnable, options, mode);
+  }
+
+  let lastResult: RunResult | null = null;
+  for (const strategy of strategyOrder()) {
+    const forkedCache = new Map(cache);
+    const result = await compileAndRun(forkedCache, codeSheet, runnable, options, strategy);
+    if (result.ok) {
+      commitCache(cache, forkedCache);
+      return result;
+    }
+    lastResult = result;
+  }
+
+  if (lastResult) {
+    return lastResult;
+  }
+
+  throw new Error("No compilation strategy was attempted");
+}
+
+export async function startInteractiveCodeSheet(
+  codeSheet: CodeSheet,
+  runnable: Runnable,
+  options: RunOptions = {},
+): Promise<InteractiveRunStart> {
+  const cache = options.cache ?? new Map();
+  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options, interactiveStrategy(options)));
+  const source = buildPythonProgram(completed.source, runnable);
+  return {
+    session: new InteractivePythonRun(source, options.python ?? "python3"),
+    completed,
+  };
+}
+
+async function compileAndRun(
+  cache: CodeCache,
+  codeSheet: CodeSheet,
+  runnable: Runnable,
+  options: RunOptions,
+  strategy: CompilationStrategy,
+): Promise<RunResult> {
+  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options, strategy));
   const source = buildPythonProgram(completed.source, runnable);
   const executed = await runPython(source, options.python ?? "python3", options.onStdoutLine);
 
@@ -62,24 +110,35 @@ export async function runCodeSheet(
   };
 }
 
-export async function startInteractiveCodeSheet(
-  codeSheet: CodeSheet,
-  runnable: Runnable,
-  options: RunOptions = {},
-): Promise<InteractiveRunStart> {
-  const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(options));
-  const source = buildPythonProgram(completed.source, runnable);
+function compileOptions(options: RunOptions, strategy: CompilationStrategy): CompileOptions {
   return {
-    session: new InteractivePythonRun(source, options.python ?? "python3"),
-    completed,
+    strategy,
+    experimentalParallelCompletions: options.experimentalParallelCompletions,
   };
 }
 
-function compileOptions(options: RunOptions): CompileOptions {
-  return {
-    experimentalParallelCompletions: options.experimentalParallelCompletions,
-  };
+function compilationMode(options: RunOptions): CompilationMode {
+  if (options.compilationStrategy) {
+    return options.compilationStrategy;
+  }
+
+  return options.experimentalParallelCompletions ? "parallel" : "sequential";
+}
+
+function interactiveStrategy(options: RunOptions): CompilationStrategy {
+  const mode = compilationMode(options);
+  return mode === "auto" ? "parallel" : mode;
+}
+
+function strategyOrder(): CompilationStrategy[] {
+  return ["parallel", "sequential", "agentic"];
+}
+
+function commitCache(target: CodeCache, source: CodeCache): void {
+  target.clear();
+  for (const [key, value] of source) {
+    target.set(key, value);
+  }
 }
 
 export function buildPythonProgram(source: string, runnable: Runnable): string {

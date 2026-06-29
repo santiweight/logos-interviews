@@ -379,6 +379,8 @@ def test():
       Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
       Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
       For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+      Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+      Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -401,6 +403,8 @@ def test():
       Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
       Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
       For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+      Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+      Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -431,6 +435,8 @@ def test():
       Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
       Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
       For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
+      Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+      Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
       Use normal Python. Prefer dataclasses and match statements for sum types.
       Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
       Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.",
@@ -2285,12 +2291,12 @@ def gen_magic_square():
     expect(events.at(-1)?.kind).toBe("compiled");
   });
 
-  it("passes experimental parallel completions through the runner", async () => {
+  it("passes parallel strategy through the runner", async () => {
     const started: string[] = [];
     const resolvers: Array<(replacement: string) => void> = [];
 
     const runPromise = runCodeSheet(multiIncompleteSheet, "test", {
-      experimentalParallelCompletions: true,
+      compilationStrategy: "parallel",
       complete(prompt) {
         const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
         started.push(target);
@@ -2311,6 +2317,40 @@ def gen_magic_square():
       ok: true,
       stdout: ["2"],
     });
+  });
+
+  it("auto strategy commits only the first successful strategy cache fork", async () => {
+    const cache: CodeCache = new Map();
+    const calls: string[] = [];
+    let mulCalls = 0;
+    const badMul = `def mul(x: int, y: int) -> int:
+  raise RuntimeError("parallel failed")`;
+    const goodMul = `def mul(x: int, y: int) -> int:
+  return x * y`;
+
+    const result = await runCodeSheet(multiIncompleteSheet, "test", {
+      cache,
+      compilationStrategy: "auto",
+      complete(prompt) {
+        const target = completionPromptTarget(prompt).includes("def mul(") ? "mul" : "add";
+        calls.push(target);
+        if (target === "mul") {
+          mulCalls += 1;
+          return mulCalls === 1 ? badMul : goodMul;
+        }
+
+        return `def add(x: int, y: int) -> int:
+  return x + y`;
+      },
+    });
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["2"],
+    });
+    expect(calls).toEqual(["add", "mul", "add", "mul"]);
+    expect([...cache.values()]).toContain(goodMul);
+    expect([...cache.values()]).not.toContain(badMul);
   });
 });
 

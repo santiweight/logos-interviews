@@ -493,7 +493,8 @@ def main():
 # Cues should read as stacked isometric cubes with top, left, and right faces.
 # rotate_y(turns) returns a new scene rotated around the vertical axis.
 # rotate_y must be chainable: always return an IsoScene, never None.
-# Four clockwise rotations must return to the original view.
+# rotate_y(1).render() must differ from render(); four clockwise rotations must return to the original view.
+# cube_stack returns the declared top-level IsoScene class; do not define a nested replacement IsoScene.
 # For directional glyphs, rotate face orientation intentionally; do not simply
 # reverse strings or transpose the rendered text.
 # Keep cube coordinates, dimensions, and helper functions in the completion.
@@ -525,6 +526,7 @@ def main():
 # Treat [[T]] as a nested mapping keyed by column then row:
 # cells["A"][1] is A1, cells["B"][2] is B2.
 # Parse expression strings containing ints, A1 cell refs, +, -, *, /, and parentheses.
+# eval returns integer results; division of evenly divisible integers should print as an int, not a float.
 # If an expression has one extra trailing ")" but is otherwise parseable, ignore it.
 # c("A1") returns ("A", 1).
 

@@ -6,7 +6,7 @@ import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicC
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
-import { runCodeSheet } from "./codeSheetRunner";
+import { runCodeSheet, type CompilationMode } from "./codeSheetRunner";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
@@ -111,7 +111,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
     return;
   }
 
-  const { sheet, runnable, experimentalParallelCompletions } = await readJson(req);
+  const { sheet, runnable, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
   if (typeof sheet !== "string" || typeof runnable !== "string") {
     sendJson(res, 400, {
       ok: false,
@@ -124,7 +124,7 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
   const result = await runCodeSheet(sheet, runnable, {
     cache: codeCache,
     complete: completeWithAnthropic,
-    experimentalParallelCompletions: experimentalParallelCompletions === true,
+    compilationStrategy: compilationMode(compilationStrategy, experimentalParallelCompletions),
   });
 
   if (result.ok) {
@@ -142,6 +142,14 @@ async function handleRun(req: IncomingMessage, res: ServerResponse): Promise<voi
     stdout: result.stdout,
     implementation: result.completed.source,
   });
+}
+
+function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
+  if (strategy === "auto" || strategy === "parallel" || strategy === "sequential" || strategy === "agentic") {
+    return strategy;
+  }
+
+  return experimentalParallelCompletions === true ? "parallel" : "sequential";
 }
 
 async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<void> {

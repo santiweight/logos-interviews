@@ -7,6 +7,7 @@ import type {
 } from "./codeSheet";
 import {
   startInteractiveCodeSheet,
+  type CompilationMode,
   type InteractivePythonRun,
   type InteractiveRunStatus,
 } from "./codeSheetRunner";
@@ -59,7 +60,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     }
 
     cleanupSessions();
-    const { sheet, runnable, experimentalParallelCompletions } = await readJson(req);
+    const { sheet, runnable, compilationStrategy, experimentalParallelCompletions } = await readJson(req);
     if (typeof sheet !== "string" || typeof runnable !== "string") {
       sendJson(res, 400, {
         ok: false,
@@ -71,7 +72,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     const result = await startInteractiveCodeSheet(sheet, runnable, {
       cache: options.cache,
       complete: options.complete,
-      experimentalParallelCompletions: experimentalParallelCompletions === true,
+      compilationStrategy: compilationMode(compilationStrategy, experimentalParallelCompletions),
     });
     const sessionId = randomUUID();
     sessions.set(sessionId, {
@@ -175,6 +176,14 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     handlePoll,
     handleStop,
   };
+}
+
+function compilationMode(strategy: unknown, experimentalParallelCompletions: unknown): CompilationMode {
+  if (strategy === "auto" || strategy === "parallel" || strategy === "sequential" || strategy === "agentic") {
+    return strategy;
+  }
+
+  return experimentalParallelCompletions === true ? "parallel" : "sequential";
 }
 
 export type InteractiveRunWireStatus = InteractiveRunStatus;

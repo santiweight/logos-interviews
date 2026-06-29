@@ -47,8 +47,10 @@ type SourceTabState = {
   activeTabId: string | null;
 };
 
+type CompilationMode = "auto" | "parallel" | "sequential" | "agentic";
+
 type AppSettings = {
-  experimentalParallelCompletions: boolean;
+  compilationStrategy: CompilationMode;
 };
 
 type RunChunk = {
@@ -334,17 +336,17 @@ app.innerHTML = `
               <span class="sidebar-menu-label">Settings</span>
             </summary>
             <div class="menu-popover workspace-popover" role="menu">
-              <label class="settings-toggle menu-setting-row">
-                <input
-                  id="parallel-completions-toggle"
-                  class="settings-checkbox"
-                  type="checkbox"
-                  ${appSettings.experimentalParallelCompletions ? "checked" : ""}
-                />
+              <label class="settings-toggle menu-setting-row" for="compilation-strategy-select">
                 <span class="settings-toggle-copy">
-                  <span class="settings-toggle-title">Parallel code generation</span>
-                  <span class="settings-toggle-description">Experimental. Generate incomplete definitions concurrently.</span>
+                  <span class="settings-toggle-title">Code generation strategy</span>
+                  <span class="settings-toggle-description">Auto tries fast generation first, then falls back when needed.</span>
                 </span>
+                <select id="compilation-strategy-select" class="settings-select">
+                  <option value="auto"${appSettings.compilationStrategy === "auto" ? " selected" : ""}>Auto</option>
+                  <option value="parallel"${appSettings.compilationStrategy === "parallel" ? " selected" : ""}>Parallel</option>
+                  <option value="sequential"${appSettings.compilationStrategy === "sequential" ? " selected" : ""}>Sequential</option>
+                  <option value="agentic"${appSettings.compilationStrategy === "agentic" ? " selected" : ""}>Agentic</option>
+                </select>
               </label>
               <div class="menu-separator" role="separator"></div>
               <button id="reset-workspace-button" class="menu-item menu-item-danger" type="button" role="menuitem">
@@ -441,7 +443,7 @@ const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
 const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
-const parallelCompletionsToggle = requiredQuery<HTMLInputElement>("#parallel-completions-toggle");
+const compilationStrategySelect = requiredQuery<HTMLSelectElement>("#compilation-strategy-select");
 const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button");
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
@@ -745,8 +747,8 @@ resetWorkspaceButton.addEventListener("click", () => {
   sessionCapture.track("reset_workspace_requested", undefined, true);
   void resetWorkspace();
 });
-parallelCompletionsToggle.addEventListener("change", () => {
-  setExperimentalParallelCompletions(parallelCompletionsToggle.checked);
+compilationStrategySelect.addEventListener("change", () => {
+  setCompilationStrategy(compilationMode(compilationStrategySelect.value));
 });
 app.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
@@ -1054,21 +1056,21 @@ async function resetWorkspace(): Promise<void> {
   }
 }
 
-function setExperimentalParallelCompletions(enabled: boolean): void {
-  if (appSettings.experimentalParallelCompletions === enabled) {
-    parallelCompletionsToggle.checked = enabled;
+function setCompilationStrategy(strategy: CompilationMode): void {
+  if (appSettings.compilationStrategy === strategy) {
+    compilationStrategySelect.value = strategy;
     return;
   }
 
   appSettings = {
     ...appSettings,
-    experimentalParallelCompletions: enabled,
+    compilationStrategy: strategy,
   };
   saveAppSettings(appSettings);
-  parallelCompletionsToggle.checked = enabled;
+  compilationStrategySelect.value = strategy;
   sessionCapture.track("setting_changed", {
-    setting: "experimentalParallelCompletions",
-    enabled,
+    setting: "compilationStrategy",
+    strategy,
   }, true);
   scheduleCompilation(0);
 }
@@ -3400,7 +3402,7 @@ async function startInteractiveRunViaDevApi(
   const body = {
     sheet,
     runnable,
-    experimentalParallelCompletions: appSettings.experimentalParallelCompletions,
+    compilationStrategy: appSettings.compilationStrategy,
   };
   sessionCapture.track("api_request", {
     method: "POST",
@@ -3519,15 +3521,20 @@ async function pollInteractiveRunViaDevApi(
 }
 
 async function runCodeSheetViaDevApi(sheet: string, runnable: Runnable): Promise<RunOnceResponse> {
+  const body = {
+    sheet,
+    runnable,
+    compilationStrategy: appSettings.compilationStrategy,
+  };
   sessionCapture.track("api_request", {
     method: "POST",
     path: "/api/run",
-    body: { sheet, runnable },
+    body,
   });
   const response = await fetch("/api/run", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sheet, runnable }),
+    body: JSON.stringify(body),
   });
   const payload = (await response.json()) as {
     ok?: boolean;
@@ -3763,7 +3770,7 @@ async function* compileViaDevApi(
 ): AsyncIterable<CompileWireEvent> {
   const body = {
     sheet,
-    experimentalParallelCompletions: appSettings.experimentalParallelCompletions,
+    compilationStrategy: appSettings.compilationStrategy,
   };
   sessionCapture.track("api_request", {
     method: "POST",
@@ -4143,7 +4150,12 @@ function loadAppSettings(): AppSettings {
 
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
     return {
-      experimentalParallelCompletions: parsed.experimentalParallelCompletions === true,
+      compilationStrategy: compilationMode(
+        parsed.compilationStrategy ??
+          ((parsed as { experimentalParallelCompletions?: boolean }).experimentalParallelCompletions === true
+            ? "parallel"
+            : "auto"),
+      ),
     };
   } catch {
     return defaultAppSettings();
@@ -4160,8 +4172,14 @@ function saveAppSettings(settings: AppSettings): void {
 
 function defaultAppSettings(): AppSettings {
   return {
-    experimentalParallelCompletions: false,
+    compilationStrategy: "auto",
   };
+}
+
+function compilationMode(value: unknown): CompilationMode {
+  return value === "parallel" || value === "sequential" || value === "agentic" || value === "auto"
+    ? value
+    : "auto";
 }
 
 window.loadLogosSession = loadSession;
@@ -4208,7 +4226,7 @@ function appSnapshot(): JsonObject {
     },
     ui: {
       settings: {
-        experimentalParallelCompletions: appSettings.experimentalParallelCompletions,
+        compilationStrategy: appSettings.compilationStrategy,
       },
       selectedSampleId: activeSampleItem()?.dataset.sampleId ?? null,
       selectedSampleLabel: activeSampleItem()?.textContent ?? null,
