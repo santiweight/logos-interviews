@@ -93,10 +93,12 @@ The Share button stores a loadable session blob and returns a URL with
 Compile and run share a global code cache keyed by completion hash.
 
 Fly deployment is configured with `Dockerfile`, `fly.toml`, and
-`.github/workflows/deploy.yml`. Configure the repository with:
+`.github/workflows/deploy.yml`. The `Deploy dev` workflow runs automatically
+after CI passes on `main`. The `Deploy prod` workflow is manual-only and must be
+run from `main`. Configure GitHub environments named `dev` and `prod` with:
 
-- `FLY_API_TOKEN` repository secret
-- `FLY_APP_NAME` repository variable
+- `FLY_API_TOKEN` environment or repository secret
+- `FLY_APP_NAME` environment variable for that Fly app
 - `ANTHROPIC_API_KEY` Fly secret
 - object-storage secrets such as `BUCKET_NAME`, `AWS_ENDPOINT_URL_S3`,
   `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`
