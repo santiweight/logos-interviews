@@ -284,7 +284,7 @@ def test():
     samples: [
       {
         id: "starter-arithmetic",
-        label: "Basic",
+        label: "Intro to Logos",
         code: `# In Logos, LLMs will complete partial code for you.
 # Click \`add\` in the code view to see its implementation.
 def add(x: int, y: int) -> int
@@ -292,8 +292,8 @@ def add(x: int, y: int) -> int
 def mul(x: int, y: int) -> int
 
 # Click the run button to run this class (once it's been compiled).
-# Click \`test\` in the code view to see its implementation.
-def test_basic():
+# Click \`main\` in the code view to see its implementation.
+def main():
   # In Logos, you can use regular python...
   print(mul(add(1, 2), 3))
 
@@ -309,7 +309,7 @@ def test_basic():
       {
         id: "beyond-basics",
         label: "Beyond Basics",
-        code: `# You may also define classes, even if they're not complete!
+        code: `# You can also define classes, even if they're not complete!
 # Notice how the agent internally generates a field for tracking the grid.
 
 class MagicSquare:
@@ -318,12 +318,12 @@ class MagicSquare:
   def gen() -> MagicSquare
   def pretty() -> str
 
-def gen_magic_square():
+def test_magic_square():
   # Logos also support multi-line snippets.
   \`\`\`
-  generate a {MagicSquare}
+  generate a MagicSquare
   pretty print it
-  check the {MagicSquare} is valid, and show the work
+  check the MagicSquare is valid, and show the work
   \`\`\``,
       },
       {
@@ -655,6 +655,13 @@ def test_basic():
     expectedStdout: ["9", "9", "9", "12"],
   },
   {
+    sampleId: "starter-arithmetic",
+    name: "logos intro main arithmetic and snippets",
+    sheet: sampleById("starter-arithmetic").code,
+    runnable: "main",
+    expectedStdout: ["9", "9", "9", "12"],
+  },
+  {
     sampleId: "beyond-basics",
     name: "completed magic square pretty print",
     sheet: `class MagicSquare:
@@ -678,6 +685,23 @@ def test():
   print(square.pretty())`,
     runnable: "test",
     expectedStdout: ["3", "8 1 6", "3 5 7", "4 9 2"],
+  },
+  {
+    sampleId: "beyond-basics",
+    name: "unbraced magic square natural language template",
+    sheet: sampleById("beyond-basics").code,
+    runnable: "test_magic_square",
+    stdoutCheck: {
+      description: "prints a valid magic square and shows validation work",
+      matches(stdout) {
+        const joined = stdout.join("\n");
+        return (
+          stdout.length > 0 &&
+          /\b15\b/.test(joined) &&
+          /(?:valid|row|column|diagonal|magic)/i.test(joined)
+        );
+      },
+    },
   },
   {
     sampleId: "ascii-fractal",

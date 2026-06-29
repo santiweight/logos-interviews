@@ -655,6 +655,77 @@ print(ms.validate_with_work())`;
     });
   });
 
+  it("runs when the natural snippet references the MagicSquare class without braces", async () => {
+    const sheet = `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str
+
+def test_magic_square():
+  # Logos also support multi-line snippets.
+  \`\`\`
+  generate a MagicSquare
+  pretty print it
+  check the MagicSquare is valid, and show the work
+  \`\`\``;
+    let naturalPrompt = "";
+
+    const result = await runCodeSheet(sheet, "test_magic_square", {
+      complete(prompt) {
+        if (prompt.includes("Your job is to finish the implementation of:")) {
+          return `class MagicSquare:
+  size: int
+
+  def __init__(self, size: int = 3):
+    self.size = size
+    self.grid = [
+      [8, 1, 6],
+      [3, 5, 7],
+      [4, 9, 2],
+    ]
+
+  def gen(self) -> "MagicSquare":
+    return self
+
+  def pretty(self) -> str:
+    lines = ["+--+--+--+"]
+    for row in self.grid:
+      lines.append("|" + "|".join(f"{value} " for value in row) + "|")
+      lines.append("+--+--+--+")
+    return "\\n".join(lines)
+
+  def validate_with_work(self) -> str:
+    return "Rows, columns, and diagonals all sum to 15"`;
+        }
+
+        naturalPrompt = prompt;
+        return `ms = MagicSquare().gen()
+print(ms.pretty())
+print()
+print(ms.validate_with_work())`;
+      },
+    });
+
+    expect(naturalPrompt).toContain("generate a MagicSquare");
+    expect(naturalPrompt).toContain("class MagicSquare:");
+    expect(naturalPrompt).toContain("def validate_with_work(self) -> str:");
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: [
+        "+--+--+--+",
+        "|8 |1 |6 |",
+        "+--+--+--+",
+        "|3 |5 |7 |",
+        "+--+--+--+",
+        "|4 |9 |2 |",
+        "+--+--+--+",
+        "",
+        "Rows, columns, and diagonals all sum to 15",
+      ],
+    });
+  });
+
   it("runs additive function and async-function definition forms", async () => {
     const sheet = `add(x: int, y: int) -> int
 
