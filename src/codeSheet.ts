@@ -336,21 +336,42 @@ export async function* compile(
   let completedSnippets = 0;
   const completions: Completion[] = [];
   const emitProgress = options.emitProgress ?? true;
+  const initialCacheHits: Array<{ hash: SnippetHash; snippet: string; implementation: string }> = [];
 
   if (isAborted(options.signal)) {
     return;
   }
 
+  for (const node of ir.nodes) {
+    if (node.kind !== "incomplete" || node.state.kind !== "partial") {
+      continue;
+    }
+
+    const { hash, snippet } = node.state;
+    if (!codeCache.has(hash)) {
+      continue;
+    }
+
+    const cachedReplacement = codeCache.get(hash) ?? "";
+    node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
+    completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
+    completedSnippets += 1;
+    initialCacheHits.push({ hash, snippet, implementation: cachedReplacement });
+  }
+
   if (emitProgress) {
     yield { kind: "parsed", parsed };
     yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
-    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+    for (const hit of initialCacheHits) {
+      yield { kind: "cache-hit", hash: hit.hash, snippet: hit.snippet, implementation: hit.implementation };
+    }
     yield {
       kind: "implementation",
       source: renderImplementation(ir),
       completedSnippets,
       totalSnippets,
     };
+    yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
   }
 
   if (compileInParallel(options) && complete) {
@@ -378,13 +399,13 @@ export async function* compile(
         completedSnippets += 1;
         if (emitProgress) {
           yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-          yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
           yield {
             kind: "implementation",
             source: renderImplementation(ir),
             completedSnippets,
             totalSnippets,
           };
+          yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
         }
         continue;
       }
@@ -435,13 +456,13 @@ export async function* compile(
 
       if (emitProgress) {
         yield { kind: "llm-complete", hash: item.hash, implementation: item.replacement };
-        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
         yield {
           kind: "implementation",
           source: renderImplementation(ir),
           completedSnippets,
           totalSnippets,
         };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
       }
     }
 
@@ -474,13 +495,13 @@ export async function* compile(
       completedSnippets += 1;
       if (emitProgress) {
         yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
         yield {
           kind: "implementation",
           source: renderImplementation(ir),
           completedSnippets,
           totalSnippets,
         };
+        yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
       }
       continue;
     }
@@ -531,13 +552,13 @@ export async function* compile(
 
     if (emitProgress) {
       yield { kind: "llm-complete", hash, implementation: replacement };
-      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
       yield {
         kind: "implementation",
         source: renderImplementation(ir),
         completedSnippets,
         totalSnippets,
       };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
     }
   }
 

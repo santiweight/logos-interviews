@@ -99,11 +99,7 @@ function toWireEvent(event: CompilationEvent): Record<string, unknown> {
         totalSnippets: event.totalSnippets,
       };
     case "compiled":
-      return {
-        kind: "compiled",
-        implementation: event.completed.source,
-        completions: event.completed.completions,
-      };
+      return { kind: "compiled" };
   }
 }
 

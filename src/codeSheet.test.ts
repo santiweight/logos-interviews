@@ -1543,14 +1543,14 @@ print(square.pretty())`;
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
       "implementation",
+      "readiness",
       "llm-start",
       "llm-token",
       "llm-token",
       "llm-complete",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
     expect(renderImplementation(compiled.completed.ir)).toContain(
@@ -1576,8 +1576,8 @@ print(square.pretty())`;
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
     expect(compiled.completed.completions).toEqual([]);
@@ -1600,11 +1600,9 @@ print(square.pretty())`;
     expect(events.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
-      "implementation",
       "cache-hit",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
   });
@@ -2462,8 +2460,8 @@ def gen_magic_square():
     expect(firstEvents.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
       "implementation",
+      "readiness",
       "llm-start",
     ]);
     expect(calls).toHaveLength(1);
@@ -2483,15 +2481,13 @@ def gen_magic_square():
     expect(secondEvents.map((event) => event.kind)).toEqual([
       "parsed",
       "typecheck",
-      "readiness",
-      "implementation",
       "cache-hit",
-      "readiness",
       "implementation",
+      "readiness",
       "llm-start",
       "llm-complete",
-      "readiness",
       "implementation",
+      "readiness",
       "compiled",
     ]);
     expect(calls).toHaveLength(2);
