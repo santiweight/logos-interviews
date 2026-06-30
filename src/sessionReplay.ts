@@ -10,6 +10,47 @@ type SessionReplayResponse = {
   error?: string;
 };
 
+type SessionListResponse = {
+  ok?: boolean;
+  sessions?: SessionSummary[];
+  error?: string;
+};
+
+type SessionSummary = {
+  sessionId: string;
+  firstAt: string | null;
+  lastAt: string | null;
+  durationMs: number | null;
+  records: number;
+  replayEvents: number;
+  activeWithin5Minutes: boolean;
+  url: string | null;
+  referrer: string | null;
+  browser: {
+    userAgent: string | null;
+    platform: string | null;
+    language: string | null;
+    timezone: string | null;
+    timezoneOffsetMinutes: number | null;
+    localTime: string | null;
+    deviceType: string | null;
+    touchCapable: boolean | null;
+    viewport: unknown;
+    screen: unknown;
+    connection: unknown;
+  };
+  request: {
+    forwardedFor: string | null;
+    remoteAddress: string | null;
+  };
+  attribution: {
+    utm: unknown;
+    identity: unknown;
+    searchKeys: string[];
+  };
+  eventTypes: Array<{ type: string; count: number }>;
+};
+
 type CapturedSnapshot = {
   label: string;
   editor: string;
@@ -32,8 +73,13 @@ app.innerHTML = `
       <div class="replay-status" data-replay-status aria-live="polite"></div>
     </header>
     <div class="replay-content">
-      <aside class="replay-trace" data-replay-trace>
-        <div class="replay-empty">Load a captured session to inspect its trace.</div>
+      <aside class="replay-sidebar">
+        <section class="replay-sessions" data-replay-sessions>
+          <div class="replay-empty">Loading recent sessions...</div>
+        </section>
+        <section class="replay-trace" data-replay-trace>
+          <div class="replay-empty">Load a captured session to inspect its trace.</div>
+        </section>
       </aside>
       <section class="replay-player" data-replay-player></section>
     </div>
@@ -43,12 +89,15 @@ app.innerHTML = `
 const form = requiredQuery<HTMLFormElement>("[data-replay-form]");
 const sessionInput = requiredQuery<HTMLInputElement>("[name='sessionId']");
 const status = requiredQuery<HTMLDivElement>("[data-replay-status]");
+const sessionsRoot = requiredQuery<HTMLElement>("[data-replay-sessions]");
 const trace = requiredQuery<HTMLElement>("[data-replay-trace]");
 const playerRoot = requiredQuery<HTMLElement>("[data-replay-player]");
 let replayer: Replayer | null = null;
+let activeReplayEvents: eventWithTime[] = [];
 
 const initialSessionId = new URLSearchParams(window.location.search).get("sessionId") ?? "";
 sessionInput.value = initialSessionId;
+void loadSessionList();
 if (initialSessionId) {
   void loadReplay(initialSessionId);
 }
@@ -67,10 +116,96 @@ form.addEventListener("submit", (event) => {
   void loadReplay(sessionId);
 });
 
+async function loadSessionList(refresh = false): Promise<void> {
+  try {
+    const response = await fetch(`/api/session-events?limit=50${refresh ? "&refresh=1" : ""}`);
+    const payload = await response.json() as SessionListResponse;
+    if (!response.ok || payload.ok !== true || !Array.isArray(payload.sessions)) {
+      throw new Error(payload.error ?? "Session list request failed");
+    }
+
+    renderSessionList(payload.sessions);
+  } catch (error) {
+    sessionsRoot.innerHTML = `
+      <header class="replay-panel-header">
+        <h2>Recent sessions</h2>
+      </header>
+      <div class="replay-empty">${escapeHtml(error instanceof Error ? error.message : String(error))}</div>
+    `;
+  }
+}
+
+function renderSessionList(sessions: SessionSummary[]): void {
+  if (sessions.length === 0) {
+    sessionsRoot.innerHTML = `
+      <header class="replay-panel-header">
+        <h2>Recent sessions</h2>
+      </header>
+      <div class="replay-empty">No captured sessions found.</div>
+    `;
+    return;
+  }
+
+  const visibleSessions = sessions.slice(0, 50);
+  sessionsRoot.innerHTML = `
+    <header class="replay-panel-header">
+      <h2>Recent sessions</h2>
+      <button type="button" data-refresh-sessions>Refresh</button>
+    </header>
+    <div class="replay-session-list">
+      ${visibleSessions.map(renderSessionSummary).join("")}
+    </div>
+  `;
+
+  sessionsRoot.querySelector("[data-refresh-sessions]")?.addEventListener("click", () => {
+    void loadSessionList(true);
+  });
+
+  for (const button of sessionsRoot.querySelectorAll<HTMLButtonElement>("[data-session-id]")) {
+    button.addEventListener("click", () => {
+      const sessionId = button.dataset.sessionId ?? "";
+      if (!sessionId) {
+        return;
+      }
+
+      sessionInput.value = sessionId;
+      const url = new URL(window.location.href);
+      url.searchParams.set("sessionId", sessionId);
+      window.history.replaceState(null, "", url);
+      void loadReplay(sessionId);
+    });
+  }
+}
+
+function renderSessionSummary(session: SessionSummary): string {
+  const identity = identityLabel(session.attribution.identity);
+  const utm = utmLabel(session.attribution.utm);
+  const when = session.lastAt ? relativeTime(new Date(session.lastAt)) : "unknown";
+  const device = [
+    session.browser.deviceType,
+    browserName(session.browser.userAgent),
+    session.browser.timezone,
+  ].filter(Boolean).join(" - ");
+
+  return `
+    <button class="replay-session-card" type="button" data-session-id="${escapeAttribute(session.sessionId)}">
+      <span class="replay-session-title">
+        <span>${escapeHtml(identity ?? shortSessionId(session.sessionId))}</span>
+        ${session.activeWithin5Minutes ? `<strong>Live</strong>` : ""}
+      </span>
+      <span class="replay-session-meta">${escapeHtml(when)} - ${escapeHtml(device || "unknown device")}</span>
+      <span class="replay-session-meta">${escapeHtml(session.records.toLocaleString())} records - ${escapeHtml(session.replayEvents.toLocaleString())} replay</span>
+      ${utm ? `<span class="replay-session-meta">${escapeHtml(utm)}</span>` : ""}
+      ${session.request.forwardedFor ? `<span class="replay-session-meta">${escapeHtml(firstForwardedIp(session.request.forwardedFor))}</span>` : ""}
+    </button>
+  `;
+}
+
 async function loadReplay(sessionId: string): Promise<void> {
   setStatus("Loading...", "loading");
   trace.innerHTML = "";
   playerRoot.innerHTML = "";
+  activeReplayEvents = [];
   replayer?.destroy();
   replayer = null;
 
@@ -89,17 +224,133 @@ async function loadReplay(sessionId: string): Promise<void> {
       return;
     }
 
-    replayer = new Replayer(replayEvents, {
-      root: playerRoot,
-      showWarning: false,
-      mouseTail: false,
-    });
-    replayer.play();
-    setStatus(`${payload.records.length} records - ${replayEvents.length} replay events`, "ready");
+    activeReplayEvents = replayEvents;
+    renderReplayLauncher(replayEvents);
+    setStatus(`${payload.records.length} records - ${replayEvents.length} replay events ready`, "ready");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), "error");
     trace.innerHTML = `<div class="replay-empty">Could not load this session.</div>`;
+    playerRoot.innerHTML = "";
   }
+}
+
+function renderReplayLauncher(replayEvents: eventWithTime[]): void {
+  playerRoot.innerHTML = `
+    <div class="replay-launcher">
+      <button type="button" data-render-replay>Render replay</button>
+      <span>${escapeHtml(replayEvents.length.toLocaleString())} browser events loaded. Rendering is manual to keep this view responsive.</span>
+    </div>
+  `;
+
+  requiredQueryFrom<HTMLButtonElement>(playerRoot, "[data-render-replay]").addEventListener("click", () => {
+    renderReplayPlayer();
+  });
+}
+
+function renderReplayPlayer(): void {
+  if (activeReplayEvents.length === 0) {
+    return;
+  }
+
+  setStatus(`Rendering ${activeReplayEvents.length} replay events...`, "loading");
+  playerRoot.innerHTML = "";
+  replayer?.destroy();
+  replayer = null;
+
+  window.setTimeout(() => {
+    try {
+      replayer = new Replayer(activeReplayEvents, {
+        root: playerRoot,
+        showWarning: false,
+        mouseTail: false,
+      });
+      replayer.play();
+      setStatus(`${activeReplayEvents.length} replay events rendered`, "ready");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : String(error), "error");
+      playerRoot.innerHTML = `<div class="replay-launcher">Could not render replay.</div>`;
+    }
+  }, 0);
+}
+
+function identityLabel(value: unknown): string | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  for (const key of ["candidate", "candidateId", "interviewId", "participantId", "userId", "email"]) {
+    const item = value[key];
+    if (typeof item === "string" && item.length > 0) {
+      return `${key}: ${item}`;
+    }
+  }
+
+  return null;
+}
+
+function utmLabel(value: unknown): string | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  const source = typeof value.source === "string" ? value.source : "";
+  const campaign = typeof value.campaign === "string" ? value.campaign : "";
+  if (!source && !campaign) {
+    return null;
+  }
+
+  return ["utm", source, campaign].filter(Boolean).join(": ");
+}
+
+function browserName(userAgent: string | null): string | null {
+  if (!userAgent) {
+    return null;
+  }
+
+  if (userAgent.includes("Edg/")) {
+    return "Edge";
+  }
+  if (userAgent.includes("CriOS/")) {
+    return "Chrome iOS";
+  }
+  if (userAgent.includes("Chrome/")) {
+    return "Chrome";
+  }
+  if (userAgent.includes("Safari/")) {
+    return "Safari";
+  }
+  if (userAgent.includes("Firefox/")) {
+    return "Firefox";
+  }
+
+  return null;
+}
+
+function relativeTime(date: Date): string {
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1_000));
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+
+  return date.toLocaleString();
+}
+
+function shortSessionId(sessionId: string): string {
+  return sessionId.length > 12 ? `${sessionId.slice(0, 8)}...` : sessionId;
+}
+
+function firstForwardedIp(forwardedFor: string): string {
+  return forwardedFor.split(",")[0]?.trim() ?? forwardedFor;
 }
 
 function renderTrace(records: unknown[], replayEvents: eventWithTime[]): void {
@@ -215,8 +466,21 @@ function escapeHtml(source: string): string {
     .replaceAll("'", "&#039;");
 }
 
+function escapeAttribute(source: string): string {
+  return escapeHtml(source).replaceAll("`", "&#096;");
+}
+
 function requiredQuery<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
+  if (!element) {
+    throw new Error(`Missing required element: ${selector}`);
+  }
+
+  return element;
+}
+
+function requiredQueryFrom<T extends Element>(root: ParentNode, selector: string): T {
+  const element = root.querySelector<T>(selector);
   if (!element) {
     throw new Error(`Missing required element: ${selector}`);
   }

@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { gzipSync } from "node:zlib";
 import {
+  listSessionCaptureSummariesWithLimit,
   readSessionCaptureRecords,
   writeSessionCaptureRecords,
 } from "./captureStorage";
@@ -11,6 +13,12 @@ type SessionCapturePayload = {
 
 const maxBodyBytes = 10_000_000;
 const maxEventsPerRequest = 100;
+const sessionListCacheTtlMs = 10_000;
+let sessionListCache: {
+  limit: number;
+  expiresAt: number;
+  sessions: Awaited<ReturnType<typeof listSessionCaptureSummariesWithLimit>>;
+} | null = null;
 
 export async function handleSessionEvents(
   req: IncomingMessage,
@@ -24,24 +32,65 @@ export async function handleSessionEvents(
       const payload = await readJson(req);
       const records = normalizePayload(payload, req);
       await writeSessionCaptureRecords(records);
-      sendJson(res, 200, { ok: true, captured: records.length });
+      sendJson(req, res, 200, { ok: true, captured: records.length });
       return;
     }
 
     if (req.method === "GET" && sessionId !== null) {
-      await readSessionEvents(sessionId, res);
+      await readSessionEvents(req, sessionId, res);
       return;
     }
 
-    sendJson(res, 405, { ok: false, error: "Method not allowed" });
+    if (req.method === "GET" && sessionId === null) {
+      await listSessionEvents(req, url, res);
+      return;
+    }
+
+    sendJson(req, res, 405, { ok: false, error: "Method not allowed" });
   } catch (error) {
     const statusCode = error instanceof SessionCaptureError ? error.statusCode : 500;
     const message = error instanceof Error ? error.message : String(error);
-    sendJson(res, statusCode, { ok: false, error: message });
+    sendJson(req, res, statusCode, { ok: false, error: message });
   }
 }
 
-async function readSessionEvents(sessionId: string, res: ServerResponse): Promise<void> {
+async function listSessionEvents(req: IncomingMessage, url: URL, res: ServerResponse): Promise<void> {
+  if (process.env.SESSION_CAPTURE_READ_ENABLED !== "true") {
+    throw new SessionCaptureError(404, "Session capture replay is not enabled");
+  }
+
+  const limit = boundedInteger(url.searchParams.get("limit"), 1, 100, 50);
+  const refresh = url.searchParams.get("refresh") === "1";
+  const now = Date.now();
+  const sessions = !refresh && sessionListCache && sessionListCache.limit === limit && sessionListCache.expiresAt > now
+    ? sessionListCache.sessions
+    : await listSessionCaptureSummariesWithLimit(limit);
+  sessionListCache = {
+    limit,
+    expiresAt: now + sessionListCacheTtlMs,
+    sessions,
+  };
+
+  sendJson(req, res, 200, {
+    ok: true,
+    sessions,
+  });
+}
+
+function boundedInteger(value: string | null, min: number, max: number, fallback: number): number {
+  if (value === null) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(max, Math.max(min, parsed));
+}
+
+async function readSessionEvents(req: IncomingMessage, sessionId: string, res: ServerResponse): Promise<void> {
   if (process.env.SESSION_CAPTURE_READ_ENABLED !== "true") {
     throw new SessionCaptureError(404, "Session capture replay is not enabled");
   }
@@ -51,11 +100,12 @@ async function readSessionEvents(sessionId: string, res: ServerResponse): Promis
   }
 
   const records = await readSessionCaptureRecords(sessionId);
-  sendJson(res, 200, {
+  const replayEvents = replayEventsFromRecords(records);
+  sendJson(req, res, 200, {
     ok: true,
     sessionId,
-    records,
-    replayEvents: replayEventsFromRecords(records),
+    records: traceRecordsFromRecords(records),
+    replayEvents,
   });
 }
 
@@ -143,6 +193,26 @@ function replayEventsFromRecords(records: Array<Record<string, unknown>>): unkno
   return replayEvents.filter((event) => event !== null);
 }
 
+function traceRecordsFromRecords(records: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return records.map((record) => {
+    const event = record.event;
+    if (!isJsonObject(event) || event.type !== "dom_replay") {
+      return record;
+    }
+
+    return {
+      ...record,
+      event: {
+        ...event,
+        details: {
+          schema: isJsonObject(event.details) ? event.details.schema ?? null : null,
+          checkout: isJsonObject(event.details) ? event.details.checkout ?? null : null,
+        },
+      },
+    };
+  });
+}
+
 function sanitizeCaptureEvent(event: unknown): unknown {
   const maxDepth = isJsonObject(event) && event.type === "dom_replay" ? 120 : 20;
   const maxArrayLength = isJsonObject(event) && event.type === "dom_replay" ? 20_000 : 500;
@@ -193,11 +263,25 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 }
 
 function sendJson(
+  req: IncomingMessage,
   res: ServerResponse,
   statusCode: number,
   payload: Record<string, unknown>,
 ): void {
+  const body = JSON.stringify(payload);
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(payload));
+  if (body.length > 1_024 && acceptsGzip(req)) {
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Vary", "Accept-Encoding");
+    res.end(gzipSync(body));
+    return;
+  }
+
+  res.end(body);
+}
+
+function acceptsGzip(req: IncomingMessage): boolean {
+  const encoding = req.headers["accept-encoding"];
+  return typeof encoding === "string" && /\bgzip\b/i.test(encoding);
 }

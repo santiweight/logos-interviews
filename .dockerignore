@@ -4,6 +4,7 @@ node_modules
 dist
 dist-server
 .vite
+logs
 *.log
 .DS_Store
 .env
