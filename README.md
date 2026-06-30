@@ -62,9 +62,9 @@ rebuilds.
 The browser posts first-party session events to `/api/session-events` while the
 app is open. Events include clicks, form changes, editor snapshots, browser
 errors, page visibility changes, API request/response metadata, run results, and
-agent turns. Important events include an app snapshot with the current editor
-contents, output, implementation view, selected sample, active tab, run status,
-agent messages, viewport, focus state, and URL. Capture records are written as
+page changes. Important events include an app snapshot with the current editor
+contents, output, implementation view, selected sample, active page, active tab,
+run status, viewport, focus state, and URL. Capture records are written as
 newline-delimited JSON, one object per request, to avoid unsafe append writes to
 object storage.
 
