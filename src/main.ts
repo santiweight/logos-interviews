@@ -31,7 +31,6 @@ import {
   type SampleGroup,
   type SampleProgram,
 } from "./samples";
-import type { AgentChatMessage } from "./sheetAgent";
 import type { TypeCheckDiagnostic } from "./typeCheck";
 
 globalThis.MonacoEnvironment = {
@@ -56,6 +55,25 @@ type CompilationMode = "parallel" | "parallel-methods" | "sequential" | "agentic
 
 type AppSettings = {
   compilationStrategy: CompilationMode;
+};
+
+type AppPageId =
+  | "editor"
+  | "vision"
+  | "alternatives"
+  | "spec-driven"
+  | "technical"
+  | "roadmap";
+
+type AppPage = {
+  id: AppPageId;
+  label: string;
+  stubTitle?: string;
+};
+
+type LegacyAgentChatMessage = {
+  role: "user" | "assistant";
+  content: string;
 };
 
 type RunChunk = {
@@ -116,7 +134,7 @@ export type LoadableSession = {
   agent: {
     expanded: boolean;
     input: string;
-    messages: AgentChatMessage[];
+    messages: LegacyAgentChatMessage[];
   };
 };
 
@@ -186,14 +204,18 @@ let sourceTabs = initialSourceTabState.tabs;
 let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
 let appSettings = loadAppSettings();
+const appPages: AppPage[] = [
+  { id: "editor", label: "Logos Editor" },
+  { id: "vision", label: "Logos: The Vision" },
+  { id: "alternatives", label: "Why not Claude/Codex etc?" },
+  { id: "spec-driven", label: "Why not Spec-Driven Coding?" },
+  { id: "technical", label: "Technical: Compiling Natural Language" },
+  { id: "roadmap", label: "Roadmap" },
+];
+let activePageId: AppPageId = pageIdFromHash(window.location.hash) ?? "editor";
 
 const app = requiredQuery<HTMLDivElement>("#app");
 const lambdaMark = `<span class="lambda-mark" aria-hidden="true">λ</span>`;
-const sendIcon = `
-  <svg class="send-icon" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M10 3.4 5.4 8l1.1 1.1 2.7-2.7v10.2h1.6V6.4l2.7 2.7L14.6 8z" />
-  </svg>
-`;
 const plusIcon = `
   <svg class="plus-icon" viewBox="0 0 20 20" aria-hidden="true">
     <path d="M10 4.5v11M4.5 10h11" />
@@ -222,9 +244,32 @@ const shareIcon = `
     <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
   </svg>
 `;
-const logosWordmark = `<span class="logos-wordmark" aria-hidden="true">λogos</span>`;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
 const templateGroups = createTemplateGroups(sampleTemplateGroups);
+
+function renderAppNav(): string {
+  return appPages
+    .map(
+      (page) => `<button class="app-nav-item" type="button" data-app-page="${page.id}" aria-current="${page.id === activePageId ? "page" : "false"}">
+        <span>${page.label}</span>
+      </button>`,
+    )
+    .join("");
+}
+
+function renderStubPages(): string {
+  return appPages
+    .filter((page) => page.id !== "editor")
+    .map(
+      (page) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-labelledby="${page.id}-page-title"${page.id === activePageId ? "" : " hidden"}>
+        <div class="info-page-inner">
+          <p class="eyebrow">Coming soon</p>
+          <h1 id="${page.id}-page-title">${page.label}</h1>
+        </div>
+      </section>`,
+    )
+    .join("");
+}
 
 function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
   return `
@@ -296,22 +341,15 @@ function createTemplateGroups(groups: Array<{ label: string; sampleIds: string[]
 
 app.innerHTML = `
   <section class="app-frame" aria-label="Spreadsheet interview workspace">
-    <section id="shell" class="shell agent-collapsed">
-      <aside id="agent-sidebar" class="agent-sidebar">
-        <button id="agent-toggle" class="agent-toggle-button" type="button" aria-label="Open edit panel" aria-expanded="false" aria-controls="agent-content">
-          ${lambdaMark}
-        </button>
-        <div id="agent-content" class="agent-content">
-          ${renderFeedbackControls("agent")}
-          <div id="agent-log" class="agent-log" aria-live="polite"></div>
-          <form id="agent-form" class="agent-form">
-            <textarea id="agent-input" class="agent-input" rows="3" placeholder="Describe a change"></textarea>
-            <button id="agent-send" class="send-button" type="submit" aria-label="Send message" title="Send">
-              ${sendIcon}
-            </button>
-          </form>
-        </div>
-        <div class="agent-sidebar-footer">
+    <aside class="app-sidebar" aria-label="Application pages">
+      <div class="app-sidebar-brand">
+        ${lambdaMark}
+        <span class="logos-wordmark">λogos</span>
+      </div>
+      <nav id="app-nav" class="app-nav" aria-label="Pages">
+        ${renderAppNav()}
+      </nav>
+      <div class="app-sidebar-footer">
           <details id="workspace-menu" class="workspace-menu">
             <summary class="sidebar-menu-trigger" aria-label="Open settings menu" title="Settings">
               ${workspaceMenuIcon}
@@ -339,80 +377,83 @@ app.innerHTML = `
               </button>
             </div>
           </details>
-        </div>
-      </aside>
+      </div>
+    </aside>
 
-      <div id="agent-code-resize-handle" class="agent-code-resize-handle" aria-hidden="true"></div>
-
-      <section id="code-pane" class="code-pane" aria-label="Code editor panel">
-        <div class="source-tabs-bar">
-          <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
-          <details id="sample-menu" class="sample-menu">
-            <summary class="source-add-tab" aria-label="Add file" title="Add file">
-              ${plusIcon}
-            </summary>
-            <div class="menu-popover sample-popover" role="menu">
-              <div class="menu-section">
-                <button id="scratch-file-button" class="menu-item scratch-file-menu-item" type="button" role="menuitem">
-                  <span class="menu-item-icon">${plusIcon}</span>
-                  <span>Scratch new file</span>
-                </button>
-                <div class="menu-separator" role="separator"></div>
-                <div class="menu-section-title">Templates</div>
-                ${templateGroups.map(renderSampleGroup).join("")}
-              </div>
+    <main id="page-host" class="page-host">
+      <section id="editor-page" class="app-page editor-page${activePageId === "editor" ? " active" : ""}" data-page-id="editor" aria-label="Logos Editor"${activePageId === "editor" ? "" : " hidden"}>
+        <section id="shell" class="shell">
+          <section id="code-pane" class="code-pane" aria-label="Code editor panel">
+            <div class="source-tabs-bar">
+              <div id="source-tabs" class="source-tabs" role="tablist" aria-label="Open source projects"></div>
+              <details id="sample-menu" class="sample-menu">
+                <summary class="source-add-tab" aria-label="Add file" title="Add file">
+                  ${plusIcon}
+                </summary>
+                <div class="menu-popover sample-popover" role="menu">
+                  <div class="menu-section">
+                    <button id="scratch-file-button" class="menu-item scratch-file-menu-item" type="button" role="menuitem">
+                      <span class="menu-item-icon">${plusIcon}</span>
+                      <span>Scratch new file</span>
+                    </button>
+                    <div class="menu-separator" role="separator"></div>
+                    <div class="menu-section-title">Templates</div>
+                    ${templateGroups.map(renderSampleGroup).join("")}
+                  </div>
+                </div>
+              </details>
             </div>
-          </details>
-        </div>
-        <div id="editor" class="editor" aria-label="Code editor"></div>
-        <div class="code-feedback-overlay">
-          ${renderFeedbackControls("code", { includeShare: true })}
-        </div>
-        <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
+            <div id="editor" class="editor" aria-label="Code editor"></div>
+            <div class="code-feedback-overlay">
+              ${renderFeedbackControls("code", { includeShare: true })}
+            </div>
+            <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
+              <div
+                id="snippet-resize-handle"
+                class="snippet-resize-handle"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize incomplete implementation panel"
+                tabindex="0"
+              ></div>
+              <header class="snippet-panel-header">
+                <span id="snippet-status-indicator" class="snippet-status-indicator" aria-hidden="true"></span>
+                <h2 id="snippet-title">Compilation View</h2>
+                ${renderFeedbackControls("compilation")}
+              </header>
+              <div id="snippet-preview" class="snippet-preview" aria-label="Compilation preview"></div>
+            </section>
+          </section>
+
           <div
-            id="snippet-resize-handle"
-            class="snippet-resize-handle"
+            id="code-run-resize-handle"
+            class="code-run-resize-handle"
             role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize incomplete implementation panel"
+            aria-orientation="vertical"
+            aria-label="Resize code and run views"
             tabindex="0"
           ></div>
-          <header class="snippet-panel-header">
-            <span id="snippet-status-indicator" class="snippet-status-indicator" aria-hidden="true"></span>
-            <h2 id="snippet-title">Compilation View</h2>
-            ${renderFeedbackControls("compilation")}
-          </header>
-          <div id="snippet-preview" class="snippet-preview" aria-label="Compilation preview"></div>
+
+          <section id="output-pane" class="output-pane" aria-label="Program output panel">
+            <div class="source-tabs-bar output-tabs-bar">
+              <div id="tool-tabs-list" class="source-tabs output-tabs" role="tablist" aria-label="Run output views">
+              </div>
+              <span id="run-status" class="status"></span>
+              ${renderFeedbackControls("output")}
+            </div>
+            <div id="tool-panels" class="tool-panels">
+              <pre id="run-placeholder" class="output run-placeholder tab-panel active" aria-live="polite">Runs will appear here.</pre>
+            </div>
+          </section>
         </section>
       </section>
-
-      <div
-        id="code-run-resize-handle"
-        class="code-run-resize-handle"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize code and run views"
-        tabindex="0"
-      ></div>
-
-      <section id="output-pane" class="output-pane" aria-label="Program output panel">
-        <div class="source-tabs-bar output-tabs-bar">
-          <div id="tool-tabs-list" class="source-tabs output-tabs" role="tablist" aria-label="Run output views">
-          </div>
-          <span id="run-status" class="status"></span>
-          ${renderFeedbackControls("output")}
-        </div>
-        <div id="tool-panels" class="tool-panels">
-          <pre id="run-placeholder" class="output run-placeholder tab-panel active" aria-live="polite">Runs will appear here.</pre>
-        </div>
-      </section>
-    </section>
+      ${renderStubPages()}
+    </main>
   </section>
 `;
 
+const appNav = requiredQuery<HTMLElement>("#app-nav");
 const shell = requiredQuery<HTMLElement>("#shell");
-const agentSidebar = requiredQuery<HTMLElement>("#agent-sidebar");
-const agentCodeResizeHandle = requiredQuery<HTMLDivElement>("#agent-code-resize-handle");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const codePane = requiredQuery<HTMLElement>("#code-pane");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
@@ -437,19 +478,12 @@ const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
-const agentToggle = requiredQuery<HTMLButtonElement>("#agent-toggle");
-const agentLog = requiredQuery<HTMLDivElement>("#agent-log");
-const agentForm = requiredQuery<HTMLFormElement>("#agent-form");
-const agentInput = requiredQuery<HTMLTextAreaElement>("#agent-input");
-const agentSend = requiredQuery<HTMLButtonElement>("#agent-send");
 let lastRunLabel = "never";
 let lastRunStatusText = "";
 let lastRunCompletedAtMs: number | null = null;
 let lastRunStatusPrefix = "";
 let lastRunStatusState = "";
 let lastRunDefinitionHash: string | null = null;
-let agentMessages: AgentChatMessage[] = [];
-let agentExpanded = false;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
 let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1096,35 +1130,27 @@ toolTabsList.addEventListener("click", (event) => {
     sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
   }
 });
-agentToggle.addEventListener("click", (event) => {
-  event.stopPropagation();
-  const expanded = !agentExpanded;
-  setAgentExpanded(expanded);
-  sessionCapture.track("agent_toggle", { expanded }, true);
-});
-agentSidebar.addEventListener("click", (event) => {
-  if (agentExpanded) {
-    return;
-  }
-
+appNav.addEventListener("click", (event) => {
   const target = event.target;
-  if (target instanceof Element && target.closest("#workspace-menu")) {
+  if (!(target instanceof HTMLElement)) {
     return;
   }
 
-  setAgentExpanded(true);
-  sessionCapture.track("agent_sidebar_expand", undefined, true);
-});
-agentForm.addEventListener("submit", (event) => {
-  event.preventDefault();
-  sessionCapture.track("agent_submit", { input: agentInput.value }, true);
-  runAgentTurn();
+  const button = target.closest<HTMLButtonElement>("[data-app-page]");
+  if (!button) {
+    return;
+  }
+
+  const pageId = pageIdFromValue(button.dataset.appPage);
+  if (!pageId) {
+    return;
+  }
+
+  setActivePage(pageId, { updateHash: true });
+  sessionCapture.track("page_changed", { pageId }, true);
 });
 codeRunResizeHandle.addEventListener("pointerdown", (event) => {
   beginCodeRunResize(event);
-});
-agentCodeResizeHandle.addEventListener("pointerdown", (event) => {
-  beginAgentCodeResize(event);
 });
 codeRunResizeHandle.addEventListener("keydown", (event) => {
   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
@@ -1199,6 +1225,12 @@ sourceTabsEl.addEventListener("click", (event) => {
     activateSourceTab(tabButton.dataset.sourceTabId ?? "");
   }
 });
+window.addEventListener("hashchange", () => {
+  setActivePage(pageIdFromHash(window.location.hash) ?? "editor");
+});
+window.addEventListener("popstate", () => {
+  setActivePage(pageIdFromHash(window.location.hash) ?? "editor");
+});
 
 function openProject(sampleId: string): void {
   const sample = samples.find((item) => item.id === sampleId);
@@ -1216,8 +1248,43 @@ function closeOpenMenus(): void {
   workspaceMenu.open = false;
 }
 
+function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}): void {
+  activePageId = pageId;
+  document.querySelectorAll<HTMLElement>("[data-page-id]").forEach((page) => {
+    const active = page.dataset.pageId === pageId;
+    page.hidden = !active;
+    page.classList.toggle("active", active);
+  });
+  appNav.querySelectorAll<HTMLButtonElement>("[data-app-page]").forEach((button) => {
+    button.setAttribute("aria-current", button.dataset.appPage === pageId ? "page" : "false");
+  });
+
+  if (options.updateHash) {
+    const nextHash = pageId === "editor" ? "" : `#${pageId}`;
+    if (window.location.hash !== nextHash) {
+      history.pushState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+    }
+  }
+
+  if (pageId === "editor") {
+    requestAnimationFrame(() => {
+      editor.layout();
+      snippetPreviewEditor.layout();
+      updateShellResizeHandles();
+    });
+  }
+}
+
+function pageIdFromHash(hash: string): AppPageId | null {
+  return pageIdFromValue(hash.replace(/^#/, ""));
+}
+
+function pageIdFromValue(value: string | undefined): AppPageId | null {
+  return appPages.some((page) => page.id === value) ? (value as AppPageId) : null;
+}
+
 renderSourceTabs();
-renderAgentLog();
+setActivePage(activePageId);
 updateShellResizeHandles();
 setActiveCompilationSheet(activeSourceTabId);
 compileInactiveSheets();
@@ -1227,7 +1294,6 @@ const shellResizeObserver = new ResizeObserver(() => {
   updateShellResizeHandles();
 });
 shellResizeObserver.observe(shell);
-shellResizeObserver.observe(agentSidebar);
 shellResizeObserver.observe(codePane);
 shellResizeObserver.observe(outputPane);
 window.setInterval(() => {
@@ -1527,8 +1593,6 @@ function applyActiveSourceTab(): void {
   } finally {
     applyingSourceTab = false;
   }
-  agentMessages = [];
-  renderAgentLog();
   lastRunLabel = "never";
   lastRunCompletedAtMs = null;
   lastRunStatusPrefix = "";
@@ -3173,7 +3237,7 @@ function beginCodeRunResize(event: PointerEvent): void {
 function setCodePaneWidth(width: number): void {
   const shellRect = shell.getBoundingClientRect();
   const codeRect = codePane.getBoundingClientRect();
-  const minCodeWidth = agentExpanded ? 420 : 500;
+  const minCodeWidth = 500;
   const minOutputWidth = 340;
   const maxCodeWidth = Math.max(
     minCodeWidth,
@@ -3184,63 +3248,11 @@ function setCodePaneWidth(width: number): void {
   editor.layout();
 }
 
-function beginAgentCodeResize(event: PointerEvent): void {
-  if (window.matchMedia("(max-width: 1080px)").matches || !agentExpanded) {
-    return;
-  }
-
-  event.preventDefault();
-  agentCodeResizeHandle.setPointerCapture(event.pointerId);
-  shell.classList.add("resizing-code-run");
-
-  const startX = event.clientX;
-  const startAgentWidth = agentSidebar.getBoundingClientRect().width;
-  const startCodeWidth = codePane.getBoundingClientRect().width;
-  const minAgentWidth = 188;
-  const maxAgentWidth = 460;
-  const minCodeWidth = 420;
-
-  const onPointerMove = (moveEvent: PointerEvent): void => {
-    const delta = moveEvent.clientX - startX;
-    const minDelta = minAgentWidth - startAgentWidth;
-    const maxDelta = Math.min(
-      maxAgentWidth - startAgentWidth,
-      startCodeWidth - minCodeWidth,
-    );
-    const nextDelta = clamp(delta, minDelta, maxDelta);
-    shell.style.setProperty("--agent-pane-width", `${Math.round(startAgentWidth + nextDelta)}px`);
-    setCodePaneBasis(startCodeWidth - nextDelta);
-    editor.layout();
-    requestAnimationFrame(updateShellResizeHandles);
-  };
-  const onPointerUp = (): void => {
-    shell.classList.remove("resizing-code-run");
-    agentCodeResizeHandle.removeEventListener("pointermove", onPointerMove);
-    agentCodeResizeHandle.removeEventListener("pointerup", onPointerUp);
-    agentCodeResizeHandle.removeEventListener("pointercancel", onPointerUp);
-    requestAnimationFrame(updateShellResizeHandles);
-  };
-
-  agentCodeResizeHandle.addEventListener("pointermove", onPointerMove);
-  agentCodeResizeHandle.addEventListener("pointerup", onPointerUp);
-  agentCodeResizeHandle.addEventListener("pointercancel", onPointerUp);
-}
-
 function updateShellResizeHandles(): void {
   const shellRect = shell.getBoundingClientRect();
-  const codeRect = codePane.getBoundingClientRect();
   const outputRect = outputPane.getBoundingClientRect();
 
-  agentCodeResizeHandle.style.left = `${Math.round(codeRect.left - shellRect.left)}px`;
   codeRunResizeHandle.style.left = `${Math.round(outputRect.left - shellRect.left)}px`;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  if (max < min) {
-    return min;
-  }
-
-  return Math.min(max, Math.max(min, value));
 }
 
 function setCodePaneBasis(width: number): void {
@@ -4345,123 +4357,6 @@ class RunSessionNotFoundError extends Error {
   }
 }
 
-async function runAgentTurn(): Promise<void> {
-  const content = agentInput.value.trim();
-  if (content.length === 0) {
-    return;
-  }
-
-  setAgentExpanded(true);
-  const nextMessages: AgentChatMessage[] = [
-    ...agentMessages,
-    { role: "user", content },
-  ];
-  agentMessages = nextMessages;
-  agentInput.value = "";
-  agentInput.disabled = true;
-  agentSend.disabled = true;
-  renderAgentLog("Working...");
-
-  const result = await askAgent(editor.getValue(), nextMessages).catch((error: unknown) => ({
-    reply: error instanceof Error ? error.message : String(error),
-    sheet: null,
-    error: true,
-  }));
-
-  agentMessages = [
-    ...nextMessages,
-    { role: "assistant", content: result.reply },
-  ];
-
-  if (!("error" in result) && result.sheet !== null && result.sheet !== editor.getValue()) {
-    closeAllRunTabs();
-    editor.setValue(result.sheet);
-    agentMessages = [
-      ...agentMessages,
-      { role: "assistant", content: "Applied the updated sheet." },
-    ];
-  }
-
-  agentInput.disabled = false;
-  agentSend.disabled = false;
-  renderAgentLog();
-  sessionCapture.track(
-    "agent_turn_completed",
-    {
-      reply: result.reply,
-      sheet: result.sheet,
-      error: "error" in result,
-    },
-    true,
-  );
-  agentInput.focus();
-}
-
-async function askAgent(
-  sheet: string,
-  messages: AgentChatMessage[],
-): Promise<{ reply: string; sheet: string | null }> {
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/agent/chat",
-    body: { sheet, messages },
-  });
-  const response = await fetch("/api/agent/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sheet, messages }),
-  });
-
-  const payload = (await response.json()) as {
-    reply?: string;
-    sheet?: string | null;
-    error?: string;
-  };
-
-  sessionCapture.track("api_response", {
-    method: "POST",
-    path: "/api/agent/chat",
-    status: response.status,
-    body: payload,
-  });
-
-  if (!response.ok || typeof payload.reply !== "string") {
-    throw new Error(payload.error ?? "Request failed");
-  }
-  if (payload.sheet !== null && typeof payload.sheet !== "string") {
-    throw new Error("Response returned an invalid sheet");
-  }
-
-  return { reply: payload.reply, sheet: payload.sheet };
-}
-
-function renderAgentLog(status?: string): void {
-  if (agentMessages.length === 0 && !status) {
-    agentLog.innerHTML = "";
-    return;
-  }
-
-  agentLog.innerHTML = [
-    ...agentMessages.map((message) => {
-      const roleClass = message.role === "user" ? "agent-message-user" : "agent-message-assistant";
-      return `<div class="agent-message ${roleClass}">
-        <div class="agent-message-content">${escapeHtml(message.content)}</div>
-      </div>`;
-    }),
-    status ? `<div class="agent-empty">${escapeHtml(status)}</div>` : "",
-  ].join("");
-  agentLog.scrollTop = agentLog.scrollHeight;
-}
-
-function setAgentExpanded(expanded: boolean): void {
-  agentExpanded = expanded;
-  shell.classList.toggle("agent-collapsed", !expanded);
-  agentToggle.setAttribute("aria-expanded", String(expanded));
-  agentToggle.setAttribute("aria-label", expanded ? "Close edit panel" : "Open edit panel");
-  agentToggle.innerHTML = expanded ? logosWordmark : lambdaMark;
-  requestAnimationFrame(updateShellResizeHandles);
-}
-
 function escapeHtml(source: string): string {
   return source
     .replaceAll("&", "&amp;")
@@ -4607,9 +4502,9 @@ export function createLoadableSession(): LoadableSession {
       })),
     },
     agent: {
-      expanded: agentExpanded,
-      input: agentInput.value,
-      messages: agentMessages.map((message) => ({ ...message })),
+      expanded: false,
+      input: "",
+      messages: [],
     },
   };
 }
@@ -4656,9 +4551,6 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     lastRunDefinitionHash = session.run.lastRunDefinitionHash;
     runStatus.textContent = lastRunStatusText || session.run.runStatus.text;
     runStatus.dataset.state = lastRunStatusState;
-    agentMessages = session.agent.messages.map((message) => ({ ...message }));
-    agentInput.value = session.agent.input;
-    setAgentExpanded(session.agent.expanded);
 
     runTabs = session.run.tabs.map((tab) => ({
       id: tab.id,
@@ -4700,7 +4592,6 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     }
     restoreLoadableSelection(session.compilation.selection);
     renderSnippetPanel();
-    renderAgentLog("Session loaded");
 
     if (session.editor.cursor) {
       editor.setPosition(session.editor.cursor);
@@ -5015,16 +4906,7 @@ function appSnapshot(): JsonObject {
             label: incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
             preview: snippetPreviewEditor.getValue(),
           },
-    },
-    agent: {
-      expanded: agentExpanded,
-      input: agentInput.value,
-      inputDisabled: agentInput.disabled,
-      sendDisabled: agentSend.disabled,
-      messages: agentMessages.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      activePageId,
     },
   };
 }
