@@ -114,14 +114,31 @@ describe("session capture", () => {
       });
 
       expect(response.status).toBe(200);
-      expect(s3Requests).toHaveLength(1);
-      expect(s3Requests[0].method).toBe("PUT");
-      expect(s3Requests[0].url).toMatch(
+      expect(s3Requests).toHaveLength(2);
+      const sessionEventsRequest = s3Requests.find((request) => request.url.includes("/session-capture/session-events/"));
+      const sessionIndexRequest = s3Requests.find((request) => request.url.includes("/session-capture/session-index/"));
+      expect(sessionEventsRequest?.method).toBe("PUT");
+      expect(sessionEventsRequest?.url).toMatch(
         /^\/capture-bucket\/session-capture\/session-events\/\d{4}\/\d{2}\/\d{2}\/.+\.jsonl/,
       );
-      expect(JSON.parse(s3Requests[0].body.trim())).toMatchObject({
+      expect(JSON.parse(sessionEventsRequest?.body.trim() ?? "{}")).toMatchObject({
         sessionId: "session-1",
         event: { seq: 0, type: "session_start" },
+      });
+      expect(sessionIndexRequest?.method).toBe("PUT");
+      expect(sessionIndexRequest?.url).toMatch(
+        /^\/capture-bucket\/session-capture\/session-index\/\d{4}\/\d{2}\/\d{2}\/.+\.jsonl/,
+      );
+      const sessionIndexRecord = JSON.parse(sessionIndexRequest?.body.trim() ?? "{}") as {
+        eventObjectKey?: string;
+        summary?: { sessionId?: string; records?: number };
+      };
+      expect(sessionIndexRecord).toMatchObject({
+        eventObjectKey: expect.stringMatching(/^session-capture\/session-events\//),
+        summary: {
+          sessionId: "session-1",
+          records: 1,
+        },
       });
     } finally {
       await closeServer(appServer);
@@ -184,6 +201,131 @@ describe("session capture", () => {
         expect(payload.replayEvents).toEqual([
           { type: 2, timestamp: 10, data: { source: 1, nested: nestedReplayNode(30) } },
         ]);
+      } finally {
+        await closeServer(server);
+      }
+    } finally {
+      if (previousDir === undefined) {
+        delete process.env.SESSION_CAPTURE_DIR;
+      } else {
+        process.env.SESSION_CAPTURE_DIR = previousDir;
+      }
+      if (previousReadEnabled === undefined) {
+        delete process.env.SESSION_CAPTURE_READ_ENABLED;
+      } else {
+        process.env.SESSION_CAPTURE_READ_ENABLED = previousReadEnabled;
+      }
+      restoreEnv(previousStorageEnv);
+    }
+  });
+
+  it("lists captured session summaries when replay reads are enabled", async () => {
+    logDir = await mkdtemp(join(tmpdir(), "logos-session-list-"));
+    const previousDir = process.env.SESSION_CAPTURE_DIR;
+    const previousReadEnabled = process.env.SESSION_CAPTURE_READ_ENABLED;
+    const previousStorageEnv = snapshotEnv(objectStorageEnvKeys);
+    process.env.SESSION_CAPTURE_DIR = logDir;
+    process.env.SESSION_CAPTURE_READ_ENABLED = "true";
+    clearEnv(previousStorageEnv);
+
+    try {
+      const server = createServer((req, res) => {
+        void handleSessionEvents(req, res);
+      });
+      const baseUrl = await listen(server);
+
+      try {
+        const writeResponse = await fetch(`${baseUrl}/api/session-events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: "session-list-1",
+            events: [
+              {
+                seq: 0,
+                type: "session_start",
+                occurredAt: "2026-06-29T20:00:00.000Z",
+                url: "https://logos-dev.fly.dev/?candidateId=candidate-1&utm_source=invite",
+                details: {
+                  userAgent: "Test Browser",
+                  language: "en-US",
+                  platform: "MacIntel",
+                  timezone: "America/New_York",
+                  timezoneOffsetMinutes: 240,
+                  localTime: "Mon Jun 29 2026 16:00:00 GMT-0400",
+                  deviceType: "desktop",
+                  touchCapable: false,
+                  viewport: { width: 1200, height: 800 },
+                  screen: { width: 1440, height: 900 },
+                  referrer: "https://calendar.example/interview",
+                  attribution: {
+                    searchKeys: ["candidateId", "utm_source"],
+                    utm: { source: "invite" },
+                    identity: { candidateId: "candidate-1" },
+                  },
+                  connection: { effectiveType: "4g" },
+                },
+              },
+              {
+                seq: 1,
+                type: "dom_replay",
+                occurredAt: "2026-06-29T20:00:01.000Z",
+                details: { event: { type: 2, timestamp: 1 } },
+              },
+            ],
+          }),
+        });
+        expect(writeResponse.status).toBe(200);
+        const indexLines = (await readFile(join(logDir, "session-index.jsonl"), "utf8"))
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as { summary?: { sessionId?: string } });
+        expect(indexLines.some((line) => line.summary?.sessionId === "session-list-1")).toBe(true);
+
+        const listResponse = await fetch(`${baseUrl}/api/session-events`);
+        expect(listResponse.status).toBe(200);
+
+        const payload = await listResponse.json() as {
+          ok?: boolean;
+          sessions?: Array<{
+            sessionId?: string;
+            records?: number;
+            replayEvents?: number;
+            url?: string;
+            referrer?: string;
+            browser?: {
+              timezone?: string;
+              timezoneOffsetMinutes?: number;
+              deviceType?: string;
+              connection?: unknown;
+            };
+            attribution?: {
+              identity?: unknown;
+              utm?: unknown;
+              searchKeys?: string[];
+            };
+          }>;
+        };
+
+        expect(payload.ok).toBe(true);
+        expect(payload.sessions?.[0]).toMatchObject({
+          sessionId: "session-list-1",
+          records: 2,
+          replayEvents: 1,
+          url: "https://logos-dev.fly.dev/?candidateId=candidate-1&utm_source=invite",
+          referrer: "https://calendar.example/interview",
+          browser: {
+            timezone: "America/New_York",
+            timezoneOffsetMinutes: 240,
+            deviceType: "desktop",
+            connection: { effectiveType: "4g" },
+          },
+          attribution: {
+            identity: { candidateId: "candidate-1" },
+            utm: { source: "invite" },
+            searchKeys: ["candidateId", "utm_source"],
+          },
+        });
       } finally {
         await closeServer(server);
       }
