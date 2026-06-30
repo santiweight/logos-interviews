@@ -213,6 +213,7 @@ export function createSessionCapture(options: SessionCaptureOptions): SessionCap
   }, 5_000);
 
   capture.track("session_start", browserSnapshot(), true);
+  void flush();
   startDomReplayCapture(capture);
 
   async function flush(): Promise<void> {
@@ -383,21 +384,42 @@ function safeSessionStorageSet(key: string, value: string): void {
 }
 
 function browserSnapshot(): JsonObject {
+  const now = new Date();
+  const attribution = urlAttribution(window.location.href, document.referrer);
+  const connection = connectionSnapshot();
+  const userAgentData = userAgentDataSnapshot();
+  const device = deviceSnapshot();
+
   return {
     userAgent: window.navigator.userAgent,
+    userAgentData,
     language: window.navigator.language,
     languages: [...window.navigator.languages],
     platform: window.navigator.platform,
+    vendor: window.navigator.vendor,
     hardwareConcurrency: window.navigator.hardwareConcurrency,
+    deviceMemory: deviceMemory(),
     cookieEnabled: window.navigator.cookieEnabled,
+    doNotTrack: window.navigator.doNotTrack,
+    maxTouchPoints: window.navigator.maxTouchPoints,
+    touchCapable: device.touchCapable,
+    deviceType: device.deviceType,
     viewport: viewportSnapshot(),
     screen: {
       width: window.screen.width,
       height: window.screen.height,
+      availWidth: window.screen.availWidth,
+      availHeight: window.screen.availHeight,
       colorDepth: window.screen.colorDepth,
       pixelDepth: window.screen.pixelDepth,
     },
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timezoneOffsetMinutes: now.getTimezoneOffset(),
+    localTime: now.toString(),
+    localIsoTime: now.toISOString(),
+    referrer: document.referrer || null,
+    attribution,
+    connection,
   };
 }
 
@@ -409,6 +431,125 @@ function viewportSnapshot(): JsonObject {
     scrollX: window.scrollX,
     scrollY: window.scrollY,
   };
+}
+
+function urlAttribution(url: string, referrer: string): JsonObject {
+  const currentUrl = safeUrl(url);
+  const referrerUrl = referrer ? safeUrl(referrer) : null;
+  const params = currentUrl?.searchParams ?? null;
+
+  return {
+    url,
+    origin: currentUrl?.origin,
+    path: currentUrl?.pathname,
+    searchKeys: params ? [...params.keys()].sort() : [],
+    hashPresent: currentUrl ? currentUrl.hash.length > 0 : false,
+    referrer,
+    referrerOrigin: referrerUrl?.origin,
+    referrerPath: referrerUrl?.pathname,
+    utm: params
+      ? {
+          source: params.get("utm_source"),
+          medium: params.get("utm_medium"),
+          campaign: params.get("utm_campaign"),
+          term: params.get("utm_term"),
+          content: params.get("utm_content"),
+          id: params.get("utm_id"),
+        }
+      : null,
+    identity: params
+      ? {
+          candidate: firstParam(params, ["candidate", "candidate_name"]),
+          candidateId: firstParam(params, ["candidateId", "candidate_id"]),
+          interviewId: firstParam(params, ["interviewId", "interview_id"]),
+          participantId: firstParam(params, ["participantId", "participant_id"]),
+          userId: firstParam(params, ["userId", "user_id"]),
+          email: firstParam(params, ["email"]),
+        }
+      : null,
+  };
+}
+
+function firstParam(params: URLSearchParams, names: string[]): string | null {
+  for (const name of names) {
+    const value = params.get(name);
+    if (value !== null && value.length > 0) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function safeUrl(value: string): URL | null {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function connectionSnapshot(): JsonObject | null {
+  const connection = (window.navigator as Navigator & {
+    connection?: {
+      effectiveType?: string;
+      downlink?: number;
+      rtt?: number;
+      saveData?: boolean;
+    };
+  }).connection;
+
+  if (!connection) {
+    return null;
+  }
+
+  return {
+    effectiveType: connection.effectiveType,
+    downlink: connection.downlink,
+    rtt: connection.rtt,
+    saveData: connection.saveData,
+  };
+}
+
+function userAgentDataSnapshot(): JsonObject | null {
+  const userAgentData = (window.navigator as Navigator & {
+    userAgentData?: {
+      brands?: Array<{ brand: string; version: string }>;
+      mobile?: boolean;
+      platform?: string;
+    };
+  }).userAgentData;
+
+  if (!userAgentData) {
+    return null;
+  }
+
+  return {
+    brands: userAgentData.brands?.map((brand) => ({
+      brand: brand.brand,
+      version: brand.version,
+    })),
+    mobile: userAgentData.mobile,
+    platform: userAgentData.platform,
+  };
+}
+
+function deviceSnapshot(): { deviceType: string; touchCapable: boolean } {
+  const userAgent = window.navigator.userAgent;
+  const touchCapable = window.navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+  const isTablet = /iPad|Tablet|PlayBook|Silk/i.test(userAgent) ||
+    (/Android/i.test(userAgent) && !/Mobile/i.test(userAgent));
+  const isMobile = /Mobi|Android|iPhone|iPod|Windows Phone/i.test(userAgent) && !isTablet;
+
+  return {
+    deviceType: isTablet ? "tablet" : isMobile ? "mobile" : "desktop",
+    touchCapable,
+  };
+}
+
+function deviceMemory(): number | null {
+  const value = (window.navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  return typeof value === "number" ? value : null;
 }
 
 function describeFormEvent(target: EventTarget | null): JsonObject {
