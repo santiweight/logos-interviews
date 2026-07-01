@@ -615,8 +615,9 @@ function appReturnPromptGuidance(source: string, snippet: string): string {
   return `
 The surrounding function returns App/WebPage. Generate valid TypeScript statements that compute fixture-backed data and end by returning one complete HTML string. Prefer simple named local variables over dense inline expressions. Do not satisfy this by only printing to console, and do not return a textual summary.
 When writing UI code, think only about producing executable code. Do not explain the design, mention these instructions, or invent a design-system abstraction.
-Use a shadcn/ui-style operational interface: neutral background, white surfaces, subtle borders, radius <= 8px, compact typography, tabular numbers, lucide-style icon metaphors when icons are needed, table-first layouts, metric cards for headline numbers, tabs/sheets/dialogs/dropdowns/forms for standard workflows, and restrained color for positive/negative state.
-Do not hand-roll unusual controls or decorative chrome. Avoid gradients, blobs, marketing heroes, oversized illustration, and ornamental panels. If React/shadcn components are available in the target project, import and use them; otherwise implement the same visual conventions with plain semantic HTML and CSS.`;
+The Logos app runtime provides a global shadcn helper object. Use it for UI output instead of hand-writing raw page chrome. Available helpers include shadcn.renderApp, shadcn.Page, shadcn.Card, shadcn.CardHeader, shadcn.CardTitle, shadcn.CardDescription, shadcn.CardContent, shadcn.Button, shadcn.SecondaryButton, shadcn.Row, shadcn.Stack, shadcn.Metric, shadcn.Text, shadcn.Div, shadcn.Span, and shadcn.Script.
+Use a shadcn/ui-style operational interface: neutral background, white surfaces, subtle borders, radius <= 8px, compact typography, tabular numbers, table-first layouts, metric cards for headline numbers, standard button/card/form patterns, and restrained color for positive/negative state.
+Do not hand-roll unusual controls or decorative chrome. Avoid gradients, blobs, marketing heroes, oversized illustration, and ornamental panels.`;
 }
 
 export function normalizeSnippet(

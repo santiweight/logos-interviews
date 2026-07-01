@@ -453,10 +453,133 @@ function runtimePrelude(parsed: ParsedTypeScriptSheet): string {
     parsed.functions.some((fn) => fn.returnType === "App" || fn.returnType === "WebPage");
   return [
     needsWebPage ? "type WebPage = string;" : "",
+    needsWebPage ? shadcnRuntimePrelude() : "",
     `function looksLikeHtml(value: string): boolean {
   return /^\\s*(?:<!doctype\\s+html|<html\\b|<[a-z][\\s\\S]*>)/i.test(value);
 }`,
   ].filter(Boolean).join("\n\n");
+}
+
+function shadcnRuntimePrelude(): string {
+  return `type ShadcnChild = unknown;
+type ShadcnProps = {
+  className?: string;
+  children?: ShadcnChild;
+  id?: string;
+  type?: string;
+  onClick?: string;
+  onclick?: string;
+  [key: string]: unknown;
+};
+
+const shadcn = (() => {
+  const baseCss = \`
+    :root {
+      color-scheme: light;
+      --background: #f7f7f8;
+      --foreground: #18181b;
+      --card: #ffffff;
+      --card-foreground: #18181b;
+      --muted: #f4f4f5;
+      --muted-foreground: #71717a;
+      --border: #e4e4e7;
+      --primary: #18181b;
+      --primary-foreground: #fafafa;
+      --ring: rgba(24, 24, 27, 0.18);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--background); color: var(--foreground); font-family: inherit; }
+    .logos-page { max-width: 1120px; margin: 0 auto; padding: 32px; }
+    .logos-page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+    .logos-page-title { margin: 0; font-size: 24px; font-weight: 720; letter-spacing: 0; }
+    .logos-page-description { margin: 6px 0 0; color: var(--muted-foreground); font-size: 14px; }
+    .logos-card { border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--card-foreground); box-shadow: 0 1px 2px rgba(24, 24, 27, 0.04); }
+    .logos-card-header { display: grid; gap: 4px; padding: 18px 20px 0; }
+    .logos-card-title { margin: 0; font-size: 16px; font-weight: 680; }
+    .logos-card-description { margin: 0; color: var(--muted-foreground); font-size: 13px; }
+    .logos-card-content { padding: 20px; }
+    .logos-button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; border: 1px solid transparent; border-radius: 6px; background: var(--primary); color: var(--primary-foreground); cursor: pointer; font: inherit; font-size: 14px; font-weight: 620; padding: 0 14px; text-decoration: none; transition: background-color 120ms ease, box-shadow 120ms ease, transform 120ms ease; }
+    .logos-button:hover { background: #27272a; }
+    .logos-button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+    .logos-button:active { transform: translateY(1px); }
+    .logos-button-secondary { border-color: var(--border); background: #ffffff; color: var(--foreground); }
+    .logos-button-secondary:hover { background: var(--muted); }
+    .logos-stack { display: grid; gap: 16px; }
+    .logos-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+    .logos-metric { font-variant-numeric: tabular-nums; font-size: 42px; font-weight: 760; letter-spacing: 0; line-height: 1; }
+    .logos-muted { color: var(--muted-foreground); }
+  \`;
+
+  const classNames = (...values: Array<string | undefined | false | null>): string => values.filter(Boolean).join(" ");
+  const escapeHtml = (value: unknown): string => String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+  const escapeAttribute = (value: unknown): string => escapeHtml(value).replaceAll("'", "&#39;");
+  const renderChild = (child: ShadcnChild): string => {
+    if (Array.isArray(child)) return child.map(renderChild).join("");
+    if (child === null || child === undefined || child === false) return "";
+    return String(child);
+  };
+  const renderChildren = (children: ShadcnChild[]): string => children.map(renderChild).join("");
+  const attrs = (props: ShadcnProps): string => Object.entries(props)
+    .filter(([key, value]) => key !== "children" && value !== undefined && value !== null && value !== false)
+    .map(([key, value]) => {
+      const attr = key === "className" ? "class" : key === "onClick" ? "onclick" : key;
+      return value === true ? attr : \`\${attr}="\${escapeAttribute(value)}"\`;
+    })
+    .join(" ");
+  const element = (tag: string, props: ShadcnProps = {}, ...children: ShadcnChild[]): string => {
+    const inner = renderChildren(children.length > 0 ? children : [props.children]);
+    const attr = attrs(props);
+    return \`<\${tag}\${attr.length > 0 ? \` \${attr}\` : ""}>\${inner}</\${tag}>\`;
+  };
+
+  return {
+    cn: classNames,
+    html: escapeHtml,
+    Div: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", props, ...children),
+    Span: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("span", props, ...children),
+    Text: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("p", { ...props, className: classNames("logos-muted", props.className) }, ...children),
+    Button: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("button", { type: "button", ...props, className: classNames("logos-button", props.className) }, ...children),
+    SecondaryButton: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("button", { type: "button", ...props, className: classNames("logos-button logos-button-secondary", props.className) }, ...children),
+    Card: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("section", { ...props, className: classNames("logos-card", props.className) }, ...children),
+    CardHeader: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-card-header", props.className) }, ...children),
+    CardTitle: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("h2", { ...props, className: classNames("logos-card-title", props.className) }, ...children),
+    CardDescription: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("p", { ...props, className: classNames("logos-card-description", props.className) }, ...children),
+    CardContent: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-card-content", props.className) }, ...children),
+    Metric: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-metric", props.className) }, ...children),
+    Row: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-row", props.className) }, ...children),
+    Stack: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-stack", props.className) }, ...children),
+    Page: (props: ShadcnProps & { title?: string; description?: string } = {}, ...children: ShadcnChild[]) => {
+      const header = props.title || props.description
+        ? element("header", { className: "logos-page-header" },
+          element("div", {},
+            props.title ? element("h1", { className: "logos-page-title" }, escapeHtml(props.title)) : "",
+            props.description ? element("p", { className: "logos-page-description" }, escapeHtml(props.description)) : "",
+          ),
+        )
+        : "";
+      return element("main", { ...props, className: classNames("logos-page", props.className) }, header, ...(children.length > 0 ? children : [props.children]));
+    },
+    Script: (source: string) => \`<script>\${source}</script>\`,
+    renderApp: (body: ShadcnChild, options: { title?: string; scripts?: string[]; styles?: string } = {}): WebPage => \`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>\${escapeHtml(options.title ?? "Logos App")}</title>
+  <style data-shadcn-runtime="true">\${baseCss}\${options.styles ?? ""}</style>
+</head>
+<body>
+  \${renderChildren([body])}
+  \${(options.scripts ?? []).map((script) => \`<script>\${script}</script>\`).join("\\n")}
+</body>
+</html>\`,
+  };
+})();`;
 }
 
 function lowerBody(body: string): string {

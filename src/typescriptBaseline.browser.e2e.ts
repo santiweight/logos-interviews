@@ -153,7 +153,67 @@ describe("Logos-TS browser baseline", () => {
 
     expect(browserErrors).toEqual([]);
   }, 240_000);
+
+  it("renders a hard-coded shadcn counter HTML artifact and handles clicks", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const page = await browser.newPage();
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        browserErrors.push(message.text());
+      }
+    });
+
+    await page.setContent(shadcnCounterHtmlFixture(), { waitUntil: "load" });
+    await expect.poll(async () => page.locator("#count").textContent()).toBe("0");
+    await page.locator("#increment").click();
+    await expect.poll(async () => page.locator("#count").textContent()).toBe("1");
+    await page.locator("#increment").click();
+    await expect.poll(async () => page.locator("#count").textContent()).toBe("2");
+    expect(browserErrors).toEqual([]);
+    await page.close();
+  });
 });
+
+function shadcnCounterHtmlFixture(): string {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hello shadcn Counter</title>
+  <style data-shadcn-runtime="true">
+    body { margin: 0; min-height: 100vh; background: #f7f7f8; color: #18181b; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    main { max-width: 720px; margin: 0 auto; padding: 32px; }
+    .card { border: 1px solid #e4e4e7; border-radius: 8px; background: white; box-shadow: 0 1px 2px rgba(24, 24, 27, 0.04); }
+    .card-header { padding: 18px 20px 0; }
+    .card-content { display: grid; gap: 16px; padding: 20px; }
+    .metric { font-variant-numeric: tabular-nums; font-size: 42px; font-weight: 760; line-height: 1; }
+    button { min-height: 36px; border: 0; border-radius: 6px; background: #18181b; color: #fafafa; cursor: pointer; font: inherit; font-weight: 620; padding: 0 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Hello shadcn</h1>
+    <section class="card">
+      <div class="card-header"><h2>Counter</h2><p>Click the button to increment the value.</p></div>
+      <div class="card-content"><div id="count" class="metric">0</div><button id="increment" type="button">Increment</button></div>
+    </section>
+  </main>
+  <script>
+    window.incrementCounter = () => {
+      const el = document.getElementById("count");
+      if (!el) return;
+      el.textContent = String(Number(el.textContent || "0") + 1);
+    };
+    document.getElementById("increment")?.addEventListener("click", window.incrementCounter);
+  </script>
+</body>
+</html>`;
+}
 
 async function runSheetViaApi(sheet: string, runnable: string): Promise<{
   ok: boolean;

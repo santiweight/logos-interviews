@@ -5,9 +5,18 @@ import { defaultProjectIds, sampleEvalCases, samples, sampleTemplateGroups } fro
 import {
   buildTypeScriptModule,
   buildTypeScriptProgram,
+  compileCodeSheetToTypeScript,
   runTypeScript,
   transpileTypeScript,
 } from "./typescriptTarget";
+
+const shadcnCounterSheet = `fn main() -> WebPage:
+  \`\`\`
+  a counter than increments when you click it
+  \`\`\``;
+
+const shadcnCounterBody = `const incrementScript = "window.incrementCounter = () => { const el = document.getElementById('count'); if (!el) return; el.textContent = String(Number(el.textContent || '0') + 1); };";
+return shadcn.renderApp(shadcn.Page({ title: "Hello shadcn", description: "Counter demo" }, shadcn.Card({}, shadcn.CardHeader({}, shadcn.CardTitle({}, "Counter"), shadcn.CardDescription({}, "Click the button to increment the value.")), shadcn.CardContent({}, shadcn.Stack({}, shadcn.Metric({ id: "count" }, "0"), shadcn.Button({ id: "increment", onClick: "window.incrementCounter()" }, "Increment"))))), { title: "Hello shadcn Counter", scripts: [incrementScript] });`;
 
 describe("Logos-TS compiler shape", () => {
   it("keeps the migrated baseline files as the product contract", () => {
@@ -67,6 +76,38 @@ function main(): App {
       { kind: "html", content: "<!doctype html><html><body><h1>Hello App</h1></body></html>" },
     ]);
     expect(result.stdout.trim()).toBe("");
+  });
+
+  it("compiles a WebPage natural prompt to code that uses the baked shadcn runtime", async () => {
+    let prompt = "";
+    const compiled = await compileCodeSheetToTypeScript(shadcnCounterSheet, "main", {
+      cache: new Map(),
+      complete: (nextPrompt) => {
+        prompt = nextPrompt;
+        return shadcnCounterBody;
+      },
+    });
+
+    expect(prompt).toContain("global shadcn helper object");
+    expect(prompt).toContain("shadcn.renderApp");
+    expect(compiled.completed.source).toContain("const shadcn =");
+    expect(compiled.completed.source).toContain("shadcn.renderApp");
+    expect(compiled.program).toContain("shadcn.Button");
+    expect(() => transpileTypeScript(compiled.program)).not.toThrow();
+  });
+
+  it("runs hard-coded shadcn app code to an interactive HTML artifact", async () => {
+    const program = buildTypeScriptProgram(`fn main() -> WebPage:
+${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}`, "main");
+
+    const result = await runTypeScript(program);
+
+    expect(result.ok).toBe(true);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].content).toContain("data-shadcn-runtime");
+    expect(result.artifacts[0].content).toContain("Hello shadcn");
+    expect(result.artifacts[0].content).toContain("window.incrementCounter");
+    expect(result.artifacts[0].content).toContain('id="increment"');
   });
 
   it("keeps sample-specific knowledge out of the production TypeScript target", () => {
