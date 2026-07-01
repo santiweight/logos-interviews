@@ -13,6 +13,7 @@ import {
 } from "./codeSheet";
 import { checkCode, checkWebPageHtml, generateCode } from "./codegenQualityChecks";
 import { runCodeSheet } from "./codeSheetRunner";
+import { anthropicMaxTokens, throwIfMaxTokensStop } from "./anthropicComplete";
 import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
 import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
 import {
@@ -347,6 +348,15 @@ function main(): void {
     const result = await runPromise;
     expect(result.ok).toBe(true);
     expect(result.stdout).toEqual(["3", "6"]);
+  });
+
+  it("uses a larger Anthropic completion budget and fails loudly on truncation", () => {
+    expect(anthropicMaxTokens(undefined)).toBe(8192);
+    expect(anthropicMaxTokens("12000")).toBe(12000);
+    expect(() => anthropicMaxTokens("nope")).toThrow("ANTHROPIC_MAX_TOKENS must be a positive integer");
+    expect(() => throwIfMaxTokensStop("max_tokens", 8192)).toThrow(
+      "Anthropic completion stopped after reaching max_tokens=8192",
+    );
   });
 
   it("checks generated WebPage code with generic code quality gates", async () => {
