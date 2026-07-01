@@ -369,15 +369,18 @@ function parseTypeScriptSheet(codeSheet: CodeSheet): ParsedTypeScriptSheet {
 
     const completedFunction = line.match(/^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
     if (completedFunction) {
-      const { block, endIndex } = readBracedSource(lines, index);
-      functions.push({
-        name: completedFunction[1],
-        params: [],
-        returnType: "unknown",
-        completedSource: block,
-      });
-      index = endIndex;
-      continue;
+      if (line.includes("{")) {
+        const { block, endIndex } = readBracedSource(lines, index);
+        const parsedFunction = parseFunctionHeader(line);
+        functions.push({
+          name: completedFunction[1],
+          params: [],
+          returnType: parsedFunction?.returnType ?? "unknown",
+          completedSource: block,
+        });
+        index = endIndex;
+        continue;
+      }
     }
 
     const completedClass = line.match(/^class\s+([A-Z][A-Za-z0-9_]*)\b/);
@@ -391,8 +394,9 @@ function parseTypeScriptSheet(codeSheet: CodeSheet): ParsedTypeScriptSheet {
 
     const fn = parseFunctionHeader(line);
     if (fn) {
-      if (fn.body !== undefined) {
-        const { body, endIndex } = readIndentedBody(lines, index);
+      if (line.includes("{")) {
+        const { block, endIndex } = readBracedSource(lines, index);
+        const body = classBodyLines(block);
         functions.push({ ...fn, body: body.join("\n") });
         index = endIndex;
       } else {
@@ -754,13 +758,13 @@ function parseMethodSignature(line: string): MethodDecl | null {
 }
 
 function parseFunctionHeader(line: string): FunctionDecl | null {
-  const match = line.match(/^(?:fn|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^:]+))?\s*(:?)\s*$/);
+  const match = line.match(/^(?:(?:fn)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^;{]+))?|(?:function)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^;{]+))?)\s*(?:;|\{)?\s*$/);
   if (!match) return null;
+  const isFn = match[1] !== undefined;
   return {
-    name: match[1],
-    params: parseParams(match[2]),
-    returnType: match[3]?.trim() ?? "void",
-    ...(match[4] === ":" ? { body: "" } : {}),
+    name: isFn ? match[1] : match[4],
+    params: parseParams(isFn ? match[2] : match[5]),
+    returnType: (isFn ? match[3] : match[6])?.trim() ?? "void",
   };
 }
 
@@ -805,20 +809,6 @@ function collectTypeContinuation(lines: string[], index: number, first: string):
     parts.push(line.trim());
   }
   return parts.join(" ");
-}
-
-function readIndentedBody(lines: string[], startIndex: number): { body: string[]; endIndex: number } {
-  const body: string[] = [];
-  let endIndex = startIndex;
-  for (let cursor = startIndex + 1; cursor < lines.length; cursor += 1) {
-    const line = lines[cursor];
-    if (line.trim().length > 0 && !/^\s+/.test(line)) {
-      break;
-    }
-    body.push(line.replace(/^  /, ""));
-    endIndex = cursor;
-  }
-  return { body, endIndex };
 }
 
 function readBracedSource(lines: string[], startIndex: number): { block: string; endIndex: number } {

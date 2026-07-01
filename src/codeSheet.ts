@@ -161,7 +161,7 @@ type SourceRange = {
 
 type FunctionHeader = {
   indent: string;
-  keyword: "fn" | "function" | "def";
+  keyword: "fn" | "function";
   name: string;
   params: string;
   returnType?: string;
@@ -504,12 +504,13 @@ export function implementationTargetAtLine(codeSheet: CodeSheet, lineNumber: num
   const line = lines[lineNumber - 1] ?? "";
   const header = parseFunctionHeader(line);
   if (header) {
+    const endLine = line.includes("{") ? bracedBlockEndLine(lines, lineNumber - 1) : lineNumber;
     return {
       kind: "function",
       name: header.name,
       line: lineNumber,
-      endLine: blockEndLine(lines, lineNumber - 1),
-      source: lines.slice(lineNumber - 1, blockEndLine(lines, lineNumber - 1)).join("\n"),
+      endLine,
+      source: lines.slice(lineNumber - 1, endLine).join("\n"),
     };
   }
 
@@ -605,9 +606,9 @@ function appReturnPromptGuidance(source: string, snippet: string): string {
   }
 
   const beforeSnippet = source.slice(0, index);
-  const functionHeaders = [...beforeSnippet.matchAll(/(?:^|\n)(\s*)(?:fn|function|def)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*([^:\n]+))?\s*:/g)];
+  const functionHeaders = [...beforeSnippet.matchAll(/(?:^|\n)\s*(?:(?:fn)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*([^{\n]+)|(?:function)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*:\s*([^{\n]+))\s*\{/g)];
   const current = functionHeaders.at(-1);
-  const returnType = current?.[2]?.trim();
+  const returnType = (current?.[1] ?? current?.[2])?.trim();
   if (returnType !== "App" && returnType !== "WebPage") {
     return "";
   }
@@ -981,18 +982,20 @@ function annotationContextsBefore(source: string, lineNumber: number): LogosAnno
 
 function parseFunctionHeader(line: string): FunctionHeader | null {
   const match = line.match(
-    /^(\s*)(fn|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^:]+))?\s*(:?)\s*$/,
+    /^(\s*)(?:(fn)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^;{]+))?|(?:function)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^;{]+))?)\s*(;|\{)?\s*$/,
   );
   if (!match) {
     return null;
   }
+  const isFn = match[2] === "fn";
+  const returnType = isFn ? match[5] : match[8];
   return {
     indent: match[1],
-    keyword: match[2] as FunctionHeader["keyword"],
-    name: match[3],
-    params: match[4],
-    ...(match[5] === undefined ? {} : { returnType: match[5].trim() }),
-    hasBody: match[6] === ":",
+    keyword: isFn ? "fn" : "function",
+    name: isFn ? match[3] : match[6],
+    params: isFn ? match[4] : match[7],
+    ...(returnType === undefined ? {} : { returnType: returnType.trim() }),
+    hasBody: match[9] === "{",
   };
 }
 

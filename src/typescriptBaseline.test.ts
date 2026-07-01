@@ -10,10 +10,11 @@ import {
   transpileTypeScript,
 } from "./typescriptTarget";
 
-const shadcnCounterSheet = `fn main() -> WebPage:
+const shadcnCounterSheet = `function main(): WebPage {
   \`\`\`
   a counter than increments when you click it
-  \`\`\``;
+  \`\`\`
+}`;
 
 const shadcnCounterBody = `const incrementScript = "window.incrementCounter = () => { const el = document.getElementById('count'); if (!el) return; el.textContent = String(Number(el.textContent || '0') + 1); };";
 return shadcn.renderApp(
@@ -66,6 +67,14 @@ describe("Logos-TS compiler shape", () => {
     }
   });
 
+  it("keeps baseline samples on TypeScript-native function syntax", () => {
+    for (const sample of samples) {
+      expect(sample.code, sample.id).not.toMatch(/^\s*(?:fn|def)\s+/m);
+      expect(sample.code, sample.id).not.toMatch(/^\s*function\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*:\s*$/m);
+      expect(sample.code, sample.id).not.toMatch(/^\s*(?:fn|function)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*->/m);
+    }
+  });
+
   it("discovers class snippets that need implementation", () => {
     const sample = samples.find((item) => item.id === "beyond-basics");
     expect(sample).toBeDefined();
@@ -113,8 +122,9 @@ function main(): App {
   });
 
   it("runs hard-coded shadcn app code to an interactive HTML artifact", async () => {
-    const program = buildTypeScriptProgram(`fn main() -> WebPage:
-${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}`, "main");
+    const program = buildTypeScriptProgram(`function main(): WebPage {
+${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
+}`, "main");
 
     const result = await runTypeScript(program);
 

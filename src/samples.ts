@@ -34,18 +34,19 @@ export type SampleStdoutCheck = {
   };
 };
 
-const starterArithmetic = `# Logos-TS supports incomplete functions, natural snippets, and TypeScript-target execution.
+const starterArithmetic = `# Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
 
-fn add(x: number, y: number) -> number
-fn mul(x: number, y: number) -> number
+function add(x: number, y: number): number;
+function mul(x: number, y: number): number;
 
-fn main():
-  console.log("Regular TypeScript:", mul(add(1, 2), 3))
+function main(): void {
+  console.log("Regular TypeScript:", mul(add(1, 2), 3));
   \`print Logos: mul of (add one and two) and 3\`
-  console.log("Mixed Logos:", mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
-  added = \`add 1 and 5\`
-  product = \`mul 3 and 4\`
-  \`output added + product\``;
+  console.log("Mixed Logos:", mul(add(\`the number one\`, \`the number two\`), \`the number three\`));
+  const added = \`add 1 and 5\`;
+  const product = \`mul 3 and 4\`;
+  \`output added + product\`
+}`;
 
 const beyondBasics = `# Logos-TS supports classes, incomplete methods, and natural-language runnable bodies.
 
@@ -57,27 +58,28 @@ class MagicSquare {
   pretty(): string;
 }
 
-fn magic_square_example():
+function magic_square_example(): void {
   \`\`\`
   Generate a MagicSquare of size 4.
 
   Pretty print it, including the sums of columns/rows.
 
   Check the MagicSquare is valid, and show the work.
-  \`\`\``;
+  \`\`\`
+}`;
 
 const formulaSpreadsheet = `# Spreadsheet cell storage uses A1-style addressing.
 # Treat Record<string, Record<number, T>> as a nested mapping keyed by column then row.
 # Parse expression strings containing ints, A1 refs, +, -, *, /, and parentheses.
 
-type Operator = Mul | Div | Add | Sub
-type Expr = Val(number) | BinOp(Operator, Expr, Expr) | Cell(string, number)
-type EvalError = RecursiveError(CellAddress[]) | DivByZero
-type CellAddress = [string, number]
+type Operator = "Mul" | "Div" | "Add" | "Sub";
+type Expr = { kind: "Val"; field0: number } | { kind: "BinOp"; field0: Operator; field1: Expr; field2: Expr } | { kind: "Cell"; field0: string; field1: number };
+type EvalError = { kind: "RecursiveError"; field0: CellAddress[] } | "DivByZero";
+type CellAddress = [string, number];
 
-fn parse_expr(source: string) -> Expr | null
-fn pretty_expr(expr: Expr) -> string
-fn c(source: string) -> CellAddress
+function parse_expr(source: string): Expr | null;
+function pretty_expr(expr: Expr): string;
+function c(source: string): CellAddress;
 
 class Spreadsheet {
   cells: Record<string, Record<number, Expr>>;
@@ -96,7 +98,7 @@ class SpreadsheetResult {
 }
 
 @logos.debug.print()
-fn main():
+function main(): void {
   \`\`\`
   print results of each step...
   A1 -> None
@@ -109,7 +111,8 @@ fn main():
   D[1:3] = B[1:3] * 2
 
   render + print sheet as unevaluated expressions in an excel-like table
-  \`\`\``;
+  \`\`\`
+}`;
 
 const annotatedMaze = `# Maze generator, renderer, and solver.
 # A size 10 maze has 10 rows and 10 columns of cells.
@@ -121,7 +124,7 @@ class Maze {
   goal: [number, number];
 }
 
-fn maze_is_solvable(maze: Maze) -> boolean
+function maze_is_solvable(maze: Maze): boolean;
 
 @logos.debug.print()
 class MazeGenerator {
@@ -131,27 +134,28 @@ class MazeGenerator {
   grid(): string[];
 }
 
-fn astar_solve(maze: Maze) -> [number, number][]
+function astar_solve(maze: Maze): [number, number][];
 
 @logos.debug.print()
-fn main():
+function main(): void {
   \`\`\`
   Build a 10x10 maze using MazeGenerator, and then solve it using A*.
 
   Print the maze, and then the solved maze.
 
   Use colors to make it clear where the path went.
-  \`\`\``;
+  \`\`\`
+}`;
 
 const portfolioViewer = `# Portfolio Performance Monitor
 # Why did we make or lose money today?
 
-type AssetClass = Equities | Credit | Rates | Commodities | Fx
-type Side = Long | Short
-type Dollars = number
-type Percent = number
-type Time = string
-type App = WebPage
+type AssetClass = "Equities" | "Credit" | "Rates" | "Commodities" | "Fx";
+type Side = "Long" | "Short";
+type Dollars = number;
+type Percent = number;
+type Time = string;
+type App = WebPage;
 
 class Instrument {
   ticker: string;
@@ -220,10 +224,10 @@ class DailyPerformanceReadout {
   topDetractors: InstrumentContribution[];
 }
 
-fn test_portfolio() -> Portfolio
-fn calculate_readout(portfolio: Portfolio, start: Time, end: Time) -> DailyPerformanceReadout
+function test_portfolio(): Portfolio;
+function calculate_readout(portfolio: Portfolio, start: Time, end: Time): DailyPerformanceReadout;
 
-fn main() -> App:
+function main(): App {
   \`\`\`
   Render one PM readout page named "Portfolio Performance Monitor".
 
@@ -268,7 +272,8 @@ fn main() -> App:
   | TLT      20Y Treasury ETF      Long    Rates          -$80k      -0.08%           |
   | EURUSD   Euro / Dollar         Long    Fx             -$103k     -0.10%           |
   +----------------------------------------------------------------------------------+
-  \`\`\``;
+  \`\`\`
+}`;
 
 export const sampleGroups: SampleGroup[] = [
   {

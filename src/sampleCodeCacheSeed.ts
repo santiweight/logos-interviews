@@ -45,7 +45,7 @@ function naturalIncludes(value: string): (snippet: IncompleteSnippet) => boolean
 const seedCompletions: SeedCompletion[] = [
   {
     sampleId: "starter-arithmetic",
-    match: snippetIncludes("fn add"),
+    match: snippetIncludes("function add"),
     implementation: `
 function add(x: number, y: number): number {
   return x + y;
@@ -53,7 +53,7 @@ function add(x: number, y: number): number {
   },
   {
     sampleId: "starter-arithmetic",
-    match: snippetIncludes("fn mul"),
+    match: snippetIncludes("function mul"),
     implementation: `
 function mul(x: number, y: number): number {
   return x * y;
@@ -176,7 +176,7 @@ console.log(\`valid magic square: \${rowsValid && colsValid && diag1 === expecte
   },
   {
     sampleId: "formula-spreadsheet",
-    match: snippetIncludes("fn parse_expr"),
+    match: snippetIncludes("function parse_expr"),
     implementation: `
 function parse_expr(source: string): Expr | null {
   const tokens = source.match(/[A-Z]+\\d+|\\d+|[()+\\-*/]/g) ?? [];
@@ -219,7 +219,7 @@ function parse_expr(source: string): Expr | null {
   },
   {
     sampleId: "formula-spreadsheet",
-    match: snippetIncludes("fn pretty_expr"),
+    match: snippetIncludes("function pretty_expr"),
     implementation: `
 function pretty_expr(expr: Expr): string {
   if (expr.kind === "Val") return String(expr.field0);
@@ -230,7 +230,7 @@ function pretty_expr(expr: Expr): string {
   },
   {
     sampleId: "formula-spreadsheet",
-    match: snippetIncludes("fn c("),
+    match: snippetIncludes("function c("),
     implementation: `
 function c(source: string): CellAddress {
   const match = source.match(/^([A-Z]+)(\\d+)$/);
@@ -334,7 +334,7 @@ console.log(\`1         \${sheet.eval().eval(c("A1"))}           \${sheet.eval()
   },
   {
     sampleId: "annotated-maze",
-    match: snippetIncludes("fn maze_is_solvable"),
+    match: snippetIncludes("function maze_is_solvable"),
     implementation: `
 function maze_is_solvable(maze: Maze): boolean {
   return astar_solve(maze).length > 0;
@@ -370,7 +370,7 @@ class MazeGenerator {
   },
   {
     sampleId: "annotated-maze",
-    match: snippetIncludes("fn astar_solve"),
+    match: snippetIncludes("function astar_solve"),
     implementation: `
 function astar_solve(maze: Maze): [number, number][] {
   const path: [number, number][] = [];
@@ -435,7 +435,7 @@ class PortfolioValue {
   },
   {
     sampleId: "portfolio-viewer",
-    match: snippetIncludes("fn test_portfolio"),
+    match: snippetIncludes("function test_portfolio"),
     implementation: `
 function test_portfolio(): Portfolio {
   const instrument = (ticker: string, name: string, assetClass: AssetClass): Instrument =>
@@ -458,7 +458,7 @@ function test_portfolio(): Portfolio {
   },
   {
     sampleId: "portfolio-viewer",
-    match: snippetIncludes("fn calculate_readout"),
+    match: snippetIncludes("function calculate_readout"),
     implementation: `
 function calculate_readout(portfolio: Portfolio, _start: Time, end: Time): DailyPerformanceReadout {
   const nav = 100_000_000;
