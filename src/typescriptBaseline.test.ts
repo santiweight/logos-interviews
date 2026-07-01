@@ -188,6 +188,38 @@ function main(): App {
     expect(() => transpileTypeScript(module)).not.toThrow();
   });
 
+  it("emits multiline TypeScript type aliases with variant comments", () => {
+    const sheet = `type SudokuStrategy =
+  // A box has a number that can only go in one cell.
+  "UniqueBoxSolve" |
+  // A line has a number that can only appear in one cell.
+  "UniqueLineSolve" |
+  "HiddenSingle";
+
+type CellUpdate =
+  { kind: "Remove Notes"; values: number[] } |
+  { kind: "Add Note"; values: number[] } |
+  { kind: "Fill Square"; value: number }
+
+type App = WebPage;
+
+function update_for(strategy: SudokuStrategy): CellUpdate {
+  return strategy === "HiddenSingle"
+    ? { kind: "Fill Square", value: 1 }
+    : { kind: "Add Note", values: [1] };
+}
+
+function main(): App {
+  const update: CellUpdate = update_for("UniqueBoxSolve");
+  return "<!doctype html><html><body>" + update.kind + "</body></html>";
+}`;
+    const module = buildTypeScriptModule(sheet);
+
+    expect(module).toContain('type SudokuStrategy = "UniqueBoxSolve" | "UniqueLineSolve" | "HiddenSingle";');
+    expect(module).toContain('type CellUpdate = { kind: "Remove Notes"; values: number[] } | { kind: "Add Note"; values: number[] } | { kind: "Fill Square"; value: number };');
+    expect(() => transpileTypeScript(module)).not.toThrow();
+  });
+
   it("discovers class snippets that need implementation", () => {
     const sample = samples.find((item) => item.id === "beyond-basics");
     expect(sample).toBeDefined();

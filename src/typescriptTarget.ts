@@ -363,9 +363,11 @@ function parseTypeScriptSheet(codeSheet: CodeSheet): ParsedTypeScriptSheet {
       continue;
     }
 
-    const typeMatch = line.match(/^type\s+([A-Z][A-Za-z0-9_]*)\s*=\s*(.+?)\s*;?$/);
+    const typeMatch = line.match(/^type\s+([A-Z][A-Za-z0-9_]*)\s*=\s*(.*?)\s*;?$/);
     if (typeMatch) {
-      types.push({ name: typeMatch[1], target: collectTypeContinuation(lines, index, typeMatch[2]) });
+      const { target, endIndex } = readTypeDeclaration(lines, index, typeMatch[2]);
+      types.push({ name: typeMatch[1], target });
+      index = endIndex;
       continue;
     }
 
@@ -806,14 +808,65 @@ function normalizeType(type: string): string {
     .replace(/\bEvalError\b/g, "LogosEvalError");
 }
 
-function collectTypeContinuation(lines: string[], index: number, first: string): string {
-  const parts = [first.trim()];
+function readTypeDeclaration(lines: string[], index: number, first: string): { target: string; endIndex: number } {
+  const parts: string[] = [];
+  const appendPart = (raw: string): boolean => {
+    const content = stripLineComment(raw).trim();
+    if (content.length === 0) {
+      return false;
+    }
+
+    const ended = /;\s*$/.test(content);
+    parts.push(content.replace(/;\s*$/, ""));
+    return ended;
+  };
+
+  if (appendPart(first)) {
+    return { target: parts.join(" "), endIndex: index };
+  }
+
+  let endIndex = index;
   for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
     const line = lines[cursor];
-    if (!/^\s+\|/.test(line)) break;
-    parts.push(line.trim());
+    const trimmed = stripLineComment(line).trim();
+    if (parts.length > 0 && /^(?:type|class|function|fn)\s+[A-Za-z_][A-Za-z0-9_]*/.test(trimmed)) {
+      break;
+    }
+
+    endIndex = cursor;
+    if (appendPart(line)) {
+      return { target: parts.join(" "), endIndex };
+    }
   }
-  return parts.join(" ");
+
+  return { target: parts.join(" "), endIndex };
+}
+
+function stripLineComment(source: string): string {
+  let quote: '"' | "'" | "`" | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (quote) {
+      if (char === "\\") {
+        index += 1;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "/" && source[index + 1] === "/") {
+      return source.slice(0, index);
+    }
+  }
+
+  return source;
 }
 
 function readBracedSource(lines: string[], startIndex: number): { block: string; endIndex: number } {
