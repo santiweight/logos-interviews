@@ -1,6 +1,14 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parse, runnables } from "./codeSheet";
+import {
+  compile,
+  hashCompletionInput,
+  parse,
+  runnables,
+  type CodeCache,
+  type CompilationEvent,
+  type CompleteFunction,
+} from "./codeSheet";
 import { checkCode, checkWebPageHtml, generateCode } from "./codegenQualityChecks";
 import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
 import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
@@ -67,6 +75,18 @@ const card = shadcn.Card(
 const page = shadcn.Page("Counter Button", card, counterScript);
 
 return shadcn.renderApp(page);`;
+
+async function collectCompileEvents(
+  cache: CodeCache,
+  sheet: string,
+  complete: CompleteFunction,
+): Promise<CompilationEvent[]> {
+  const events: CompilationEvent[] = [];
+  for await (const event of compile(cache, sheet, complete)) {
+    events.push(event);
+  }
+  return events;
+}
 
 describe("Logos-TS compiler shape", () => {
   it("uses the counter app as the base project and keeps migrated files as eval targets", () => {
@@ -164,6 +184,61 @@ function main(): App {
     expect(compiled.completed.source).toContain("shadcn.renderApp");
     expect(compiled.program).toContain("shadcn.Button");
     expect(() => transpileTypeScript(compiled.program)).not.toThrow();
+  });
+
+  it("keeps function completion hashes stable when only runnable bodies change", () => {
+    const base = `type Value = number;
+
+function add(x: Value, y: Value): Value;
+function mul(x: Value, y: Value): Value;
+
+function main(): void {
+  console.log(add(1, 2));
+}`;
+    const changedRunnable = base.replace(
+      "console.log(add(1, 2));",
+      "console.log(add(1, 2));\n  console.log(mul(2, 3));",
+    );
+    const changedDependency = base.replace("type Value = number;", "type Value = string;");
+    const baseParsed = parse(base);
+    const changedRunnableParsed = parse(changedRunnable);
+    const changedDependencyParsed = parse(changedDependency);
+    const addSnippet = baseParsed.incompleteSnippets.find((snippet) => snippet.snippet.startsWith("function add"))?.snippet;
+    expect(addSnippet).toBeDefined();
+    if (!addSnippet) return;
+
+    expect(hashCompletionInput(baseParsed, addSnippet)).toBe(hashCompletionInput(changedRunnableParsed, addSnippet));
+    expect(hashCompletionInput(baseParsed, addSnippet)).not.toBe(hashCompletionInput(changedDependencyParsed, addSnippet));
+  });
+
+  it("reuses cached function completions when only the runnable body changes", async () => {
+    const base = `function add(x: number, y: number): number;
+function mul(x: number, y: number): number;
+
+function main(): void {
+  console.log(add(1, 2));
+}`;
+    const changedRunnable = base.replace(
+      "console.log(add(1, 2));",
+      "console.log(add(1, 2));\n  console.log(mul(2, 3));",
+    );
+    const cache: CodeCache = new Map();
+    const firstEvents = await collectCompileEvents(cache, base, (prompt) => {
+      if (prompt.includes("function add")) {
+        return "function add(x: number, y: number): number {\n  return x + y;\n}";
+      }
+      if (prompt.includes("function mul")) {
+        return "function mul(x: number, y: number): number {\n  return x * y;\n}";
+      }
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+    const secondEvents = await collectCompileEvents(cache, changedRunnable, () => {
+      throw new Error("unchanged function completions should come from cache");
+    });
+
+    expect(firstEvents.filter((event) => event.kind === "llm-complete")).toHaveLength(2);
+    expect(secondEvents.filter((event) => event.kind === "cache-hit")).toHaveLength(2);
+    expect(secondEvents.some((event) => event.kind === "llm-start")).toBe(false);
   });
 
   it("checks generated WebPage code with generic code quality gates", async () => {

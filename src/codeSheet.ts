@@ -769,14 +769,59 @@ export function hashCompletionInput(
   annotationContexts: LogosAnnotationContext[] = [],
 ): SnippetHash {
   const naturalPolicy = naturalSnippetPolicy(incompleteCodeSnippet);
+  const dependencyContext = completionDependencyContext(parsed, incompleteCodeSnippet);
   return hashText("completion", [
-    "logos-typescript-completion-v6",
+    "logos-typescript-completion-v7",
     incompleteCodeSnippet.trim(),
     naturalPolicy?.cacheKey ?? "",
-    parsed.source.replace(incompleteCodeSnippet, "<LOGOS_COMPLETION_TARGET>"),
+    dependencyContext,
     parsed.topLevelComments.join("\n"),
     annotationContexts.map((context) => context.cacheKey).join("\n"),
   ].join("\n---\n"));
+}
+
+function completionDependencyContext(parsed: ParsedSheet, incompleteCodeSnippet: string): string {
+  if (naturalSnippetPolicy(incompleteCodeSnippet)) {
+    return parsed.source.replace(incompleteCodeSnippet, "<LOGOS_COMPLETION_TARGET>");
+  }
+
+  const dependencySources = dependentDeclarationSources(parsed, incompleteCodeSnippet);
+  return dependencySources.length === 0 ? "<NO_DECLARATION_DEPENDENCIES>" : dependencySources.join("\n---dep---\n");
+}
+
+function dependentDeclarationSources(parsed: ParsedSheet, source: string): string[] {
+  const byName = new Map<string, string>();
+  for (const item of parsed.sumTypes) {
+    byName.set(item.name, item.source);
+  }
+  for (const item of parsed.typeAliases) {
+    byName.set(item.name, item.source);
+  }
+  for (const item of parsed.classDecls) {
+    if (item.snippet !== source) {
+      byName.set(item.name, item.snippet);
+    }
+  }
+
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  const visitReferences = (text: string): void => {
+    for (const name of identifiers(text)) {
+      if (seen.has(name)) continue;
+      const dependency = byName.get(name);
+      if (!dependency) continue;
+      seen.add(name);
+      ordered.push(dependency);
+      visitReferences(dependency);
+    }
+  };
+
+  visitReferences(source);
+  return ordered;
+}
+
+function identifiers(source: string): string[] {
+  return [...source.matchAll(/\b[A-Za-z_][A-Za-z0-9_]*\b/g)].map((match) => match[0]);
 }
 
 export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
