@@ -833,6 +833,7 @@ Return only the replacement code for the fragment, without backticks or fences.
 ${naturalPolicy}${appGuidance}${annotationBlock}
 If imports are needed, include normal TypeScript import lines before the replacement; those imports will be added to the file top.
 Use only TypeScript, JavaScript built-ins, Web APIs, and code already present in the sheet unless the sheet explicitly declares another dependency.
+${dependencyPromptGuidance()}
 Do not stringify, echo, or console.log the natural-language source unless the fragment explicitly asks to print, log, show, render, or display text.
 Preserve the intended public behavior shown in the runnable/test functions.`;
   }
@@ -849,10 +850,18 @@ ${snippet}
 
 Return only implementations for declarations that appear in the requested snippet, plus any imports required by those declarations.
 Use only TypeScript, JavaScript built-ins, Web APIs, and code already present in the sheet unless the sheet explicitly declares another dependency.
-Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
 For a requested class, return only that class definition and its members. For a requested function, return only that function definition.
+${dependencyPromptGuidance()}
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.
 ${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions.`;
+}
+
+function dependencyPromptGuidance(): string {
+  return `Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
+Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, constructors, or types already present in the sheet.
+Do not call a class constructor with arguments unless the sheet declares that constructor signature or shows that call shape in runnable/test code. If a class has no declared constructor, support no-argument construction.
+When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.`;
 }
 
 function appReturnPromptGuidance(source: string, snippet: string): string {

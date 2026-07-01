@@ -416,6 +416,29 @@ function main(): void {
     ]));
   });
 
+  it("rejects generated WebPage code that shadows a top-level sheet API", () => {
+    const program = buildTypeScriptProgram(`type App = WebPage;
+
+function apply_strategy(): number {
+  return 1;
+}
+
+function main(): App {
+  function apply_strategy(): number {
+    return 2;
+  }
+
+  return shadcn.renderApp(shadcn.Page({}, String(apply_strategy())));
+}`, "main");
+
+    const result = checkCode(program, { expectedKind: "webpage" });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain(
+      'generated code shadows top-level declaration "apply_strategy" inside a nested scope',
+    );
+  });
+
   it("tells WebPage codegen not to use modal placeholders for client state", () => {
     const snippet = parse(shadcnCounterSheet).incompleteSnippets[0]?.snippet;
     expect(snippet).toBeDefined();
@@ -430,6 +453,27 @@ function main(): void {
     expect(prompt).toContain("updates the DOM directly");
     expect(prompt).toContain("Do not use alert(), confirm(), prompt()");
     expect(prompt).toContain("re-render required");
+  });
+
+  it("ports the Python-target anti-shadowing prompt rules to TS natural snippets", () => {
+    const testCase = sampleAppEvalCases.find((item) => item.sampleId === "sudoku-human-viewer");
+    expect(testCase).toBeDefined();
+    if (!testCase) return;
+
+    const snippet = parse(testCase.sheet).incompleteSnippets.find((item) => item.kind === "natural")?.snippet;
+    expect(snippet).toBeDefined();
+    if (!snippet) return;
+    const prompt = buildCompletionPrompt(testCase.sheet, snippet, "natural");
+
+    expect(prompt).toContain(
+      "Do not define a nested class or function with the same name as a top-level declaration from the sheet",
+    );
+    expect(prompt).toContain(
+      "Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers",
+    );
+    expect(prompt).toContain(
+      "If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency",
+    );
   });
 
   it("seeds the base counter app as shadcn WebPage code", async () => {

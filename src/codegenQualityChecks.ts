@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import ts from "typescript";
 import {
   compileCodeSheetToTypeScript,
   transpileTypeScript,
@@ -76,6 +77,7 @@ export function checkCode(code: string, options: CheckCodeOptions = {}): CheckRe
       failures.push(message);
     }
   }
+  failures.push(...nestedTopLevelShadowingFailures(code));
 
   for (const fragment of options.promptFragments ?? []) {
     const trimmed = fragment.trim();
@@ -219,6 +221,71 @@ function invalidVisibleOutputPatterns(): Array<[RegExp, string]> {
     [/\bnull\b/, "null"],
     [/\bfunction\s*\(|=>\s*\{/, "raw function source"],
   ];
+}
+
+function nestedTopLevelShadowingFailures(code: string): string[] {
+  const sourceFile = ts.createSourceFile("generated.ts", code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const topLevelNames = new Set<string>();
+  const failures = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    for (const name of declarationNames(statement)) {
+      topLevelNames.add(name);
+    }
+  }
+
+  const visit = (node: ts.Node): void => {
+    if (!isTopLevelDeclarationNode(node, sourceFile)) {
+      for (const name of declarationNames(node)) {
+        if (topLevelNames.has(name)) {
+          failures.add(`generated code shadows top-level declaration "${name}" inside a nested scope`);
+        }
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sourceFile, visit);
+
+  return [...failures];
+}
+
+function declarationNames(node: ts.Node): string[] {
+  if (
+    (ts.isFunctionDeclaration(node) ||
+      ts.isClassDeclaration(node) ||
+      ts.isInterfaceDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node) ||
+      ts.isEnumDeclaration(node)) &&
+    node.name
+  ) {
+    return [node.name.text];
+  }
+
+  if (ts.isVariableStatement(node)) {
+    return node.declarationList.declarations.flatMap(variableDeclarationName);
+  }
+
+  if (ts.isVariableDeclaration(node)) {
+    return variableDeclarationName(node);
+  }
+
+  return [];
+}
+
+function variableDeclarationName(node: ts.VariableDeclaration): string[] {
+  return ts.isIdentifier(node.name) ? [node.name.text] : [];
+}
+
+function isTopLevelDeclarationNode(node: ts.Node, sourceFile: ts.SourceFile): boolean {
+  if (node.parent === sourceFile) {
+    return true;
+  }
+
+  return ts.isVariableDeclaration(node) &&
+    ts.isVariableDeclarationList(node.parent) &&
+    ts.isVariableStatement(node.parent.parent) &&
+    node.parent.parent.parent === sourceFile;
 }
 
 function hasStringHandlerShadcnButton(code: string): boolean {
