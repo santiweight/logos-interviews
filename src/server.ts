@@ -8,7 +8,6 @@ import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
 import { handleFeedback } from "./feedbackCapture";
-import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
@@ -97,7 +96,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-await seedSampleCodeCache(codeCache);
+if (process.env.SEED_SAMPLE_CODE_CACHE === "true") {
+  const { seedSampleCodeCache } = await import("./sampleCodeCacheSeed");
+  await seedSampleCodeCache(codeCache);
+}
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`logos-interviews listening on ${port}`);

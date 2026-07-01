@@ -67,7 +67,7 @@ describe("Logos-TS browser baseline", () => {
     const port = await findFreePort();
     baseUrl = `http://127.0.0.1:${port}`;
     serverProcess = spawn("node", ["dist-server/server.mjs"], {
-      env: { ...process.env, PORT: String(port) },
+      env: { ...process.env, PORT: String(port), SEED_SAMPLE_CODE_CACHE: "true" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     await waitForServer(serverProcess, port);

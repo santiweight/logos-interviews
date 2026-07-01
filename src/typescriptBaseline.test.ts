@@ -297,4 +297,12 @@ ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
       expect(source, forbidden).not.toContain(forbidden);
     }
   });
+
+  it("does not seed sample completions in the server unless tests opt in", () => {
+    const source = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/^import\s+\{\s*seedSampleCodeCache\s*\}/m);
+    expect(source).toContain('process.env.SEED_SAMPLE_CODE_CACHE === "true"');
+    expect(source).toContain('await import("./sampleCodeCacheSeed")');
+  });
 });
