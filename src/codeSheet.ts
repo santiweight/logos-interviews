@@ -561,6 +561,7 @@ export function buildCompletionPrompt(
 
   if (snippetKind === "natural") {
     const naturalPolicy = naturalSnippetPolicy(snippet)?.promptGuidance ?? "";
+    const appGuidance = appReturnPromptGuidance(source, snippet);
     return `You are an expert software engineer building TypeScript programs.
 
 You are tasked with assisting on the following Logos-TS code sheet:
@@ -572,7 +573,7 @@ Your job is to replace this natural-language Logos fragment with valid TypeScrip
 ${snippet}
 
 Return only the replacement code for the fragment, without backticks or fences.
-${naturalPolicy}${annotationBlock}
+${naturalPolicy}${appGuidance}${annotationBlock}
 If imports are needed, include normal TypeScript import lines before the replacement; those imports will be added to the file top.
 Use only TypeScript, JavaScript built-ins, Web APIs, and code already present in the sheet unless the sheet explicitly declares another dependency.
 Do not stringify, echo, or console.log the natural-language source unless the fragment explicitly asks to print, log, show, render, or display text.
@@ -597,22 +598,120 @@ Do not include runnable/test calls, example usage, printouts, or result construc
 ${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions.`;
 }
 
+function appReturnPromptGuidance(source: string, snippet: string): string {
+  const index = source.indexOf(snippet);
+  if (index < 0) {
+    return "";
+  }
+
+  const beforeSnippet = source.slice(0, index);
+  const functionHeaders = [...beforeSnippet.matchAll(/(?:^|\n)(\s*)(?:fn|function|def)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*([^:\n]+))?\s*:/g)];
+  const current = functionHeaders.at(-1);
+  const returnType = current?.[2]?.trim();
+  if (returnType !== "App" && returnType !== "WebPage") {
+    return "";
+  }
+
+  return "\nThe surrounding function returns App/WebPage. Generate valid TypeScript statements that compute fixture-backed data and end by returning one complete HTML string. Prefer simple named local variables over dense inline expressions. Do not satisfy this by only printing to console, and do not return a textual summary.";
+}
+
 export function normalizeSnippet(
   replacement: string,
   snippetKind?: IncompleteSnippet["kind"],
-  _original = "",
-  _contextSheet = "",
+  original = "",
+  contextSheet = "",
 ): string {
   const normalized = normalizeFencedCode(replacement);
-  if (snippetKind !== "natural") {
-    return normalized;
+  if (snippetKind === "class" || snippetKind === "function") {
+    return extractRequestedTypeScriptDeclaration(normalized, original, snippetKind);
   }
 
-  return normalized
+  if (snippetKind === "natural") {
+    return extractNaturalTypeScriptReplacement(normalized, original, contextSheet)
+      .split("\n")
+      .filter((line) => !/^```/.test(line.trim()))
+      .join("\n")
+      .trim();
+  }
+
+  return normalized.trim();
+}
+
+function extractRequestedTypeScriptDeclaration(
+  source: string,
+  original: string,
+  kind: IncompleteSnippet["kind"],
+): string {
+  const requestedName = kind === "class"
+    ? original.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1]
+    : original.match(/^(?:fn|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+
+  if (requestedName === undefined) {
+    return extractCodeLikeSuffix(source);
+  }
+
+  const pattern = kind === "class"
+    ? new RegExp(`class\\s+${escapeRegExp(requestedName)}\\b[^{}]*\\{`)
+    : new RegExp(`function\\s+${escapeRegExp(requestedName)}\\s*\\([^)]*\\)\\s*(?::\\s*[^{}]+)?\\{`);
+  const match = pattern.exec(source);
+  if (!match) {
+    return extractCodeLikeSuffix(source);
+  }
+
+  const openBrace = match.index + match[0].lastIndexOf("{");
+  const end = matchingBraceEnd(source, openBrace);
+  return end === null ? extractCodeLikeSuffix(source) : source.slice(match.index, end).trim();
+}
+
+function extractNaturalTypeScriptReplacement(source: string, original: string, contextSheet: string): string {
+  const enclosingFunction = enclosingFunctionName(contextSheet, original);
+  const functionMatch = /function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?::\s*[^{}]+)?\{/.exec(source);
+  if (functionMatch) {
+    if (functionMatch[1] === enclosingFunction) {
+      const openBrace = functionMatch.index + functionMatch[0].lastIndexOf("{");
+      const end = matchingBraceEnd(source, openBrace);
+      if (end !== null) {
+        return source.slice(openBrace + 1, end - 1).trim();
+      }
+    }
+    return extractCodeLikeSuffix(source);
+  }
+
+  return extractCodeLikeSuffix(source);
+}
+
+function enclosingFunctionName(contextSheet: string, snippet: string): string | null {
+  const index = contextSheet.indexOf(snippet);
+  if (index < 0) {
+    return null;
+  }
+  const beforeSnippet = contextSheet.slice(0, index);
+  const functionHeaders = [...beforeSnippet.matchAll(/(?:^|\n)\s*(?:fn|function|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)];
+  return functionHeaders.at(-1)?.[1] ?? null;
+}
+
+function extractCodeLikeSuffix(source: string): string {
+  const lines = source
     .split("\n")
     .filter((line) => !/^```/.test(line.trim()))
-    .join("\n")
-    .trim();
+    .map((line) => line.replace(/\s+$/u, ""));
+  const start = lines.findIndex((line) => isTypeScriptCodeStart(line.trim()));
+  return (start < 0 ? source : lines.slice(start).join("\n")).trim();
+}
+
+function isTypeScriptCodeStart(line: string): boolean {
+  return /^(?:import|export|class|interface|type|function|const|let|var|return|if|for|while|switch|try|throw|console\.|document\.|window\.|[A-Za-z_][A-Za-z0-9_]*\s*[=(.])/.test(line);
+}
+
+function matchingBraceEnd(source: string, openBrace: number): number | null {
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") depth += 1;
+    if (char === "}") depth -= 1;
+    if (depth === 0) return index + 1;
+  }
+  return null;
 }
 
 function annotationPromptGuidance(contexts: LogosAnnotationContext[]): string {
@@ -664,7 +763,7 @@ export function hashCompletionInput(
 ): SnippetHash {
   const naturalPolicy = naturalSnippetPolicy(incompleteCodeSnippet);
   return hashText("completion", [
-    "logos-typescript-completion-v2",
+    "logos-typescript-completion-v5",
     incompleteCodeSnippet.trim(),
     naturalPolicy?.cacheKey ?? "",
     parsed.source.replace(incompleteCodeSnippet, "<LOGOS_COMPLETION_TARGET>"),
@@ -786,6 +885,25 @@ function discoverIncompleteSnippets(source: string): IncompleteSnippet[] {
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
+    const classMatch = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\s*(?::|\{)?\s*$/);
+    if (classMatch) {
+      const endLine = line.includes("{") ? bracedBlockEndLine(lines, index) : blockEndLine(lines, index);
+      const snippet = lines.slice(index, endLine).join("\n");
+      if (classNeedsCompletion(snippet)) {
+        snippets.push({
+          kind: "class",
+          line: index + 1,
+          snippet,
+          range: {
+            start: lineStarts[index],
+            end: lineStarts[endLine - 1] + (lines[endLine - 1]?.length ?? 0),
+          },
+        });
+      }
+      index = endLine - 1;
+      continue;
+    }
+
     const header = parseFunctionHeader(line);
     if (header && !header.hasBody) {
       snippets.push({
@@ -798,6 +916,17 @@ function discoverIncompleteSnippets(source: string): IncompleteSnippet[] {
   }
 
   return snippets.sort((left, right) => (left.range?.start ?? 0) - (right.range?.start ?? 0));
+}
+
+function classNeedsCompletion(snippet: string): boolean {
+  if (/constructor\s*\([^)]*\)\s*\{/.test(snippet)) {
+    return false;
+  }
+  return snippet.split("\n").some((line) => {
+    const trimmed = line.trim();
+    return /^fn\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*(?:->\s*[^:{]+)?\s*$/.test(trimmed) ||
+      /^[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*:\s*[^;{]+\s*;\s*$/.test(trimmed);
+  });
 }
 
 function discoverNaturalSnippets(source: string): IncompleteSnippet[] {

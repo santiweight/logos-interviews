@@ -10,22 +10,29 @@ import {
   InteractiveTypeScriptRun,
   runTypeScript,
   type InteractiveRunStatus,
+  type RunArtifact,
   type RunChunk,
 } from "./typescriptTarget";
 import type { CompilationMode } from "./compilationStrategies/types";
 
 export type RunResult =
-  | { ok: true; stdout: string[]; completed: Awaited<ReturnType<typeof compileCodeSheetToTypeScript>>["completed"] }
+  | {
+      ok: true;
+      stdout: string[];
+      artifacts: RunArtifact[];
+      completed: Awaited<ReturnType<typeof compileCodeSheetToTypeScript>>["completed"];
+    }
   | {
       ok: false;
       error: string;
       stdout: string[];
       stderr: string;
+      artifacts: RunArtifact[];
       completed: Awaited<ReturnType<typeof compileCodeSheetToTypeScript>>["completed"];
     };
 
 export type { CompilationMode } from "./compilationStrategies/types";
-export type { InteractiveRunStatus, RunChunk };
+export type { InteractiveRunStatus, RunArtifact, RunChunk };
 export { buildTypeScriptProgram };
 
 export type RunOptions = {
@@ -56,6 +63,7 @@ export async function runCodeSheet(
     return {
       ok: true,
       stdout: stdoutLines(executed.stdout),
+      artifacts: executed.artifacts,
       completed: compiled.completed,
     };
   }
@@ -65,6 +73,7 @@ export async function runCodeSheet(
     error: executed.stderr.trim() || executed.stdout.trim() || `Node exited ${executed.code}`,
     stdout: stdoutLines(executed.stdout),
     stderr: executed.stderr,
+    artifacts: executed.artifacts,
     completed: compiled.completed,
   };
 }

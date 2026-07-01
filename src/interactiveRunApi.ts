@@ -10,6 +10,7 @@ import {
   type CompilationMode,
   type InteractiveRunStart,
   type InteractiveRunStatus,
+  type RunArtifact,
 } from "./codeSheetRunner";
 import { isCompilationMode } from "./compilationStrategies/types";
 
@@ -17,6 +18,7 @@ type InteractiveRunRecord = {
   session: InteractiveRunStart["session"];
   runnable: Runnable;
   implementation: string;
+  artifacts: RunArtifact[];
   updatedAt: number;
 };
 
@@ -80,8 +82,11 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       session: result.session,
       runnable,
       implementation: result.completed.source,
+      artifacts: result.session.drainArtifacts(),
       updatedAt: Date.now(),
     });
+    const record = sessions.get(sessionId);
+    const initialArtifacts = record?.artifacts ?? [];
 
     sendJson(res, 200, {
       ok: true,
@@ -89,6 +94,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       runnable,
       implementation: result.completed.source,
       chunks: result.session.drainOutput(),
+      artifacts: initialArtifacts,
       status: result.session.status(),
     });
   }
@@ -134,11 +140,13 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
 
     const [, record] = entry;
     const chunks = record.session.drainOutput();
+    record.artifacts.push(...record.session.drainArtifacts());
     const status = record.session.status();
 
     sendJson(res, 200, {
       ok: true,
       chunks,
+      artifacts: record.artifacts,
       status,
       implementation: record.implementation,
       runnable: record.runnable,

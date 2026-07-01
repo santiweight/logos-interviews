@@ -63,6 +63,11 @@ type RunChunk = {
   text: string;
 };
 
+type RunArtifact = {
+  kind: "html";
+  content: string;
+};
+
 type RunStatus =
   | { state: "running" }
   | { state: "exited"; code: number | null; signal: string | null; error?: string };
@@ -75,6 +80,7 @@ export type LoadableSessionRunTab = {
   sourceHash: string;
   terminalText: string;
   implementation: string;
+  artifacts?: RunArtifact[];
   status: RunStatus | null;
 };
 
@@ -133,6 +139,7 @@ type InteractiveRunStartResponse = {
   runnable: Runnable;
   implementation: string;
   chunks: RunChunk[];
+  artifacts: RunArtifact[];
   status: RunStatus;
 };
 
@@ -141,6 +148,7 @@ type InteractiveRunPollResponse = {
   runnable: Runnable;
   implementation: string;
   chunks: RunChunk[];
+  artifacts: RunArtifact[];
   status: RunStatus;
 };
 
@@ -475,6 +483,7 @@ type RunTab = {
   sourceHash: string;
   terminalText: string;
   implementation: string;
+  artifacts: RunArtifact[];
   status: RunStatus | null;
   pollTimer: ReturnType<typeof setTimeout> | null;
 };
@@ -953,6 +962,7 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   renderSnippetPanel();
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
+  currentTab.artifacts = result.artifacts;
   currentTab.status = result.status;
   appendTerminalChunks(currentTab, result.chunks);
 
@@ -2644,8 +2654,8 @@ function beginCodeRunResize(event: PointerEvent): void {
 function setCodePaneWidth(width: number): void {
   const shellRect = shell.getBoundingClientRect();
   const codeRect = codePane.getBoundingClientRect();
-  const minCodeWidth = agentExpanded ? 420 : 500;
-  const minOutputWidth = 340;
+  const minCodeWidth = agentExpanded ? 380 : 400;
+  const minOutputWidth = 520;
   const maxCodeWidth = Math.max(
     minCodeWidth,
     shellRect.right - codeRect.left - minOutputWidth,
@@ -3000,6 +3010,7 @@ function createRunTab(runnable: Runnable, source: string, sourceHash: string): R
     sourceHash,
     terminalText: "",
     implementation: latestImplementationSource,
+    artifacts: [],
     status: { state: "running" },
     pollTimer: null,
   };
@@ -3070,6 +3081,10 @@ function ensureRunPanel(tab: RunTab): void {
   output.className = "terminal-output-text";
   output.dataset.runOutputId = tab.id;
 
+  const artifacts = document.createElement("div");
+  artifacts.className = "run-artifacts";
+  artifacts.dataset.runArtifactsId = tab.id;
+
   const form = document.createElement("form");
   form.className = "terminal-form";
   form.dataset.runInputFormId = tab.id;
@@ -3083,7 +3098,7 @@ function ensureRunPanel(tab: RunTab): void {
   input.setAttribute("aria-label", `stdin for ${tab.runnable}`);
 
   form.append(input);
-  panel.append(output, form);
+  panel.append(artifacts, output, form);
   toolPanels.append(panel);
 }
 
@@ -3094,6 +3109,7 @@ function renderRunTab(tab: RunTab): void {
   }
 
   const output = panel.querySelector<HTMLElement>("[data-run-output-id]");
+  const artifacts = panel.querySelector<HTMLElement>("[data-run-artifacts-id]");
   const form = panel.querySelector<HTMLFormElement>("[data-run-input-form-id]");
   const input = panel.querySelector<HTMLInputElement>("[data-run-input-id]");
   const running = tab.status?.state === "running";
@@ -3103,6 +3119,9 @@ function renderRunTab(tab: RunTab): void {
   if (output) {
     renderAnsiTerminalText(output, terminalDisplayText(tab));
   }
+  if (artifacts) {
+    renderRunArtifacts(artifacts, tab.artifacts);
+  }
   if (form) {
     form.hidden = !running;
   }
@@ -3111,6 +3130,23 @@ function renderRunTab(tab: RunTab): void {
   }
 
   panel.scrollTop = panel.scrollHeight;
+}
+
+function renderRunArtifacts(container: HTMLElement, artifacts: RunArtifact[]): void {
+  container.replaceChildren();
+  const html = artifacts.find((artifact) => artifact.kind === "html");
+  if (!html) {
+    container.hidden = true;
+    return;
+  }
+
+  container.hidden = false;
+  const frame = document.createElement("iframe");
+  frame.className = "run-artifact-frame";
+  frame.sandbox.add("allow-scripts", "allow-forms", "allow-popups", "allow-modals");
+  frame.srcdoc = html.content;
+  frame.title = "App output";
+  container.append(frame);
 }
 
 function terminalDisplayText(tab: RunTab): string {
@@ -3197,6 +3233,7 @@ async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
   }
 
   tab.implementation = result.implementation;
+  tab.artifacts = result.artifacts;
   latestImplementationSource = result.implementation;
   renderSnippetPanel();
   appendTerminalChunks(tab, result.chunks);
@@ -3264,6 +3301,7 @@ async function pollRunTab(runTabId: string): Promise<void> {
   }
 
   currentTab.implementation = result.implementation;
+  currentTab.artifacts = result.artifacts;
   latestImplementationSource = result.implementation;
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
@@ -3310,6 +3348,7 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
 
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
+  currentTab.artifacts = result.artifacts;
   currentTab.status = result.status;
   latestImplementationSource = result.implementation;
   renderSnippetPanel();
@@ -3654,6 +3693,7 @@ async function startInteractiveRunViaDevApi(
     sessionId?: string;
     runnable?: string;
     chunks?: RunChunk[];
+    artifacts?: RunArtifact[];
     status?: RunStatus;
     error?: string;
     implementation?: string;
@@ -3672,6 +3712,7 @@ async function startInteractiveRunViaDevApi(
     typeof payload.sessionId !== "string" ||
     typeof payload.runnable !== "string" ||
     !Array.isArray(payload.chunks) ||
+    !isRunArtifacts(payload.artifacts) ||
     !isRunStatus(payload.status) ||
     typeof payload.implementation !== "string"
   ) {
@@ -3683,6 +3724,7 @@ async function startInteractiveRunViaDevApi(
     sessionId: payload.sessionId,
     runnable: payload.runnable,
     chunks: payload.chunks,
+    artifacts: payload.artifacts,
     status: payload.status,
     implementation: payload.implementation,
   };
@@ -3724,6 +3766,7 @@ async function pollInteractiveRunViaDevApi(
     ok?: boolean;
     runnable?: string;
     chunks?: RunChunk[];
+    artifacts?: RunArtifact[];
     status?: RunStatus;
     error?: string;
     errorCode?: string;
@@ -3735,6 +3778,7 @@ async function pollInteractiveRunViaDevApi(
     payload.ok !== true ||
     typeof payload.runnable !== "string" ||
     !Array.isArray(payload.chunks) ||
+    !isRunArtifacts(payload.artifacts) ||
     !isRunStatus(payload.status) ||
     typeof payload.implementation !== "string"
   ) {
@@ -3749,6 +3793,7 @@ async function pollInteractiveRunViaDevApi(
     ok: true,
     runnable: payload.runnable,
     chunks: payload.chunks,
+    artifacts: payload.artifacts,
     status: payload.status,
     implementation: payload.implementation,
   };
@@ -3802,6 +3847,15 @@ function isRunStatus(value: unknown): value is RunStatus {
     (typeof status.code === "number" || status.code === null) &&
     (typeof status.signal === "string" || status.signal === null)
   );
+}
+
+function isRunArtifacts(value: unknown): value is RunArtifact[] {
+  return Array.isArray(value) && value.every((artifact) => (
+    typeof artifact === "object" &&
+    artifact !== null &&
+    (artifact as RunArtifact).kind === "html" &&
+    typeof (artifact as RunArtifact).content === "string"
+  ));
 }
 
 class RunSessionNotFoundError extends Error {
@@ -4068,6 +4122,7 @@ export function createLoadableSession(): LoadableSession {
         sourceHash: tab.sourceHash,
         terminalText: tab.terminalText,
         implementation: tab.implementation,
+        artifacts: tab.artifacts,
         status: tab.status,
       })),
     },
@@ -4134,6 +4189,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       sourceHash: tab.sourceHash,
       terminalText: tab.terminalText,
       implementation: tab.implementation,
+      artifacts: tab.artifacts ?? [],
       status: restoredRunStatus(tab.status),
       pollTimer: null,
     }));
