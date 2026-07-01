@@ -16,6 +16,9 @@ import {
 export type RunArtifact = {
   kind: "html";
   content: string;
+} | {
+  kind: "iframe-url";
+  url: string;
 };
 
 export type TypeScriptExecution =
@@ -96,6 +99,13 @@ export async function compileCodeSheetToTypeScript(
     strategy: options.strategy ?? "sequential",
   });
   const parsed = parse(completedLogos.source);
+  const remainingDeclarations = parsed.incompleteSnippets.filter((snippet) => snippet.kind !== "natural");
+  if (remainingDeclarations.length > 0) {
+    const snippets = remainingDeclarations
+      .map((snippet) => snippet.snippet.split("\n")[0]?.trim() ?? "<unknown snippet>")
+      .join(", ");
+    throw new Error(`Compilation left incomplete Logos stubs: ${snippets}`);
+  }
   const lowered = lower(parsed);
   const source = buildTypeScriptModule(completedLogos.source);
   const completed: CompletedCodeSheet = {
@@ -112,6 +122,10 @@ export async function compileCodeSheetToTypeScript(
 }
 
 export function buildTypeScriptProgram(codeSheet: CodeSheet, runnable: Runnable): string {
+  if (isReactAppRunnable(codeSheet, runnable)) {
+    return buildReactAppProgram(codeSheet, runnable);
+  }
+
   const module = buildTypeScriptModule(codeSheet);
   return `${module}
 
@@ -413,6 +427,9 @@ function parseTypeScriptSheet(codeSheet: CodeSheet): ParsedTypeScriptSheet {
 }
 
 function emitTypeDecl(decl: TypeDecl): string {
+  if (decl.name === "ReactComponent" || decl.name === "ReactApp") {
+    return "";
+  }
   if (decl.name === "WebPage") {
     return "type WebPage = string;";
   }
@@ -457,15 +474,142 @@ function emitFunctionDecl(fn: FunctionDecl): string {
 }
 
 function runtimePrelude(parsed: ParsedTypeScriptSheet): string {
-  const needsWebPage = parsed.types.some((type) => type.name === "App" && /\bWebPage\b/.test(type.target)) ||
-    parsed.functions.some((fn) => fn.returnType === "App" || fn.returnType === "WebPage");
+  const needsWebPage = parsed.types.some((type) => resolvesToType(parsed, type.name, "WebPage")) ||
+    parsed.functions.some((fn) => resolvesToType(parsed, fn.returnType, "WebPage"));
   return [
+    `import * as React from "react";
+
+type ReactComponent = React.ReactElement;
+type ReactApp = ReactComponent;`,
     needsWebPage ? "type WebPage = string;" : "",
     needsWebPage ? shadcnRuntimePrelude() : "",
     `function looksLikeHtml(value: string): boolean {
   return /^\\s*(?:<!doctype\\s+html|<html\\b|<[a-z][\\s\\S]*>)/i.test(value);
 }`,
   ].filter(Boolean).join("\n\n");
+}
+
+function isReactAppRunnable(codeSheet: CodeSheet, runnable: Runnable): boolean {
+  const parsed = parseTypeScriptSheet(codeSheet);
+  return parsed.functions.some((fn) => fn.name === runnable && resolvesToType(parsed, fn.returnType, "ReactApp"));
+}
+
+function resolvesToType(parsed: ParsedTypeScriptSheet, sourceType: string, targetType: string): boolean {
+  const aliases = new Map(parsed.types.map((type) => [type.name, type.target.trim().replace(/;$/, "")]));
+  const seen = new Set<string>();
+  let current = sourceType.trim().replace(/;$/, "");
+  while (current.length > 0 && !seen.has(current)) {
+    if (current === targetType) {
+      return true;
+    }
+    seen.add(current);
+    const alias = aliases.get(current);
+    if (!alias) {
+      return false;
+    }
+    current = alias;
+  }
+  return false;
+}
+
+function buildReactAppProgram(codeSheet: CodeSheet, runnable: Runnable): string {
+  const browserModule = [
+    `import { createRoot } from "react-dom/client";`,
+    buildTypeScriptModule(codeSheet),
+    "",
+    `const root = document.getElementById("root");`,
+    `if (!root) throw new Error("Missing #root element");`,
+    `createRoot(root).render(${runnable}());`,
+  ].join("\n");
+
+  return `const __logosArtifactPrefix = ${JSON.stringify(artifactPrefix)};
+const __logosReactAppSource = ${JSON.stringify(browserModule)};
+
+async function __logosAvailablePort(host: string): Promise<number> {
+  const net = require("node:net");
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on("error", reject);
+    server.listen(0, host, () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Could not allocate a React app port")));
+        return;
+      }
+      server.close((error: unknown) => error ? reject(error) : resolve(address.port));
+    });
+  });
+}
+
+async function __logosStartReactApp(): Promise<void> {
+  const fs = require("node:fs/promises");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { spawn } = require("node:child_process");
+  const host = "127.0.0.1";
+  const port = await __logosAvailablePort(host);
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "logos-react-app-"));
+  const srcDir = path.join(root, "src");
+  await fs.mkdir(srcDir, { recursive: true });
+  await fs.writeFile(path.join(root, "index.html"), \`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logos React App</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>\`);
+  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: { dev: "vite" } }, null, 2));
+  await fs.writeFile(path.join(srcDir, "main.tsx"), __logosReactAppSource);
+  try {
+    await fs.symlink(path.join(process.cwd(), "node_modules"), path.join(root, "node_modules"), "dir");
+  } catch {
+    // Existing symlink or platform limitation; Vite will report a useful error if resolution fails.
+  }
+
+  const viteBin = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
+  const child = spawn(viteBin, ["--host", host, "--port", String(port), "--strictPort"], {
+    cwd: root,
+    env: { ...process.env, BROWSER: "none" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const url = \`http://\${host}:\${port}/\`;
+  let announced = false;
+  const announce = () => {
+    if (announced) return;
+    announced = true;
+    console.log(__logosArtifactPrefix + JSON.stringify({ kind: "iframe-url", url }));
+  };
+  const cleanup = async () => {
+    child.kill("SIGTERM");
+    await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+  };
+  process.on("SIGTERM", () => void cleanup().finally(() => process.exit(0)));
+  process.on("SIGINT", () => void cleanup().finally(() => process.exit(0)));
+  child.stdout.on("data", (chunk: any) => {
+    const text = chunk.toString("utf8");
+    if (/Local:|ready in/i.test(text)) announce();
+  });
+  child.stderr.on("data", (chunk: any) => process.stderr.write(chunk));
+  child.on("exit", (code: number | null) => {
+    if (!announced && code !== 0) {
+      process.exit(code ?? 1);
+    }
+  });
+  setTimeout(announce, 1500);
+  process.stdin.resume();
+}
+
+void __logosStartReactApp().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});
+`;
 }
 
 function shadcnRuntimePrelude(): string {
@@ -929,6 +1073,9 @@ function parseArtifact(raw: string): RunArtifact | null {
     const parsed = JSON.parse(raw) as Partial<RunArtifact>;
     if (parsed.kind === "html" && typeof parsed.content === "string") {
       return { kind: "html", content: parsed.content };
+    }
+    if (parsed.kind === "iframe-url" && typeof parsed.url === "string") {
+      return { kind: "iframe-url", url: parsed.url };
     }
   } catch {
     return null;

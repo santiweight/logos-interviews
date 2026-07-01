@@ -8,8 +8,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
 import { completeWithAnthropic } from "./anthropicComplete";
 import { checkCode, checkWebPage, generateCode } from "./codegenQualityChecks";
-import { sampleAppEvalCases, sampleEvalCases, samples } from "./samples";
-import { runTypeScript } from "./typescriptTarget";
+import { parse } from "./codeSheet";
+import { sampleAppEvalCases, sampleEvalCases, sampleReactAppEvalCases, samples } from "./samples";
+import { buildTypeScriptProgram, compileCodeSheetToTypeScript, InteractiveTypeScriptRun, runTypeScript } from "./typescriptTarget";
 
 const execFileAsync = promisify(execFile);
 
@@ -60,6 +61,9 @@ const borkedCounterHtmlFixture = `<!doctype html>
 const itIfAnthropicCodegen = process.env.RUN_ANTHROPIC_CODEGEN_E2E === "true" && process.env.ANTHROPIC_API_KEY
   ? it
   : it.skip;
+type BrowserRunArtifact =
+  | { kind: "html"; content: string }
+  | { kind: "iframe-url"; url: string };
 
 type BrowserSourceTab = {
   id: string;
@@ -431,6 +435,134 @@ function main(): WebPage {
     await page.close();
   });
 
+  it("hosts a ReactApp artifact on a port and renders it through an iframe", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const program = buildTypeScriptProgram(`function main(): ReactApp {
+  return React.createElement(function CounterApp() {
+    const [count, setCount] = React.useState(0);
+    return React.createElement(
+      "main",
+      { style: { fontFamily: "system-ui", padding: 24 } },
+      React.createElement("output", { id: "count" }, String(count)),
+      React.createElement(
+        "button",
+        { id: "increment", onClick: () => setCount(count + 1) },
+        "Increment",
+      ),
+    );
+  });
+}`, "main");
+
+    const session = new InteractiveTypeScriptRun(program);
+    try {
+      const url = await waitForIframeUrlArtifact(session);
+      const page = await browser.newPage();
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          browserErrors.push(message.text());
+        }
+      });
+
+      await page.setContent(`<iframe class="react-frame" sandbox="allow-scripts allow-same-origin" src="${url}"></iframe>`, {
+        waitUntil: "load",
+      });
+      const frame = page.frameLocator(".react-frame");
+      await expect.poll(async () => frame.locator("#count").textContent(), { timeout: 30_000 }).toBe("0");
+      await frame.locator("#increment").click();
+      await expect.poll(async () => frame.locator("#count").textContent(), { timeout: 30_000 }).toBe("1");
+      expect(browserErrors).toEqual([]);
+      await page.close();
+    } finally {
+      session.stop();
+    }
+  }, 60_000);
+
+  it("renders a hard-coded completed React Sudoku app through the hosted iframe path", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const program = buildTypeScriptProgram(completedReactSudokuProgram(), "main");
+    const session = new InteractiveTypeScriptRun(program);
+    try {
+      const url = await waitForIframeUrlArtifact(session);
+      const page = await browser.newPage();
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          browserErrors.push(message.text());
+        }
+      });
+
+      await page.setContent(`<iframe class="react-frame" sandbox="allow-scripts allow-same-origin" src="${url}"></iframe>`, {
+        waitUntil: "load",
+      });
+      const frame = page.frameLocator(".react-frame");
+      await expect.poll(async () => frame.locator(".sudoku-app").count(), { timeout: 30_000 }).toBe(1);
+      await expect.poll(async () => frame.locator(".sudoku-cell").count(), { timeout: 30_000 }).toBe(81);
+      await expect.poll(async () => frame.locator("[data-testid='selected-cell']").textContent(), { timeout: 30_000 }).toBe("none");
+      await frame.locator(".sudoku-cell").nth(10).click();
+      await expect.poll(async () => frame.locator("[data-testid='selected-cell']").textContent(), { timeout: 30_000 }).toBe("1-1");
+      await frame.getByRole("button", { name: "Notes" }).click();
+      await expect.poll(async () => frame.locator("[data-testid='mode']").textContent(), { timeout: 30_000 }).toBe("notes");
+      expect(browserErrors).toEqual([]);
+      await page.close();
+    } finally {
+      session.stop();
+    }
+  }, 60_000);
+
+  it("runs the generated React Sudoku component sample as an interactive hosted app", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const testCase = sampleReactAppEvalCases.find((item) => item.sampleId === "react-sudoku-components");
+    expect(testCase).toBeDefined();
+    if (!testCase) {
+      return;
+    }
+
+    const compiled = await compileCodeSheetToTypeScript(testCase.sheet, testCase.runnable, {
+      cache: new Map(),
+      complete: reactSudokuCompletion,
+      strategy: "parallel",
+    });
+    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
+    const session = new InteractiveTypeScriptRun(compiled.program);
+    try {
+      const url = await waitForIframeUrlArtifact(session);
+      const page = await browser.newPage();
+      const browserErrors: string[] = [];
+      page.on("pageerror", (error) => browserErrors.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error") {
+          browserErrors.push(message.text());
+        }
+      });
+
+      await page.setContent(`<iframe class="react-frame" sandbox="allow-scripts allow-same-origin" src="${url}"></iframe>`, {
+        waitUntil: "load",
+      });
+      const frame = page.frameLocator(".react-frame");
+      await expect.poll(async () => frame.locator(".sudoku-app").count(), { timeout: 30_000 }).toBe(1);
+      await expect.poll(async () => frame.locator(".sudoku-cell").count(), { timeout: 30_000 }).toBe(81);
+      await expect.poll(async () => frame.locator("output").textContent(), { timeout: 30_000 }).toBe("none");
+      await frame.locator(".sudoku-cell").first().click();
+      await expect.poll(async () => frame.locator("output").textContent(), { timeout: 30_000 }).toBe("0-0");
+      expect(browserErrors).toEqual([]);
+      await page.close();
+    } finally {
+      session.stop();
+    }
+  }, 90_000);
+
   it("checks generated counter code, webpage quality, and click behavior", async () => {
     if (!browser) {
       throw new Error("Browser was not started");
@@ -541,6 +673,200 @@ function main(): WebPage {
   }, 300_000);
 });
 
+function requestedCompletionSnippet(prompt: string): string {
+  return prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
+}
+
+function reactSudokuCompletion(prompt: string): string {
+  const target = requestedCompletionSnippet(prompt);
+  if (target.includes("function test_sudoku")) {
+    return `function test_sudoku(): SudokuState {
+  const state = new SudokuState();
+  const puzzle = [
+    [5, 3, 0, 0, 7, 0, 0, 0, 0],
+    [6, 0, 0, 1, 9, 5, 0, 0, 0],
+    [0, 9, 8, 0, 0, 0, 0, 6, 0],
+    [8, 0, 0, 0, 6, 0, 0, 0, 3],
+    [4, 0, 0, 8, 0, 3, 0, 0, 1],
+    [7, 0, 0, 0, 2, 0, 0, 0, 6],
+    [0, 6, 0, 0, 0, 0, 2, 8, 0],
+    [0, 0, 0, 4, 1, 9, 0, 0, 5],
+    [0, 0, 0, 0, 8, 0, 0, 7, 9],
+  ];
+  state.grid = puzzle.map((row) => row.map((value): CellState => {
+    return value === 0 ? { kind: "Annotations", values: [] } : { kind: "Solved", value };
+  }));
+  return state;
+}`;
+  }
+  if (target.includes("function sudoku_cell")) {
+    return `function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {
+  const label = cell.kind === "Solved" ? String(cell.value) : cell.values.join(" ");
+  return React.createElement(
+    "button",
+    { "data-row": row, "data-col": col, className: "sudoku-cell" },
+    label,
+  );
+}`;
+  }
+  if (target.includes("function sudoku_board")) {
+    expect(prompt).toContain("function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {");
+    return `function sudoku_board(state: SudokuState): ReactComponent {
+  return React.createElement(function SudokuBoard() {
+    const [selectedCell, setSelectedCell] = React.useState<string | null>(null);
+    const cells = state.grid.flatMap((row, rowIndex) =>
+      row.map((cell, colIndex) => {
+        const key = rowIndex + "-" + colIndex;
+        return React.createElement(
+          "div",
+          { key, "data-selected": selectedCell === key ? "true" : "false", onClick: () => setSelectedCell(key) },
+          sudoku_cell(cell, rowIndex, colIndex),
+        );
+      })
+    );
+    return React.createElement(
+      "section",
+      { "data-testid": "sudoku-board" },
+      React.createElement("div", { className: "sudoku-grid" }, cells),
+      React.createElement("output", {}, selectedCell ?? "none"),
+    );
+  });
+}`;
+  }
+  if (target.includes("function sudoku_controls")) {
+    return `function sudoku_controls(): ReactComponent {
+  return React.createElement(function SudokuControls() {
+    const [mode, setMode] = React.useState<"fill" | "notes">("fill");
+    return React.createElement(
+      "button",
+      { onClick: () => setMode(mode === "fill" ? "notes" : "fill") },
+      "Mode: " + mode,
+    );
+  });
+}`;
+  }
+  if (target.includes("function sudoku_app")) {
+    expect(prompt).toContain("function sudoku_board(state: SudokuState): ReactComponent {");
+    expect(prompt).toContain("function sudoku_controls(): ReactComponent {");
+    return `function sudoku_app(initial_state: SudokuState): ReactApp {
+  return React.createElement(function SudokuApp() {
+    const [state] = React.useState(initial_state);
+    return React.createElement(
+      "main",
+      { className: "sudoku-app" },
+      React.createElement("aside", {}, sudoku_controls()),
+      React.createElement("section", {}, sudoku_board(state)),
+    );
+  });
+}`;
+  }
+  throw new Error(`Unexpected React Sudoku prompt: ${prompt}`);
+}
+
+function completedReactSudokuProgram(): string {
+  return `type CellState =
+  { kind: "Solved"; value: number } |
+  { kind: "Annotations"; values: number[] };
+
+class SudokuState {
+  grid: CellState[][];
+}
+
+function test_sudoku(): SudokuState {
+  const state = new SudokuState();
+  const puzzle = [
+    [5, 3, 0, 0, 7, 0, 0, 0, 0],
+    [6, 0, 0, 1, 9, 5, 0, 0, 0],
+    [0, 9, 8, 0, 0, 0, 0, 6, 0],
+    [8, 0, 0, 0, 6, 0, 0, 0, 3],
+    [4, 0, 0, 8, 0, 3, 0, 0, 1],
+    [7, 0, 0, 0, 2, 0, 0, 0, 6],
+    [0, 6, 0, 0, 0, 0, 2, 8, 0],
+    [0, 0, 0, 4, 1, 9, 0, 0, 5],
+    [0, 0, 0, 0, 8, 0, 0, 7, 9],
+  ];
+  state.grid = puzzle.map((row) => row.map((value): CellState => {
+    return value === 0 ? { kind: "Annotations", values: [] } : { kind: "Solved", value };
+  }));
+  return state;
+}
+
+function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {
+  const text = cell.kind === "Solved" ? String(cell.value) : cell.values.join(" ");
+  return React.createElement(
+    "button",
+    {
+      className: "sudoku-cell",
+      "data-row": row,
+      "data-col": col,
+      style: {
+        width: 44,
+        height: 44,
+        border: "1px solid #737373",
+        background: "white",
+        fontWeight: cell.kind === "Solved" ? 700 : 400,
+      },
+    },
+    text,
+  );
+}
+
+function sudoku_board(state: SudokuState): ReactComponent {
+  return React.createElement(function SudokuBoard() {
+    const [selected, setSelected] = React.useState<string>("none");
+    const cells = state.grid.flatMap((row, rowIndex) =>
+      row.map((cell, colIndex) => {
+        const key = rowIndex + "-" + colIndex;
+        return React.createElement(
+          "div",
+          { key, onClick: () => setSelected(key) },
+          sudoku_cell(cell, rowIndex, colIndex),
+        );
+      })
+    );
+    return React.createElement(
+      "section",
+      {},
+      React.createElement(
+        "div",
+        {
+          className: "sudoku-grid",
+          style: { display: "grid", gridTemplateColumns: "repeat(9, 44px)", gap: 0 },
+        },
+        cells,
+      ),
+      React.createElement("output", { "data-testid": "selected-cell" }, selected),
+    );
+  });
+}
+
+function sudoku_controls(): ReactComponent {
+  return React.createElement(function SudokuControls() {
+    const [mode, setMode] = React.useState<"fill" | "notes">("fill");
+    return React.createElement(
+      "aside",
+      {},
+      React.createElement("output", { "data-testid": "mode" }, mode),
+      React.createElement("button", { onClick: () => setMode("fill") }, "Fill"),
+      React.createElement("button", { onClick: () => setMode("notes") }, "Notes"),
+    );
+  });
+}
+
+function sudoku_app(initial_state: SudokuState): ReactApp {
+  return React.createElement(
+    "main",
+    { className: "sudoku-app", style: { display: "flex", gap: 16, padding: 24 } },
+    sudoku_controls(),
+    sudoku_board(initial_state),
+  );
+}
+
+function main(): ReactApp {
+  return sudoku_app(test_sudoku());
+}`;
+}
+
 function shadcnCounterHtmlFixture(): string {
   return `<!doctype html>
 <html>
@@ -580,7 +906,7 @@ function shadcnCounterHtmlFixture(): string {
 async function runSheetViaApi(sheet: string, runnable: string): Promise<{
   ok: boolean;
   text: string;
-  artifacts: Array<{ kind: "html"; content: string }>;
+  artifacts: BrowserRunArtifact[];
 }> {
   if (!browser) {
     throw new Error("Browser was not started");
@@ -598,7 +924,7 @@ async function runSheetViaApi(sheet: string, runnable: string): Promise<{
       ok: boolean;
       sessionId: string;
       chunks?: Array<{ stream: string; text: string }>;
-      artifacts?: Array<{ kind: "html"; content: string }>;
+      artifacts?: BrowserRunArtifact[];
       status?: { state: string };
       error?: string;
     };
@@ -619,7 +945,7 @@ async function runSheetViaApi(sheet: string, runnable: string): Promise<{
       const polled = await poll.json() as {
         ok: boolean;
         chunks?: Array<{ stream: string; text: string }>;
-        artifacts?: Array<{ kind: "html"; content: string }>;
+        artifacts?: BrowserRunArtifact[];
         status?: { state: string };
         error?: string;
       };
@@ -680,6 +1006,25 @@ async function loadSource(page: Page, source: string, title: string): Promise<vo
       },
     });
   }, { source, title });
+}
+
+async function waitForIframeUrlArtifact(session: InteractiveTypeScriptRun, timeoutMs = 30_000): Promise<string> {
+  const startedAt = Date.now();
+  let output = "";
+  while (Date.now() - startedAt < timeoutMs) {
+    for (const artifact of session.drainArtifacts()) {
+      if (artifact.kind === "iframe-url") {
+        return artifact.url;
+      }
+    }
+    output += session.drainOutput().map((chunk) => chunk.text).join("");
+    const status = session.status();
+    if (status.state === "exited") {
+      throw new Error(`React app run exited before emitting iframe URL: ${status.error ?? output}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Timed out waiting for React app iframe URL. Output:\n${output}`);
 }
 
 async function findFreePort(): Promise<number> {

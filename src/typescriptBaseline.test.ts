@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   compile,
   buildCompletionPrompt,
+  dependencyGraphForCodeSheet,
   definitionReadiness,
   hashCompletionInput,
   parse,
@@ -16,7 +17,7 @@ import { checkCode, checkWebPageHtml, generateCode } from "./codegenQualityCheck
 import { runCodeSheet } from "./codeSheetRunner";
 import { anthropicMaxTokens, throwIfMaxTokensStop } from "./anthropicComplete";
 import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
-import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
+import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, sampleReactAppEvalCases, samples, sampleTemplateGroups } from "./samples";
 import {
   buildTypeScriptModule,
   buildTypeScriptProgram,
@@ -81,6 +82,107 @@ const page = shadcn.Page("Counter Button", card, counterScript);
 
 return shadcn.renderApp(page);`;
 
+const reactSudokuComponentSheet = sampleReactAppEvalCases.find((testCase) => testCase.sampleId === "react-sudoku-components")?.sheet ?? "";
+
+function requestedCompletionSnippet(prompt: string): string {
+  return prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
+}
+
+function requestedCompletionName(prompt: string): string {
+  return requestedCompletionSnippet(prompt).match(/function\s+([A-Za-z_][A-Za-z0-9_]*)\b/)?.[1] ?? "unknown";
+}
+
+function reactSudokuCompletion(prompt: string): string {
+  const target = requestedCompletionSnippet(prompt);
+  if (target.includes("function test_sudoku")) {
+    return `function test_sudoku(): SudokuState {
+  const state = new SudokuState();
+  const puzzle = [
+    [5, 3, 0, 0, 7, 0, 0, 0, 0],
+    [6, 0, 0, 1, 9, 5, 0, 0, 0],
+    [0, 9, 8, 0, 0, 0, 0, 6, 0],
+    [8, 0, 0, 0, 6, 0, 0, 0, 3],
+    [4, 0, 0, 8, 0, 3, 0, 0, 1],
+    [7, 0, 0, 0, 2, 0, 0, 0, 6],
+    [0, 6, 0, 0, 0, 0, 2, 8, 0],
+    [0, 0, 0, 4, 1, 9, 0, 0, 5],
+    [0, 0, 0, 0, 8, 0, 0, 7, 9],
+  ];
+  state.grid = puzzle.map((row) => row.map((value): CellState => {
+    return value === 0 ? { kind: "Annotations", values: [] } : { kind: "Solved", value };
+  }));
+  return state;
+}`;
+  }
+  if (target.includes("function sudoku_cell")) {
+    return `function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {
+  const label = cell.kind === "Solved" ? String(cell.value) : cell.values.join(" ");
+  return React.createElement(
+    "button",
+    { "data-row": row, "data-col": col, className: "sudoku-cell" },
+    label,
+  );
+}`;
+  }
+  if (target.includes("function sudoku_board")) {
+    expect(prompt).toContain("// Renders and supports clicking of sudoku_cell instances and registering of fills/notes");
+    expect(prompt).toContain("function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {");
+    return `function sudoku_board(state: SudokuState): ReactComponent {
+  return React.createElement(function SudokuBoard() {
+    const [selectedCell, setSelectedCell] = React.useState<string | null>(null);
+    const cells = state.grid.flatMap((row, rowIndex) =>
+      row.map((cell, colIndex) => {
+        const key = rowIndex + "-" + colIndex;
+        return React.createElement(
+          "div",
+          {
+            key,
+            "data-selected": selectedCell === key ? "true" : "false",
+            onClick: () => setSelectedCell(key),
+          },
+          sudoku_cell(cell, rowIndex, colIndex),
+        );
+      })
+    );
+    return React.createElement(
+      "section",
+      { "data-testid": "sudoku-board" },
+      React.createElement("div", { className: "sudoku-grid" }, cells),
+      React.createElement("output", {}, selectedCell ?? "none"),
+    );
+  });
+}`;
+  }
+  if (target.includes("function sudoku_controls")) {
+    return `function sudoku_controls(): ReactComponent {
+  return React.createElement(function SudokuControls() {
+    const [mode, setMode] = React.useState<"fill" | "notes">("fill");
+    return React.createElement(
+      "button",
+      { onClick: () => setMode(mode === "fill" ? "notes" : "fill") },
+      "Mode: " + mode,
+    );
+  });
+}`;
+  }
+  if (target.includes("function sudoku_app")) {
+    expect(prompt).toContain("function sudoku_board(state: SudokuState): ReactComponent {");
+    expect(prompt).toContain("function sudoku_controls(): ReactComponent {");
+    return `function sudoku_app(initial_state: SudokuState): ReactApp {
+  return React.createElement(function SudokuApp() {
+    const [state] = React.useState(initial_state);
+    return React.createElement(
+      "main",
+      { className: "sudoku-app" },
+      React.createElement("aside", {}, sudoku_controls()),
+      React.createElement("section", {}, sudoku_board(state)),
+    );
+  });
+}`;
+  }
+  throw new Error(`Unexpected React Sudoku prompt: ${prompt}`);
+}
+
 async function collectCompileEvents(
   cache: CodeCache,
   sheet: string,
@@ -125,13 +227,16 @@ describe("Logos-TS compiler shape", () => {
       "annotated-maze",
       "portfolio-viewer",
     ];
+    const baseProjectIds = ["counter-button", "react-sudoku-components"];
     const appEvalProjectIds = ["sudoku-human-viewer"];
+    const reactAppEvalProjectIds = ["react-sudoku-components"];
 
-    expect(defaultProjectIds).toEqual(["counter-button", "sudoku-human-viewer"]);
-    expect(samples.map((sample) => sample.id)).toEqual(["counter-button", ...evalProjectIds, ...appEvalProjectIds]);
+    expect(defaultProjectIds).toEqual([...baseProjectIds, "sudoku-human-viewer"]);
+    expect(samples.map((sample) => sample.id)).toEqual([...baseProjectIds, ...evalProjectIds, ...appEvalProjectIds]);
     expect(sampleTemplateGroups.flatMap((group) => group.sampleIds)).toEqual(samples.map((sample) => sample.id));
     expect(sampleEvalCases.map((testCase) => testCase.sampleId)).toEqual(evalProjectIds);
     expect(sampleAppEvalCases.map((testCase) => testCase.sampleId)).toEqual(appEvalProjectIds);
+    expect(sampleReactAppEvalCases.map((testCase) => testCase.sampleId)).toEqual(reactAppEvalProjectIds);
   });
 
   it("discovers the runnable for each baseline file", () => {
@@ -141,6 +246,11 @@ describe("Logos-TS compiler shape", () => {
       ]);
     }
     for (const testCase of sampleAppEvalCases) {
+      expect(runnables(testCase.sheet), testCase.name).toEqual([
+        { line: expect.any(Number), name: testCase.runnable },
+      ]);
+    }
+    for (const testCase of sampleReactAppEvalCases) {
       expect(runnables(testCase.sheet), testCase.name).toEqual([
         { line: expect.any(Number), name: testCase.runnable },
       ]);
@@ -305,6 +415,378 @@ function main(): App {
     expect(module).toContain('type SudokuStrategy = "UniqueBoxSolve" | "UniqueLineSolve" | "HiddenSingle";');
     expect(module).toContain('type CellUpdate = { kind: "Remove Notes"; values: number[] } | { kind: "Add Note"; values: number[] } | { kind: "Fill Square"; value: number };');
     expect(() => transpileTypeScript(module)).not.toThrow();
+  });
+
+  it("uses attached comments as dependency contract for function completion hashes", () => {
+    const parsed = parse(reactSudokuComponentSheet);
+    const boardSnippet = parsed.incompleteSnippets.find((snippet) => snippet.snippet.startsWith("function sudoku_board"))?.snippet;
+    expect(boardSnippet).toBeDefined();
+    if (!boardSnippet) return;
+
+    const baseHash = hashCompletionInput(parsed, boardSnippet);
+    const changedAttachedComment = reactSudokuComponentSheet.replace(
+      "registering of fills/notes",
+      "registering of selected cells",
+    );
+    const changedCellContract = reactSudokuComponentSheet.replace(
+      "function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;",
+      "function sudoku_cell(cell: CellState, row: number, col: number, selected: boolean): ReactComponent;",
+    );
+
+    expect(hashCompletionInput(parse(changedAttachedComment), boardSnippet)).not.toBe(baseHash);
+    expect(hashCompletionInput(parse(changedCellContract), boardSnippet)).not.toBe(baseHash);
+  });
+
+  it("builds a dependency graph for the Sudoku ReactComponent stub", () => {
+    const graph = dependencyGraphForCodeSheet(reactSudokuComponentSheet);
+    const node = (name: string) => graph.nodes.find((item) => item.name === name);
+
+    expect(node("sudoku_board")?.dependencies).toEqual(expect.arrayContaining([
+      "sudoku_cell",
+      "SudokuState",
+    ]));
+    expect(node("sudoku_app")?.dependencies).toEqual(expect.arrayContaining([
+      "SudokuState",
+      "sudoku_board",
+      "sudoku_controls",
+    ]));
+    expect(node("main")?.dependencies).toEqual(expect.arrayContaining([
+      "sudoku_app",
+      "test_sudoku",
+    ]));
+    expect(node("main")?.transitiveDependencies).toEqual(expect.arrayContaining([
+      "sudoku_app",
+      "test_sudoku",
+      "sudoku_board",
+      "sudoku_controls",
+      "sudoku_cell",
+      "SudokuState",
+      "CellState",
+    ]));
+  });
+
+  it("models Sudoku ReactComponent readiness from incomplete dependency cache state", async () => {
+    const parsed = parse(reactSudokuComponentSheet);
+    const cache: CodeCache = new Map();
+    const readiness = definitionReadiness(parsed, cache);
+    const byName = new Map(readiness.map((item) => [item.name, item]));
+
+    expect(byName.get("sudoku_cell")).toMatchObject({
+      ready: false,
+      reason: "implementation",
+      blockingDependencies: [],
+    });
+    expect(byName.get("sudoku_board")).toMatchObject({
+      ready: false,
+      reason: "implementation",
+      dependencies: expect.arrayContaining(["sudoku_cell"]),
+      blockingDependencies: [],
+    });
+    expect(byName.get("main")).toMatchObject({
+      ready: false,
+      reason: "dependency",
+      dependencies: expect.arrayContaining(["sudoku_app", "test_sudoku"]),
+      blockingDependencies: expect.arrayContaining(["sudoku_app", "test_sudoku"]),
+    });
+
+    await compileCodeSheetToTypeScript(reactSudokuComponentSheet, "main", {
+      cache,
+      complete: reactSudokuCompletion,
+      strategy: "parallel",
+    });
+
+    const completedByName = new Map(definitionReadiness(parsed, cache).map((item) => [item.name, item]));
+    expect(completedByName.get("main")).toMatchObject({
+      ready: true,
+      blockingDependencies: [],
+    });
+  });
+
+  it("compiles the Sudoku ReactComponent contract to a hosted React app program", async () => {
+    const testCase = sampleReactAppEvalCases.find((item) => item.sampleId === "react-sudoku-components");
+    expect(testCase).toBeDefined();
+    if (!testCase) return;
+
+    const starts: string[] = [];
+    const compiled = await compileCodeSheetToTypeScript(testCase.sheet, testCase.runnable, {
+      cache: new Map(),
+      complete: (prompt) => {
+        starts.push(requestedCompletionName(prompt));
+        return reactSudokuCompletion(prompt);
+      },
+      strategy: "parallel",
+    });
+
+    expect(starts.indexOf("sudoku_cell")).toBeLessThan(starts.indexOf("sudoku_board"));
+    expect(starts.indexOf("sudoku_board")).toBeLessThan(starts.indexOf("sudoku_app"));
+    expect(starts.indexOf("sudoku_controls")).toBeLessThan(starts.indexOf("sudoku_app"));
+    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
+    expect(compiled.completed.source).toContain("type ReactComponent = React.ReactElement");
+    expect(compiled.completed.source).toContain("type ReactApp = ReactComponent");
+    expect(compiled.completed.source).toContain("function sudoku_board");
+    expect(compiled.completed.source).toContain("React.useState");
+    expect(compiled.completed.source).toContain("sudoku_cell(cell, rowIndex, colIndex)");
+    expect(() => transpileTypeScript(compiled.program)).not.toThrow();
+    expect(compiled.program).toContain("logos-react-app-");
+    expect(compiled.program).toContain('"iframe-url"');
+    expect(compiled.program).toContain("createRoot(root).render(main())");
+  });
+
+  it("waits for dependency implementations before prompting dependent functions", async () => {
+    const sheet = `function first(): number;
+
+// Must call first.
+function second(): number;
+
+// Must call second.
+function third(): number;
+
+function main(): void {
+  console.log(third());
+}`;
+    const starts: string[] = [];
+    const prompts = new Map<string, string>();
+
+    const compiled = await compileCodeSheetToTypeScript(sheet, "main", {
+      cache: new Map(),
+      complete: (prompt) => {
+        const name = requestedCompletionName(prompt);
+        starts.push(name);
+        prompts.set(name, prompt);
+        if (name === "first") {
+          return `function first(): number {
+  return 1;
+}`;
+        }
+        if (name === "second") {
+          expect(prompt).toContain(`function first(): number {
+  return 1;
+}`);
+          return `function second(): number {
+  return first() + 1;
+}`;
+        }
+        if (name === "third") {
+          expect(prompt).toContain(`function second(): number {
+  return first() + 1;
+}`);
+          return `function third(): number {
+  return second() + 1;
+}`;
+        }
+        throw new Error(`Unexpected prompt: ${prompt}`);
+      },
+      strategy: "parallel",
+    });
+
+    expect(starts).toEqual(["first", "second", "third"]);
+    expect(prompts.get("second")).not.toContain("function first(): number;");
+    expect(prompts.get("third")).not.toContain("function second(): number;");
+    expect(compiled.completed.source).toContain("return second() + 1;");
+  });
+
+  it("does not reuse a dependent cached completion when a dependency implementation changes", async () => {
+    const sheet = `function first(): number;
+
+// Must call first.
+function second(): number;
+
+function main(): void {
+  console.log(second());
+}`;
+    const cache: CodeCache = new Map();
+
+    const first = await compileCodeSheetToTypeScript(sheet, "main", {
+      cache,
+      complete: (prompt) => {
+        const name = requestedCompletionName(prompt);
+        if (name === "first") {
+          return `function first(): number {
+  return 1;
+}`;
+        }
+        if (name === "second") {
+          expect(prompt).toContain("return 1;");
+          return `function second(): number {
+  return first() + 1;
+}`;
+        }
+        throw new Error(`Unexpected prompt: ${prompt}`);
+      },
+      strategy: "parallel",
+    });
+    expect(first.completed.source).toContain("return first() + 1;");
+
+    const changedDependencySheet = sheet.replace(
+      "function first(): number;",
+      `function first(): number {
+  return 10;
+}`,
+    );
+    const secondStarts: string[] = [];
+    const second = await compileCodeSheetToTypeScript(changedDependencySheet, "main", {
+      cache,
+      complete: (prompt) => {
+        const name = requestedCompletionName(prompt);
+        secondStarts.push(name);
+        if (name === "second") {
+          expect(prompt).toContain("return 10;");
+          return `function second(): number {
+  return first() + 10;
+}`;
+        }
+        throw new Error(`Unexpected prompt: ${prompt}`);
+      },
+      strategy: "parallel",
+    });
+
+    expect(secondStarts).toEqual(["second"]);
+    expect(second.completed.source).toContain("return first() + 10;");
+    expect(second.completed.source).not.toContain("return first() + 1;");
+  });
+
+  it("does not reuse a dependent cached completion when the cached dependency implementation changes", async () => {
+    const sheet = `function first(): number;
+
+// Must call first.
+function second(): number;
+
+function main(): void {
+  console.log(second());
+}`;
+    const cache: CodeCache = new Map();
+
+    const firstCompile = await compileCodeSheetToTypeScript(sheet, "main", {
+      cache,
+      complete: (prompt) => {
+        const name = requestedCompletionName(prompt);
+        if (name === "first") {
+          return `function first(): number {
+  return 1;
+}`;
+        }
+        if (name === "second") {
+          expect(prompt).toContain("return 1;");
+          return `function second(): number {
+  return first() + 1;
+}`;
+        }
+        throw new Error(`Unexpected prompt: ${prompt}`);
+      },
+      strategy: "parallel",
+    });
+
+    const firstCompletion = firstCompile.completed.completions.find((completion) => completion.snippet.startsWith("function first"));
+    expect(firstCompletion).toBeDefined();
+    if (!firstCompletion) return;
+    cache.set(firstCompletion.hash, `function first(): number {
+  return 10;
+}`);
+
+    const starts: string[] = [];
+    const secondCompile = await compileCodeSheetToTypeScript(sheet, "main", {
+      cache,
+      complete: (prompt) => {
+        const name = requestedCompletionName(prompt);
+        starts.push(name);
+        if (name === "second") {
+          expect(prompt).toContain("return 10;");
+          return `function second(): number {
+  return first() + 10;
+}`;
+        }
+        throw new Error(`Unexpected prompt: ${prompt}`);
+      },
+      strategy: "parallel",
+    });
+
+    expect(starts).toEqual(["second"]);
+    expect(secondCompile.completed.source).toContain("return first() + 10;");
+    expect(secondCompile.completed.source).not.toContain("return first() + 1;");
+  });
+
+  it("rejects completed code sheets that still contain unimplemented stubs", async () => {
+    await expect(compileCodeSheetToTypeScript(`function helper(): number;
+
+function main(): void {
+  console.log(helper());
+}`, "main", {
+      cache: new Map(),
+      complete: (prompt) => {
+        const target = requestedCompletionSnippet(prompt);
+        if (target.includes("function helper")) {
+          return "function helper(): number;";
+        }
+        throw new Error(`Unexpected prompt: ${prompt}`);
+      },
+      strategy: "parallel",
+    })).rejects.toThrow(/Completion for requested snippet left incomplete Logos stubs: function helper\(\): number;/);
+  });
+
+  it("retries a completion that returns an unimplemented declaration stub", async () => {
+    let calls = 0;
+    const compiled = await compileCodeSheetToTypeScript(`function helper(): number;
+
+function main(): void {
+  console.log(helper());
+}`, "main", {
+      cache: new Map(),
+      complete: (prompt) => {
+        expect(requestedCompletionSnippet(prompt)).toContain("function helper");
+        calls += 1;
+        return calls === 1
+          ? "function helper(): number;"
+          : `function helper(): number {
+  return 42;
+}`;
+      },
+      strategy: "parallel",
+    });
+
+    expect(calls).toBe(2);
+    expect(compiled.completed.source).toContain("return 42;");
+    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
+  });
+
+  it("invalidates cached declaration stubs before compiling dependent React components", async () => {
+    const parsed = parse(reactSudokuComponentSheet);
+    const cellSnippet = parsed.incompleteSnippets.find((snippet) => snippet.snippet.startsWith("function sudoku_cell"));
+    expect(cellSnippet).toBeDefined();
+    if (!cellSnippet) return;
+
+    const cache: CodeCache = new Map();
+    cache.set(
+      hashCompletionInput(parsed, cellSnippet.snippet, cellSnippet.annotationContexts),
+      "function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;",
+    );
+
+    const starts: string[] = [];
+    const compiled = await compileCodeSheetToTypeScript(reactSudokuComponentSheet, "main", {
+      cache,
+      complete: (prompt) => {
+        starts.push(requestedCompletionName(prompt));
+        return reactSudokuCompletion(prompt);
+      },
+      strategy: "parallel",
+    });
+
+    expect(starts).toContain("sudoku_cell");
+    expect(compiled.completed.source).toContain("function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {");
+    expect(compiled.completed.source).toContain("function sudoku_controls(): ReactComponent {");
+    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
+  });
+
+  it("treats App aliases to ReactApp as hosted React apps", () => {
+    const program = buildTypeScriptProgram(`type App = ReactApp;
+
+function main(): App {
+  return React.createElement("main", {}, "Hello React");
+}`, "main");
+
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    expect(program).toContain('"iframe-url"');
+    expect(program).toContain("createRoot(root).render(main())");
+    expect(program).not.toContain("const __logosResult = main()");
   });
 
   it("discovers class snippets that need implementation", () => {
@@ -624,7 +1106,7 @@ function main(): App {
       "Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers",
     );
     expect(prompt).toContain(
-      "If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency",
+      "If another class, result type, helper, or function is referenced elsewhere in the sheet or in an attached declaration comment, use it as an existing dependency",
     );
   });
 

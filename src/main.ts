@@ -2,9 +2,9 @@ import "./styles.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import {
-  conf as indentationLanguageConfiguration,
-  language as indentationLanguage,
-} from "monaco-editor/esm/vs/basic-languages/python/python.js";
+  conf as typeScriptLanguageConfiguration,
+  language as typeScriptLanguage,
+} from "monaco-editor/esm/vs/basic-languages/typescript/typescript.js";
 import {
   completionSnippetHashes,
   definitionReadiness,
@@ -63,10 +63,9 @@ type RunChunk = {
   text: string;
 };
 
-type RunArtifact = {
-  kind: "html";
-  content: string;
-};
+type RunArtifact =
+  | { kind: "html"; content: string }
+  | { kind: "iframe-url"; url: string };
 
 type RunStatus =
   | { state: "running" }
@@ -470,7 +469,7 @@ let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
 let selectedSnippetHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
 let selectedWholeFileImplementation = false;
-let naturalSnippetEditorMode: "python" | "natural" = "python";
+let naturalSnippetEditorMode: "typescript" | "natural" = "typescript";
 let latestImplementationSource = seedCode;
 let runTabs: RunTab[] = [];
 let activeToolTabId: ToolTabId = null;
@@ -2200,18 +2199,16 @@ function registerLogosTypeScriptLanguage(): void {
     aliases: ["Logos TypeScript", "logos-typescript"],
     mimetypes: ["text/x-logos-typescript"],
   });
-  monaco.languages.setLanguageConfiguration(logosTypeScriptLanguageId, indentationLanguageConfiguration);
+  monaco.languages.setLanguageConfiguration(logosTypeScriptLanguageId, typeScriptLanguageConfiguration);
   monaco.languages.setMonarchTokensProvider(logosTypeScriptLanguageId, {
-    ...indentationLanguage,
+    ...typeScriptLanguage,
     tokenPostfix: ".logos-typescript",
     tokenizer: {
-      ...indentationLanguage.tokenizer,
+      ...typeScriptLanguage.tokenizer,
       root: [
-        indentationLanguage.tokenizer.root[0],
-        [/\/\/.*$/, "comment"],
         [/```/, "naturalSnippet.delimiter", "@logosTripleNaturalSnippet"],
         [/`/, "naturalSnippet.delimiter", "@logosInlineNaturalSnippet"],
-        ...indentationLanguage.tokenizer.root.slice(1),
+        ...typeScriptLanguage.tokenizer.root,
       ],
       logosInlineNaturalSnippet: [
         [/[^`]+/, "naturalSnippet"],
@@ -2520,7 +2517,7 @@ function updateNaturalSnippetEditorMode(): void {
   const inNaturalSnippet = position !== null && Array.from(incompleteSnippetByHash.values()).some((target) => {
     return target.kind === "natural" && targetContainsPosition(target, position.lineNumber, position.column);
   });
-  const mode = inNaturalSnippet ? "natural" : "python";
+  const mode = inNaturalSnippet ? "natural" : "typescript";
 
   if (mode === naturalSnippetEditorMode) {
     return;
@@ -3143,8 +3140,9 @@ function renderRunTab(tab: RunTab): void {
 
 function renderRunArtifacts(container: HTMLElement, artifacts: RunArtifact[]): void {
   container.replaceChildren();
+  const iframeUrl = artifacts.find((artifact) => artifact.kind === "iframe-url");
   const html = artifacts.find((artifact) => artifact.kind === "html");
-  if (!html) {
+  if (!iframeUrl && !html) {
     container.hidden = true;
     return;
   }
@@ -3152,8 +3150,12 @@ function renderRunArtifacts(container: HTMLElement, artifacts: RunArtifact[]): v
   container.hidden = false;
   const frame = document.createElement("iframe");
   frame.className = "run-artifact-frame";
-  frame.sandbox.add("allow-scripts", "allow-forms", "allow-popups", "allow-modals");
-  frame.srcdoc = html.content;
+  frame.sandbox.add("allow-scripts", "allow-forms", "allow-popups", "allow-modals", "allow-same-origin");
+  if (iframeUrl) {
+    frame.src = iframeUrl.url;
+  } else if (html) {
+    frame.srcdoc = html.content;
+  }
   frame.title = "App output";
   container.append(frame);
 }
@@ -3862,8 +3864,10 @@ function isRunArtifacts(value: unknown): value is RunArtifact[] {
   return Array.isArray(value) && value.every((artifact) => (
     typeof artifact === "object" &&
     artifact !== null &&
-    (artifact as RunArtifact).kind === "html" &&
-    typeof (artifact as RunArtifact).content === "string"
+    (
+      ((artifact as RunArtifact).kind === "html" && typeof (artifact as { content?: unknown }).content === "string") ||
+      ((artifact as RunArtifact).kind === "iframe-url" && typeof (artifact as { url?: unknown }).url === "string")
+    )
   ));
 }
 

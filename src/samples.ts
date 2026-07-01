@@ -42,6 +42,13 @@ export type SampleAppEvalCase = {
   htmlCheck: SampleHtmlCheck;
 };
 
+export type SampleReactAppEvalCase = {
+  sampleId: string;
+  name: string;
+  sheet: CodeSheet;
+  runnable: Runnable;
+};
+
 export type SampleHtmlCheck = {
   description: string;
   matches: (html: string) => boolean;
@@ -53,6 +60,33 @@ function main(): WebPage {
   \`\`\`
   a counter that starts at 0 and increments each time the button is clicked
   \`\`\`
+}`;
+
+const reactSudokuComponents = `// React Sudoku components.
+
+type CellState =
+  { kind: "Solved"; value: number } |
+  { kind: "Annotations"; values: number[] };
+
+class SudokuState {
+  grid: CellState[][];
+}
+
+function test_sudoku(): SudokuState;
+
+function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;
+
+// Renders and supports clicking of sudoku_cell instances and registering of fills/notes
+function sudoku_board(state: SudokuState): ReactComponent;
+
+// A toggle between fill and notes mode
+function sudoku_controls(): ReactComponent;
+
+// Center: sudoku_board. Left: sudoku_controls.
+function sudoku_app(initial_state: SudokuState): ReactApp;
+
+function main(): ReactApp {
+  return sudoku_app(test_sudoku());
 }`;
 
 const starterArithmetic = `// Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
@@ -338,6 +372,11 @@ export const sampleGroups: SampleGroup[] = [
         label: "Counter button",
         code: counterButton,
       },
+      {
+        id: "react-sudoku-components",
+        label: "React Sudoku components",
+        code: reactSudokuComponents,
+      },
     ],
   },
   {
@@ -386,13 +425,14 @@ export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.sa
 
 export const defaultProjectIds = [
   "counter-button",
+  "react-sudoku-components",
   "sudoku-human-viewer",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
     label: "Base Project",
-    sampleIds: ["counter-button"],
+    sampleIds: ["counter-button", "react-sudoku-components"],
   },
   {
     label: "Baseline Logos-TS",
@@ -483,6 +523,15 @@ export const sampleAppEvalCases: SampleAppEvalCase[] = [
       description: "renders a shadcn-backed Sudoku board with human strategy context",
       matches: isHumanSudokuHtml,
     },
+  },
+];
+
+export const sampleReactAppEvalCases: SampleReactAppEvalCase[] = [
+  {
+    sampleId: "react-sudoku-components",
+    name: "logos-ts React Sudoku components compile to hosted app",
+    sheet: sampleById("react-sudoku-components").code,
+    runnable: "main",
   },
 ];
 

@@ -1,0 +1,24 @@
+type CellState =
+  { kind: "Solved"; value: number } |
+  { kind: "Annotations"; values: number[] };
+
+class SudokuState {
+  grid: CellState[][];
+}
+
+function test_sudoku(): SudokuState;
+
+function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;
+
+// Renders and supports clicking of sudoku_cell instances and registering of fills/notes
+function sudoku_board(state: SudokuState): ReactComponent;
+
+// A toggle between fill and notes mode
+function sudoku_controls(): ReactComponent;
+
+// Center: sudoku_board. Left: sudoku_controls.
+function sudoku_app(initial_state: SudokuState): ReactApp;
+
+function main(): ReactApp {
+  return sudoku_app(test_sudoku());
+}

@@ -32,7 +32,7 @@ const statusOverrides = new Map<string, Pick<MigrationCase, "status" | "note">>(
   keyed("codeSheet.test.ts", "uses dependency-aware completion hashes", "covered", "Covered by Logos-TS hash stability/invalidation tests."),
   keyed("codeSheet.test.ts", "emits cache hits without invoking the LLM", "covered", "Covered by Logos-TS function cache-hit test with throwing completion fallback."),
   keyed("codeSheet.test.ts", "can compile cached sheets without emitting intermediate progress", "todo", "Important TS gap: cached compile stream behavior needs a TS equivalent."),
-  keyed("codeSheet.test.ts", "models readiness through incomplete definitions and dependencies", "covered", "Covered by Logos-TS readiness modeling and browser blocked-runnable status tests."),
+  keyed("codeSheet.test.ts", "models readiness through incomplete definitions and dependencies", "covered", "Covered by Logos-TS readiness modeling, browser blocked-runnable status tests, and React Sudoku dependency graph tests."),
   keyed("codeSheet.test.ts", "keeps completed cache entries after cancelling an in-progress compile", "todo", "Important TS gap: cancellation/cache integrity needs a TS equivalent."),
   keyed("codeSheet.test.ts", "passes parallel strategy through the runner", "covered", "Covered by Logos-TS runner strategy passthrough test."),
   keyed("codeSheet.test.ts", "auto strategy commits only the first successful strategy cache fork", "todo", "Important TS gap: auto/parallel strategy cache fork behavior is not covered."),
