@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse, runnables } from "./codeSheet";
+import { checkCode, checkWebPageHtml, generateCode } from "./codegenQualityChecks";
 import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
 import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
 import {
@@ -132,6 +133,31 @@ function main(): App {
     expect(() => transpileTypeScript(compiled.program)).not.toThrow();
   });
 
+  it("checks generated WebPage code with generic code quality gates", async () => {
+    const generated = await generateCode(shadcnCounterSheet, "main", {
+      cache: new Map(),
+      complete: () => shadcnCounterBody,
+    });
+
+    expect(checkCode(generated.code, {
+      expectedKind: "webpage",
+      promptFragments: ["a counter than increments when you click it"],
+      requiredSubstrings: ["shadcn.Button", "shadcn.renderApp"],
+    })).toEqual({ ok: true, failures: [] });
+  });
+
+  it("rejects borked generated code before running it", () => {
+    const result = checkCode("```ts\nconsole.log('a counter than increments when you click it')\n```", {
+      promptFragments: ["a counter than increments when you click it"],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(expect.arrayContaining([
+      "generated code still contains markdown fences",
+      "generated code appears to echo prompt fragment: a counter than increments when you click it",
+    ]));
+  });
+
   it("seeds the base counter app as shadcn WebPage code", async () => {
     const sample = samples.find((item) => item.id === "counter-button");
     expect(sample).toBeDefined();
@@ -194,6 +220,15 @@ ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(result.artifacts[0].content).toContain("Hello shadcn");
     expect(result.artifacts[0].content).toContain("window.incrementCounter");
     expect(result.artifacts[0].content).toContain('id="increment"');
+  });
+
+  it("rejects webpages with object-string rendering artifacts", () => {
+    const html = `<!doctype html><html><head><style data-shadcn-runtime="true"></style></head><body><button>[object Object]</button></body></html>`;
+
+    const result = checkWebPageHtml(html);
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("webpage html contains [object Object]");
   });
 
   it("keeps sample-specific knowledge out of the production TypeScript target", () => {

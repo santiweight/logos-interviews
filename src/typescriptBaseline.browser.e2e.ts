@@ -3,13 +3,42 @@ import { createServer } from "node:net";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
+import { completeWithAnthropic } from "./anthropicComplete";
+import { checkCode, checkWebPage, generateCode } from "./codegenQualityChecks";
 import { sampleAppEvalCases, sampleEvalCases, samples } from "./samples";
+import { runTypeScript } from "./typescriptTarget";
 
 const execFileAsync = promisify(execFile);
 
 let serverProcess: ReturnType<typeof spawn> | null = null;
 let browser: Browser | null = null;
 let baseUrl = "";
+const codegenCounterSheet = `function main(): WebPage {
+  \`\`\`
+  a counter that starts at 0 and increments each time the button is clicked
+  \`\`\`
+}`;
+const codegenCounterBody = `const incrementScript = "window.incrementCounter = () => { const el = document.getElementById('count'); if (!el) return; el.textContent = String(Number(el.textContent || '0') + 1); };";
+return shadcn.renderApp(
+  shadcn.Page({ title: "Counter Button", description: "Counter demo" },
+    shadcn.Card(
+      shadcn.CardHeader(
+        shadcn.CardTitle("Counter"),
+        shadcn.CardDescription("Click the button to increment the value."),
+      ),
+      shadcn.CardContent(
+        shadcn.Stack(
+          shadcn.Metric({ id: "count" }, "0"),
+          shadcn.Button({ id: "increment", onClick: "window.incrementCounter()" }, "Increment"),
+        ),
+      ),
+    ),
+  ),
+  { title: "Counter Button", scripts: [incrementScript] },
+);`;
+const itIfAnthropicCodegen = process.env.RUN_ANTHROPIC_CODEGEN_E2E === "true" && process.env.ANTHROPIC_API_KEY
+  ? it
+  : it.skip;
 
 describe("Logos-TS browser baseline", () => {
   beforeAll(async () => {
@@ -212,6 +241,99 @@ describe("Logos-TS browser baseline", () => {
     expect(browserErrors).toEqual([]);
     await page.close();
   });
+
+  it("checks generated counter code, webpage quality, and click behavior", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const generated = await generateCode(codegenCounterSheet, "main", {
+      cache: new Map(),
+      complete: () => codegenCounterBody,
+    });
+    expect(checkCode(generated.code, {
+      expectedKind: "webpage",
+      promptFragments: ["a counter that starts at 0 and increments each time the button is clicked"],
+      requiredSubstrings: ["shadcn.renderApp", "shadcn.Button"],
+    })).toEqual({ ok: true, failures: [] });
+
+    const result = await runTypeScript(generated.code);
+    expect(result.ok).toBe(true);
+    const html = result.artifacts.find((artifact) => artifact.kind === "html")?.content;
+    expect(html).toBeDefined();
+    if (html === undefined) return;
+
+    const page = await browser.newPage();
+    const pageCheck = await checkWebPage(page, html, { expectShadcn: true, minVisibleTextLength: 20 });
+    expect(pageCheck).toEqual({ ok: true, failures: [] });
+    await expect.poll(async () => page.locator("#count").textContent()).toBe("0");
+    await page.locator("#increment").click();
+    await expect.poll(async () => page.locator("#count").textContent()).toBe("1");
+    await page.locator("#increment").click();
+    await expect.poll(async () => page.locator("#count").textContent()).toBe("2");
+    await page.close();
+  });
+
+  it("rejects webpages that visibly render object values", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const page = await browser.newPage();
+    const result = await checkWebPage(
+      page,
+      `<!doctype html><html><head><style data-shadcn-runtime="true"></style></head><body><main><button>[object Object]</button></main></body></html>`,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(expect.arrayContaining([
+      "webpage html contains [object Object]",
+      "webpage visible text contains [object Object]",
+      "button 1 name contains [object Object]",
+    ]));
+    await page.close();
+  });
+
+  itIfAnthropicCodegen("generates a working counter app through the real LLM path", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const attempts = Number(process.env.CODEGEN_QUALITY_ATTEMPTS ?? "3");
+    const minimumPasses = Number(process.env.CODEGEN_QUALITY_MIN_PASSES ?? String(attempts));
+    const outcomes: Array<{ attempt: number; ok: boolean; failures: string[] }> = [];
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const generated = await generateCode(codegenCounterSheet, "main", {
+        cache: new Map(),
+        complete: completeWithAnthropic,
+      });
+      const codeCheck = checkCode(generated.code, {
+        expectedKind: "webpage",
+        promptFragments: ["a counter that starts at 0 and increments each time the button is clicked"],
+      });
+      const run = codeCheck.ok ? await runTypeScript(generated.code) : null;
+      const html = run?.artifacts.find((artifact) => artifact.kind === "html")?.content ?? "";
+      const page = await browser.newPage();
+      const pageCheck = run?.ok === true
+        ? await checkWebPage(page, html, { expectShadcn: true, minVisibleTextLength: 20 })
+        : { ok: false, failures: [run ? `run failed: ${run.stderr}` : "code check failed"] };
+      if (pageCheck.ok) {
+        await page.getByRole("button", { name: /increment/i }).click();
+        const clicked = await page.locator("body").innerText();
+        if (!/\b1\b/.test(clicked)) {
+          pageCheck.failures.push("counter did not show 1 after click");
+          pageCheck.ok = false;
+        }
+      }
+      await page.close();
+      const failures = [...codeCheck.failures, ...(run?.ok === false ? [run.stderr] : []), ...pageCheck.failures];
+      outcomes.push({ attempt, ok: failures.length === 0, failures });
+    }
+
+    const passes = outcomes.filter((outcome) => outcome.ok).length;
+    expect(passes, JSON.stringify(outcomes, null, 2)).toBeGreaterThanOrEqual(minimumPasses);
+  }, 300_000);
 });
 
 function shadcnCounterHtmlFixture(): string {
