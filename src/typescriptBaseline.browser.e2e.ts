@@ -36,6 +36,23 @@ return shadcn.renderApp(
   ),
   { title: "Counter Button", scripts: [incrementScript] },
 );`;
+const borkedCounterHtmlFixture = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style data-shadcn-runtime="true"></style>
+</head>
+<body>
+  <main>
+    <h1>Counter Button</h1>
+    <section>
+      <h2>Counter</h2>
+      <div id="counter-value">Count0</div>
+      <button type="button">Incrementincrement()</button>
+    </section>
+  </main>
+</body>
+</html>`;
 const itIfAnthropicCodegen = process.env.RUN_ANTHROPIC_CODEGEN_E2E === "true" && process.env.ANTHROPIC_API_KEY
   ? it
   : it.skip;
@@ -290,6 +307,22 @@ describe("Logos-TS browser baseline", () => {
       "webpage html contains [object Object]",
       "webpage visible text contains [object Object]",
       "button 1 name contains [object Object]",
+    ]));
+    await page.close();
+  });
+
+  it("rejects borked counter pages that render handler text instead of wiring clicks", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const page = await browser.newPage();
+    const result = await checkWebPage(page, borkedCounterHtmlFixture);
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toEqual(expect.arrayContaining([
+      "button 1 name contains JavaScript handler text",
+      "button 1 looks interactive but has no click handler",
     ]));
     await page.close();
   });

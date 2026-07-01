@@ -37,6 +37,37 @@ return shadcn.renderApp(
   { title: "Hello shadcn Counter", scripts: [incrementScript] },
 );`;
 
+const borkedCounterBody = `const counterId = "counter-value";
+
+const counterScript = shadcn.Script(\`
+  var count = 0;
+  function increment() {
+    count++;
+    document.getElementById('\${counterId}').textContent = count;
+  }
+\`);
+
+const metricDisplay = shadcn.Metric("Count", \`<span id="\${counterId}">0</span>\`);
+
+const incrementButton = shadcn.Button("Increment", "increment()");
+
+const card = shadcn.Card(
+  shadcn.CardHeader(
+    shadcn.CardTitle("Counter"),
+    shadcn.CardDescription("A counter that starts at 0 and increments each time the button is clicked.")
+  ),
+  shadcn.CardContent(
+    shadcn.Stack(
+      metricDisplay,
+      incrementButton
+    )
+  )
+);
+
+const page = shadcn.Page("Counter Button", card, counterScript);
+
+return shadcn.renderApp(page);`;
+
 describe("Logos-TS compiler shape", () => {
   it("uses the counter app as the base project and keeps migrated files as eval targets", () => {
     const evalProjectIds = [
@@ -127,6 +158,8 @@ function main(): App {
 
     expect(prompt).toContain("global shadcn helper object");
     expect(prompt).toContain("shadcn.renderApp");
+    expect(prompt).toContain('shadcn.Button({ onClick: "window.someHandler()" }, "Label")');
+    expect(prompt).toContain('Do not put JavaScript handlers in button text');
     expect(compiled.completed.source).toContain("const shadcn =");
     expect(compiled.completed.source).toContain("shadcn.renderApp");
     expect(compiled.program).toContain("shadcn.Button");
@@ -156,6 +189,21 @@ function main(): App {
       "generated code still contains markdown fences",
       "generated code appears to echo prompt fragment: a counter than increments when you click it",
     ]));
+  });
+
+  it("rejects generated shadcn buttons that put handlers in text children", async () => {
+    const generated = await generateCode(shadcnCounterSheet, "main", {
+      cache: new Map(),
+      complete: () => borkedCounterBody,
+    });
+
+    const result = checkCode(generated.code, {
+      expectedKind: "webpage",
+      requiredSubstrings: ["shadcn.Button"],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.failures).toContain("generated WebPage code passes a string handler as Button text instead of an onClick prop");
   });
 
   it("seeds the base counter app as shadcn WebPage code", async () => {

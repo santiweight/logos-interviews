@@ -104,6 +104,9 @@ export function checkCode(code: string, options: CheckCodeOptions = {}): CheckRe
     if (!/\bconst __logosResult = /.test(code)) {
       failures.push("generated WebPage code is not wrapped as a runnable program");
     }
+    if (hasStringHandlerShadcnButton(code)) {
+      failures.push("generated WebPage code passes a string handler as Button text instead of an onClick prop");
+    }
   }
 
   return toResult(failures);
@@ -164,6 +167,7 @@ export async function checkWebPage(page: Page, html: string, options: CheckWebPa
         text: button.textContent?.trim() ?? "",
         ariaLabel: button.getAttribute("aria-label") ?? "",
         title: button.getAttribute("title") ?? "",
+        hasClickHandler: button.hasAttribute("onclick") || button.getAttribute("data-action") !== null,
       }));
     });
     for (const [index, button] of buttons.entries()) {
@@ -175,6 +179,12 @@ export async function checkWebPage(page: Page, html: string, options: CheckWebPa
         if (pattern.test(name)) {
           failures.push(`button ${index + 1} name contains ${label}`);
         }
+      }
+      if (looksLikeJavaScriptCall(name)) {
+        failures.push(`button ${index + 1} name contains JavaScript handler text`);
+      }
+      if (!button.hasClickHandler && (looksInteractiveButtonName(name) || looksLikeJavaScriptCall(name))) {
+        failures.push(`button ${index + 1} looks interactive but has no click handler`);
       }
     }
 
@@ -197,6 +207,18 @@ function invalidVisibleOutputPatterns(): Array<[RegExp, string]> {
     [/\bnull\b/, "null"],
     [/\bfunction\s*\(|=>\s*\{/, "raw function source"],
   ];
+}
+
+function hasStringHandlerShadcnButton(code: string): boolean {
+  return /\bshadcn\.Button\s*\(\s*(["'`])(?:\\.|(?!\1)[\s\S])*?\1\s*,\s*(["'`])\s*[A-Za-z_$][\w$]*(?:\s*\([^"'`]*\))?\s*\2\s*\)/.test(code);
+}
+
+function looksLikeJavaScriptCall(value: string): boolean {
+  return /\b[A-Za-z_$][\w$]*\s*\([^)]*\)/.test(value);
+}
+
+function looksInteractiveButtonName(value: string): boolean {
+  return /\b(?:add|apply|approve|cancel|click|create|delete|download|increment|next|open|remove|reset|run|save|send|start|submit|toggle|update)\b/i.test(value);
 }
 
 function invalidHtmlOutputPatterns(): Array<[RegExp, string]> {
