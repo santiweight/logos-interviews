@@ -42,13 +42,6 @@ export type SampleAppEvalCase = {
   htmlCheck: SampleHtmlCheck;
 };
 
-export type SampleReactAppEvalCase = {
-  sampleId: string;
-  name: string;
-  sheet: CodeSheet;
-  runnable: Runnable;
-};
-
 export type SampleHtmlCheck = {
   description: string;
   matches: (html: string) => boolean;
@@ -62,31 +55,23 @@ function main(): WebPage {
   \`\`\`
 }`;
 
-const reactSudokuComponents = `// React Sudoku components.
+const simpleSudoku = `// Simple Sudoku
 
 type CellState =
-  { kind: "Solved"; value: number } |
-  { kind: "Annotations"; values: number[] };
-
+ | { kind: "filled"; value: number }
+ | { kind: "notes"; value: number[] }
 class SudokuState {
-  grid: CellState[][];
+  grid: CellState[][]
 }
 
-function test_sudoku(): SudokuState;
-
-function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;
-
-// Renders and supports clicking of sudoku_cell instances and registering of fills/notes
-function sudoku_board(state: SudokuState): ReactComponent;
-
-// A toggle between fill and notes mode
-function sudoku_controls(): ReactComponent;
-
-// Center: sudoku_board. Left: sudoku_controls.
-function sudoku_app(initial_state: SudokuState): ReactApp;
+const test_sudoku = number[][];
 
 function main(): ReactApp {
-  return sudoku_app(test_sudoku());
+  \`\`\`
+  render test_sudoku.
+  supports clicking cells and filling values.
+  underneath the board is a toggle to switch between notes/filling.
+  \`\`\`
 }`;
 
 const starterArithmetic = `// Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
@@ -373,9 +358,9 @@ export const sampleGroups: SampleGroup[] = [
         code: counterButton,
       },
       {
-        id: "react-sudoku-components",
-        label: "React Sudoku components",
-        code: reactSudokuComponents,
+        id: "simple-sudoku",
+        label: "Simple Sudoku",
+        code: simpleSudoku,
       },
     ],
   },
@@ -425,14 +410,13 @@ export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.sa
 
 export const defaultProjectIds = [
   "counter-button",
-  "react-sudoku-components",
-  "sudoku-human-viewer",
+  "simple-sudoku",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
     label: "Base Project",
-    sampleIds: ["counter-button", "react-sudoku-components"],
+    sampleIds: ["counter-button", "simple-sudoku"],
   },
   {
     label: "Baseline Logos-TS",
@@ -523,15 +507,6 @@ export const sampleAppEvalCases: SampleAppEvalCase[] = [
       description: "renders a shadcn-backed Sudoku board with human strategy context",
       matches: isHumanSudokuHtml,
     },
-  },
-];
-
-export const sampleReactAppEvalCases: SampleReactAppEvalCase[] = [
-  {
-    sampleId: "react-sudoku-components",
-    name: "logos-ts React Sudoku components compile to hosted app",
-    sheet: sampleById("react-sudoku-components").code,
-    runnable: "main",
   },
 ];
 

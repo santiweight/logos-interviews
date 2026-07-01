@@ -6,6 +6,7 @@ export default defineConfig({
       "src/typescriptBaseline.test.ts",
       "src/typescriptMigrationBacklog.test.ts",
       "src/typescriptApi.test.ts",
+      "src/wholeSheetCompile.test.ts",
     ],
     exclude: ["src/**/*.e2e.ts"],
   },

@@ -99,15 +99,8 @@ export async function compileCodeSheetToTypeScript(
     strategy: options.strategy ?? "sequential",
   });
   const parsed = parse(completedLogos.source);
-  const remainingDeclarations = parsed.incompleteSnippets.filter((snippet) => snippet.kind !== "natural");
-  if (remainingDeclarations.length > 0) {
-    const snippets = remainingDeclarations
-      .map((snippet) => snippet.snippet.split("\n")[0]?.trim() ?? "<unknown snippet>")
-      .join(", ");
-    throw new Error(`Compilation left incomplete Logos stubs: ${snippets}`);
-  }
   const lowered = lower(parsed);
-  const source = buildTypeScriptModule(completedLogos.source);
+  const source = buildClaudeTypeScriptModule(completedLogos.source);
   const completed: CompletedCodeSheet = {
     source,
     lowered: { ...lowered, source },
@@ -126,14 +119,23 @@ export function buildTypeScriptProgram(codeSheet: CodeSheet, runnable: Runnable)
     return buildReactAppProgram(codeSheet, runnable);
   }
 
-  const module = buildTypeScriptModule(codeSheet);
+  const module = buildClaudeTypeScriptModule(codeSheet);
   return `${module}
 
 const __logosResult = ${runnable}();
 if (typeof __logosResult === "string" && looksLikeHtml(__logosResult)) {
   console.log(${JSON.stringify(artifactPrefix)} + JSON.stringify({ kind: "html", content: __logosResult }));
+} else if (isReactApp(__logosResult)) {
+  console.log(${JSON.stringify(artifactPrefix)} + JSON.stringify({ kind: "html", content: renderReactApp(__logosResult) }));
 }
 `;
+}
+
+export function buildClaudeTypeScriptModule(codeSheet: CodeSheet): string {
+  return [
+    runtimePrelude(),
+    sanitizeClaudeTypeScriptSource(codeSheet),
+  ].filter((chunk) => chunk.trim().length > 0).join("\n\n").trimEnd();
 }
 
 export function buildTypeScriptModule(codeSheet: CodeSheet): string {
@@ -151,10 +153,20 @@ export function buildTypeScriptWebPage(_codeSheet: CodeSheet): string | null {
   return null;
 }
 
+function sanitizeClaudeTypeScriptSource(source: CodeSheet): string {
+  return normalizeNewlines(source)
+    .split("\n")
+    .filter((line) => !/^type\s+(?:WebPage|ReactApp)\s*=/.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 export function transpileTypeScript(source: string): string {
   typeCheckTypeScript(source);
   const result = ts.transpileModule(source, {
+    fileName: "logos-program.tsx",
     compilerOptions: {
+      jsx: ts.JsxEmit.React,
       module: ts.ModuleKind.CommonJS,
       target: ts.ScriptTarget.ES2022,
       strict: true,
@@ -173,8 +185,9 @@ export function transpileTypeScript(source: string): string {
 }
 
 function typeCheckTypeScript(source: string): void {
-  const fileName = "logos-program.ts";
+  const fileName = "logos-program.tsx";
   const compilerOptions: ts.CompilerOptions = {
+    jsx: ts.JsxEmit.React,
     module: ts.ModuleKind.CommonJS,
     target: ts.ScriptTarget.ES2022,
     strict: true,
@@ -427,11 +440,8 @@ function parseTypeScriptSheet(codeSheet: CodeSheet): ParsedTypeScriptSheet {
 }
 
 function emitTypeDecl(decl: TypeDecl): string {
-  if (decl.name === "ReactComponent" || decl.name === "ReactApp") {
-    return "";
-  }
   if (decl.name === "WebPage") {
-    return "type WebPage = string;";
+    return "";
   }
   return `type ${typeName(decl.name)} = ${typeExpression(decl.target)};`;
 }
@@ -473,15 +483,15 @@ function emitFunctionDecl(fn: FunctionDecl): string {
   return `function ${fn.name}(${params}): ${returnType} {\n${indent(body)}\n}`;
 }
 
-function runtimePrelude(parsed: ParsedTypeScriptSheet): string {
-  const needsWebPage = parsed.types.some((type) => resolvesToType(parsed, type.name, "WebPage")) ||
-    parsed.functions.some((fn) => resolvesToType(parsed, fn.returnType, "WebPage"));
+function runtimePrelude(parsed?: ParsedTypeScriptSheet): string {
+  const needsWebPage = parsed === undefined ||
+    parsed.types.some((type) => type.name === "App" && /\bWebPage\b/.test(type.target)) ||
+    parsed.functions.some((fn) => fn.returnType === "App" || fn.returnType === "WebPage" || fn.returnType === "ReactApp");
   return [
-    `import * as React from "react";
-
-type ReactComponent = React.ReactElement;
-type ReactApp = ReactComponent;`,
-    needsWebPage ? "type WebPage = string;" : "",
+    `import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";`,
+    "type WebPage = string;",
+    reactAppRuntimePrelude(),
     needsWebPage ? shadcnRuntimePrelude() : "",
     `function looksLikeHtml(value: string): boolean {
   return /^\\s*(?:<!doctype\\s+html|<html\\b|<[a-z][\\s\\S]*>)/i.test(value);
@@ -490,36 +500,51 @@ type ReactApp = ReactComponent;`,
 }
 
 function isReactAppRunnable(codeSheet: CodeSheet, runnable: Runnable): boolean {
-  const parsed = parseTypeScriptSheet(codeSheet);
-  return parsed.functions.some((fn) => fn.name === runnable && resolvesToType(parsed, fn.returnType, "ReactApp"));
+  const source = sanitizeClaudeTypeScriptSource(codeSheet);
+  const functionPattern = new RegExp(`function\\s+${escapeRegExp(runnable)}\\s*\\([^)]*\\)\\s*:\\s*([A-Za-z_][A-Za-z0-9_]*)`);
+  const returnType = source.match(functionPattern)?.[1];
+  return returnType !== undefined && resolvesToNamedType(source, returnType, "ReactApp");
 }
 
-function resolvesToType(parsed: ParsedTypeScriptSheet, sourceType: string, targetType: string): boolean {
-  const aliases = new Map(parsed.types.map((type) => [type.name, type.target.trim().replace(/;$/, "")]));
+function resolvesToNamedType(source: string, sourceType: string, targetType: string): boolean {
+  const aliases = new Map<string, string>();
+  for (const match of source.matchAll(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;?$/gm)) {
+    aliases.set(match[1], match[2]);
+  }
+
   const seen = new Set<string>();
-  let current = sourceType.trim().replace(/;$/, "");
+  let current = sourceType;
   while (current.length > 0 && !seen.has(current)) {
     if (current === targetType) {
       return true;
     }
     seen.add(current);
-    const alias = aliases.get(current);
-    if (!alias) {
-      return false;
-    }
-    current = alias;
+    current = aliases.get(current) ?? "";
   }
   return false;
 }
 
 function buildReactAppProgram(codeSheet: CodeSheet, runnable: Runnable): string {
   const browserModule = [
+    `import React from "react";`,
     `import { createRoot } from "react-dom/client";`,
-    buildTypeScriptModule(codeSheet),
+    browserReactRuntimePrelude(),
+    sanitizeClaudeTypeScriptSource(codeSheet),
     "",
     `const root = document.getElementById("root");`,
     `if (!root) throw new Error("Missing #root element");`,
-    `createRoot(root).render(${runnable}());`,
+    `const __logosRoot = createRoot(root);`,
+    `const __logosResult = ${runnable}();`,
+    `if (React.isValidElement(__logosResult)) {`,
+    `  __logosRoot.render(__logosResult);`,
+    `} else if (isClientReactApp(__logosResult)) {`,
+    `  const __logosProps = __logosResult.props ?? {};`,
+    `  const __logosFactory = new Function("React", "props", "const App = (" + __logosResult.componentSource + "); return App;");`,
+    `  const __logosApp = __logosFactory(React, __logosProps);`,
+    `  __logosRoot.render(React.createElement(__logosApp, __logosProps));`,
+    `} else {`,
+    `  throw new Error("ReactApp runnable must return a React element or reactApp(componentSource, props, options).");`,
+    `}`,
   ].join("\n");
 
   return `const __logosArtifactPrefix = ${JSON.stringify(artifactPrefix)};
@@ -537,7 +562,7 @@ async function __logosAvailablePort(host: string): Promise<number> {
         server.close(() => reject(new Error("Could not allocate a React app port")));
         return;
       }
-      server.close((error: unknown) => error ? reject(error) : resolve(address.port));
+      server.close((error?: Error) => error ? reject(error) : resolve(address.port));
     });
   });
 }
@@ -569,7 +594,7 @@ async function __logosStartReactApp(): Promise<void> {
   try {
     await fs.symlink(path.join(process.cwd(), "node_modules"), path.join(root, "node_modules"), "dir");
   } catch {
-    // Existing symlink or platform limitation; Vite will report a useful error if resolution fails.
+    // Vite will report a useful module-resolution error if this fails.
   }
 
   const viteBin = path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "vite.cmd" : "vite");
@@ -591,11 +616,11 @@ async function __logosStartReactApp(): Promise<void> {
   };
   process.on("SIGTERM", () => void cleanup().finally(() => process.exit(0)));
   process.on("SIGINT", () => void cleanup().finally(() => process.exit(0)));
-  child.stdout.on("data", (chunk: any) => {
+  child.stdout.on("data", (chunk: Buffer) => {
     const text = chunk.toString("utf8");
     if (/Local:|ready in/i.test(text)) announce();
   });
-  child.stderr.on("data", (chunk: any) => process.stderr.write(chunk));
+  child.stderr.on("data", (chunk: Buffer) => process.stderr.write(chunk));
   child.on("exit", (code: number | null) => {
     if (!announced && code !== 0) {
       process.exit(code ?? 1);
@@ -610,6 +635,126 @@ void __logosStartReactApp().catch((error: unknown) => {
   process.exit(1);
 });
 `;
+}
+
+function browserReactRuntimePrelude(): string {
+  return `type WebPage = string;
+type ReactComponent = React.ReactElement;
+type LogosClientReactApp = {
+  kind: "client-react-app";
+  componentSource: string;
+  props?: unknown;
+  title?: string;
+  styles?: string;
+};
+type ReactApp = React.ReactElement | LogosClientReactApp;
+
+function reactApp(
+  componentSource: string,
+  props?: unknown,
+  options: { title?: string; styles?: string } = {},
+): ReactApp {
+  void options;
+  return { kind: "client-react-app", componentSource, props };
+}
+
+function isClientReactApp(value: unknown): value is LogosClientReactApp {
+  return typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === "client-react-app" &&
+    typeof (value as { componentSource?: unknown }).componentSource === "string";
+}`;
+}
+
+function reactAppRuntimePrelude(): string {
+  return `type LogosClientReactApp = {
+  kind: "client-react-app";
+  componentSource: string;
+  props?: unknown;
+  title?: string;
+  styles?: string;
+};
+type ReactApp = React.ReactElement | LogosClientReactApp;
+
+function reactApp(
+  componentSource: string,
+  props?: unknown,
+  options: { title?: string; styles?: string } = {},
+): ReactApp {
+  return {
+    kind: "client-react-app",
+    componentSource,
+    props,
+    title: options.title,
+    styles: options.styles,
+  };
+}
+
+function isReactApp(value: unknown): value is ReactApp {
+  return React.isValidElement(value) ||
+    (typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "client-react-app");
+}
+
+function renderReactApp(app: ReactApp): WebPage {
+  if (!React.isValidElement(app)) {
+    return renderClientReactApp(app);
+  }
+
+  const markup = renderToStaticMarkup(app);
+  return \`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logos React App</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f7f7f8; color: #18181b; }
+    button, input, select { font: inherit; }
+  </style>
+</head>
+<body>
+  <div id="root">\${markup}</div>
+</body>
+</html>\`;
+}
+
+function renderClientReactApp(app: LogosClientReactApp): WebPage {
+  const componentSource = JSON.stringify(app.componentSource);
+  const props = JSON.stringify(app.props ?? {});
+  return \`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>\${escapeHtmlForReactDocument(app.title ?? "Logos React App")}</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f7f7f8; color: #18181b; }
+    button, input, select { font: inherit; }
+    \${app.styles ?? ""}
+  </style>
+  <script crossorigin src="https://unpkg.com/react@19/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@19/umd/react-dom.development.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    const componentFactory = new Function("React", "props", "const App = (" + \${componentSource} + "); return React.createElement(App, props);");
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(componentFactory(React, \${props}));
+  </script>
+</body>
+</html>\`;
+}
+
+function escapeHtmlForReactDocument(value: unknown): string {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}`;
 }
 
 function shadcnRuntimePrelude(): string {
@@ -676,6 +821,9 @@ const shadcn = (() => {
     return String(child);
   };
   const renderChildren = (children: ShadcnChild[]): string => children.map(renderChild).join("");
+  const renderScript = (script: string): string => /^\\s*<script\\b/i.test(script)
+    ? script
+    : \`<script>\${script}</script>\`;
   const isProps = (value: ShadcnChild): value is ShadcnProps =>
     typeof value === "object" && value !== null && !Array.isArray(value);
   const normalizeArgs = (args: ShadcnChild[]): { props: ShadcnProps; children: ShadcnChild[] } =>
@@ -735,19 +883,22 @@ const shadcn = (() => {
       const { children } = normalizeArgs(args);
       return \`<script>\${renderChildren(children)}</script>\`;
     },
-    renderApp: (body: ShadcnChild, options: { title?: string; scripts?: string[]; styles?: string } = {}): WebPage => \`<!doctype html>
+    renderApp: (body: ShadcnChild, options: { title?: string; scripts?: string[]; styles?: string } | string = {}): WebPage => {
+      const normalizedOptions = typeof options === "string" ? { scripts: [options] } : options;
+      return \`<!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>\${escapeHtml(options.title ?? "Logos App")}</title>
-  <style data-shadcn-runtime="true">\${baseCss}\${options.styles ?? ""}</style>
+  <title>\${escapeHtml(normalizedOptions.title ?? "Logos App")}</title>
+  <style data-shadcn-runtime="true">\${baseCss}\${normalizedOptions.styles ?? ""}</style>
 </head>
 <body>
   \${renderChildren([body])}
-  \${(options.scripts ?? []).map((script) => \`<script>\${script}</script>\`).join("\\n")}
+  \${(normalizedOptions.scripts ?? []).map(renderScript).join("\\n")}
 </body>
-</html>\`,
+</html>\`;
+    },
   };
 })();`;
 }
@@ -1118,6 +1269,10 @@ function safeName(name: string): string {
 
 function typeName(name: string): string {
   return name === "EvalError" ? "LogosEvalError" : name;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeNewlines(source: string): string {

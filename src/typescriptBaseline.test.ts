@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   compile,
   buildCompletionPrompt,
-  dependencyGraphForCodeSheet,
-  definitionReadiness,
   hashCompletionInput,
   parse,
   runnables,
@@ -17,7 +15,7 @@ import { checkCode, checkWebPageHtml, generateCode } from "./codegenQualityCheck
 import { runCodeSheet } from "./codeSheetRunner";
 import { anthropicMaxTokens, throwIfMaxTokensStop } from "./anthropicComplete";
 import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
-import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, sampleReactAppEvalCases, samples, sampleTemplateGroups } from "./samples";
+import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
 import {
   buildTypeScriptModule,
   buildTypeScriptProgram,
@@ -82,106 +80,23 @@ const page = shadcn.Page("Counter Button", card, counterScript);
 
 return shadcn.renderApp(page);`;
 
-const reactSudokuComponentSheet = sampleReactAppEvalCases.find((testCase) => testCase.sampleId === "react-sudoku-components")?.sheet ?? "";
-
-function requestedCompletionSnippet(prompt: string): string {
-  return prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
+function shadcnCounterSheetWithBody(body: string): string {
+  return `function main(): WebPage {
+${body.split("\n").map((line) => `  ${line}`).join("\n")}
+}`;
 }
 
-function requestedCompletionName(prompt: string): string {
-  return requestedCompletionSnippet(prompt).match(/function\s+([A-Za-z_][A-Za-z0-9_]*)\b/)?.[1] ?? "unknown";
+const arithmeticCompletedSheet = `function add(x: number, y: number): number {
+  return x + y;
+}
+function mul(x: number, y: number): number {
+  return x * y;
 }
 
-function reactSudokuCompletion(prompt: string): string {
-  const target = requestedCompletionSnippet(prompt);
-  if (target.includes("function test_sudoku")) {
-    return `function test_sudoku(): SudokuState {
-  const state = new SudokuState();
-  const puzzle = [
-    [5, 3, 0, 0, 7, 0, 0, 0, 0],
-    [6, 0, 0, 1, 9, 5, 0, 0, 0],
-    [0, 9, 8, 0, 0, 0, 0, 6, 0],
-    [8, 0, 0, 0, 6, 0, 0, 0, 3],
-    [4, 0, 0, 8, 0, 3, 0, 0, 1],
-    [7, 0, 0, 0, 2, 0, 0, 0, 6],
-    [0, 6, 0, 0, 0, 0, 2, 8, 0],
-    [0, 0, 0, 4, 1, 9, 0, 0, 5],
-    [0, 0, 0, 0, 8, 0, 0, 7, 9],
-  ];
-  state.grid = puzzle.map((row) => row.map((value): CellState => {
-    return value === 0 ? { kind: "Annotations", values: [] } : { kind: "Solved", value };
-  }));
-  return state;
+function main(): void {
+  console.log(add(1, 2));
+  console.log(mul(2, 3));
 }`;
-  }
-  if (target.includes("function sudoku_cell")) {
-    return `function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {
-  const label = cell.kind === "Solved" ? String(cell.value) : cell.values.join(" ");
-  return React.createElement(
-    "button",
-    { "data-row": row, "data-col": col, className: "sudoku-cell" },
-    label,
-  );
-}`;
-  }
-  if (target.includes("function sudoku_board")) {
-    expect(prompt).toContain("// Renders and supports clicking of sudoku_cell instances and registering of fills/notes");
-    expect(prompt).toContain("function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {");
-    return `function sudoku_board(state: SudokuState): ReactComponent {
-  return React.createElement(function SudokuBoard() {
-    const [selectedCell, setSelectedCell] = React.useState<string | null>(null);
-    const cells = state.grid.flatMap((row, rowIndex) =>
-      row.map((cell, colIndex) => {
-        const key = rowIndex + "-" + colIndex;
-        return React.createElement(
-          "div",
-          {
-            key,
-            "data-selected": selectedCell === key ? "true" : "false",
-            onClick: () => setSelectedCell(key),
-          },
-          sudoku_cell(cell, rowIndex, colIndex),
-        );
-      })
-    );
-    return React.createElement(
-      "section",
-      { "data-testid": "sudoku-board" },
-      React.createElement("div", { className: "sudoku-grid" }, cells),
-      React.createElement("output", {}, selectedCell ?? "none"),
-    );
-  });
-}`;
-  }
-  if (target.includes("function sudoku_controls")) {
-    return `function sudoku_controls(): ReactComponent {
-  return React.createElement(function SudokuControls() {
-    const [mode, setMode] = React.useState<"fill" | "notes">("fill");
-    return React.createElement(
-      "button",
-      { onClick: () => setMode(mode === "fill" ? "notes" : "fill") },
-      "Mode: " + mode,
-    );
-  });
-}`;
-  }
-  if (target.includes("function sudoku_app")) {
-    expect(prompt).toContain("function sudoku_board(state: SudokuState): ReactComponent {");
-    expect(prompt).toContain("function sudoku_controls(): ReactComponent {");
-    return `function sudoku_app(initial_state: SudokuState): ReactApp {
-  return React.createElement(function SudokuApp() {
-    const [state] = React.useState(initial_state);
-    return React.createElement(
-      "main",
-      { className: "sudoku-app" },
-      React.createElement("aside", {}, sudoku_controls()),
-      React.createElement("section", {}, sudoku_board(state)),
-    );
-  });
-}`;
-  }
-  throw new Error(`Unexpected React Sudoku prompt: ${prompt}`);
-}
 
 async function collectCompileEvents(
   cache: CodeCache,
@@ -213,11 +128,6 @@ async function eventually(assertion: () => void, timeoutMs = 1000): Promise<void
   }
 }
 
-function completionTargetName(prompt: string): "add" | "mul" {
-  const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
-  return target.includes("function mul") ? "mul" : "add";
-}
-
 describe("Logos-TS compiler shape", () => {
   it("uses the counter app as the base project and keeps migrated files as eval targets", () => {
     const evalProjectIds = [
@@ -227,16 +137,13 @@ describe("Logos-TS compiler shape", () => {
       "annotated-maze",
       "portfolio-viewer",
     ];
-    const baseProjectIds = ["counter-button", "react-sudoku-components"];
     const appEvalProjectIds = ["sudoku-human-viewer"];
-    const reactAppEvalProjectIds = ["react-sudoku-components"];
 
-    expect(defaultProjectIds).toEqual([...baseProjectIds, "sudoku-human-viewer"]);
-    expect(samples.map((sample) => sample.id)).toEqual([...baseProjectIds, ...evalProjectIds, ...appEvalProjectIds]);
+    expect(defaultProjectIds).toEqual(["counter-button", "simple-sudoku"]);
+    expect(samples.map((sample) => sample.id)).toEqual(["counter-button", "simple-sudoku", ...evalProjectIds, ...appEvalProjectIds]);
     expect(sampleTemplateGroups.flatMap((group) => group.sampleIds)).toEqual(samples.map((sample) => sample.id));
     expect(sampleEvalCases.map((testCase) => testCase.sampleId)).toEqual(evalProjectIds);
     expect(sampleAppEvalCases.map((testCase) => testCase.sampleId)).toEqual(appEvalProjectIds);
-    expect(sampleReactAppEvalCases.map((testCase) => testCase.sampleId)).toEqual(reactAppEvalProjectIds);
   });
 
   it("discovers the runnable for each baseline file", () => {
@@ -246,11 +153,6 @@ describe("Logos-TS compiler shape", () => {
       ]);
     }
     for (const testCase of sampleAppEvalCases) {
-      expect(runnables(testCase.sheet), testCase.name).toEqual([
-        { line: expect.any(Number), name: testCase.runnable },
-      ]);
-    }
-    for (const testCase of sampleReactAppEvalCases) {
       expect(runnables(testCase.sheet), testCase.name).toEqual([
         { line: expect.any(Number), name: testCase.runnable },
       ]);
@@ -299,92 +201,6 @@ function main(): App {
     expect(() => transpileTypeScript(module)).not.toThrow();
   });
 
-  it("models runnable readiness through TypeScript incomplete definitions and snippets", async () => {
-    const cache: CodeCache = new Map();
-    const sheet = `function add(x: number, y: number): number;
-
-function test(): void {
-  console.log(add(1, 2));
-}`;
-    const parsed = parse(sheet);
-
-    expect(definitionReadiness(parsed, cache)).toEqual([
-      {
-        name: "add",
-        line: 1,
-        kind: "function",
-        ready: false,
-        reason: "implementation",
-        dependencies: [],
-        blockingDependencies: [],
-      },
-      {
-        name: "test",
-        line: 3,
-        kind: "function",
-        ready: false,
-        reason: "dependency",
-        dependencies: ["add"],
-        blockingDependencies: ["add"],
-      },
-    ]);
-
-    await collectCompileEvents(cache, sheet, () => `function add(x: number, y: number): number {
-  return x + y;
-}`);
-
-    expect(definitionReadiness(parsed, cache)).toEqual([
-      {
-        name: "add",
-        line: 1,
-        kind: "function",
-        ready: true,
-        dependencies: [],
-        blockingDependencies: [],
-      },
-      {
-        name: "test",
-        line: 3,
-        kind: "function",
-        ready: true,
-        dependencies: ["add"],
-        blockingDependencies: [],
-      },
-    ]);
-
-    const naturalCache: CodeCache = new Map();
-    const naturalSheet = `function main(): WebPage {
-  \`\`\`
-  render a small status page
-  \`\`\`
-}`;
-    const naturalParsed = parse(naturalSheet);
-    expect(definitionReadiness(naturalParsed, naturalCache)).toEqual([
-      {
-        name: "main",
-        line: 1,
-        kind: "function",
-        ready: false,
-        reason: "implementation",
-        dependencies: [],
-        blockingDependencies: [],
-      },
-    ]);
-
-    await collectCompileEvents(naturalCache, naturalSheet, () => `return "<!doctype html><html><body>Status ready</body></html>";`);
-
-    expect(definitionReadiness(naturalParsed, naturalCache)).toEqual([
-      {
-        name: "main",
-        line: 1,
-        kind: "function",
-        ready: true,
-        dependencies: [],
-        blockingDependencies: [],
-      },
-    ]);
-  });
-
   it("emits multiline TypeScript type aliases with variant comments", () => {
     const sheet = `type SudokuStrategy =
   // A box has a number that can only go in one cell.
@@ -415,378 +231,6 @@ function main(): App {
     expect(module).toContain('type SudokuStrategy = "UniqueBoxSolve" | "UniqueLineSolve" | "HiddenSingle";');
     expect(module).toContain('type CellUpdate = { kind: "Remove Notes"; values: number[] } | { kind: "Add Note"; values: number[] } | { kind: "Fill Square"; value: number };');
     expect(() => transpileTypeScript(module)).not.toThrow();
-  });
-
-  it("uses attached comments as dependency contract for function completion hashes", () => {
-    const parsed = parse(reactSudokuComponentSheet);
-    const boardSnippet = parsed.incompleteSnippets.find((snippet) => snippet.snippet.startsWith("function sudoku_board"))?.snippet;
-    expect(boardSnippet).toBeDefined();
-    if (!boardSnippet) return;
-
-    const baseHash = hashCompletionInput(parsed, boardSnippet);
-    const changedAttachedComment = reactSudokuComponentSheet.replace(
-      "registering of fills/notes",
-      "registering of selected cells",
-    );
-    const changedCellContract = reactSudokuComponentSheet.replace(
-      "function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;",
-      "function sudoku_cell(cell: CellState, row: number, col: number, selected: boolean): ReactComponent;",
-    );
-
-    expect(hashCompletionInput(parse(changedAttachedComment), boardSnippet)).not.toBe(baseHash);
-    expect(hashCompletionInput(parse(changedCellContract), boardSnippet)).not.toBe(baseHash);
-  });
-
-  it("builds a dependency graph for the Sudoku ReactComponent stub", () => {
-    const graph = dependencyGraphForCodeSheet(reactSudokuComponentSheet);
-    const node = (name: string) => graph.nodes.find((item) => item.name === name);
-
-    expect(node("sudoku_board")?.dependencies).toEqual(expect.arrayContaining([
-      "sudoku_cell",
-      "SudokuState",
-    ]));
-    expect(node("sudoku_app")?.dependencies).toEqual(expect.arrayContaining([
-      "SudokuState",
-      "sudoku_board",
-      "sudoku_controls",
-    ]));
-    expect(node("main")?.dependencies).toEqual(expect.arrayContaining([
-      "sudoku_app",
-      "test_sudoku",
-    ]));
-    expect(node("main")?.transitiveDependencies).toEqual(expect.arrayContaining([
-      "sudoku_app",
-      "test_sudoku",
-      "sudoku_board",
-      "sudoku_controls",
-      "sudoku_cell",
-      "SudokuState",
-      "CellState",
-    ]));
-  });
-
-  it("models Sudoku ReactComponent readiness from incomplete dependency cache state", async () => {
-    const parsed = parse(reactSudokuComponentSheet);
-    const cache: CodeCache = new Map();
-    const readiness = definitionReadiness(parsed, cache);
-    const byName = new Map(readiness.map((item) => [item.name, item]));
-
-    expect(byName.get("sudoku_cell")).toMatchObject({
-      ready: false,
-      reason: "implementation",
-      blockingDependencies: [],
-    });
-    expect(byName.get("sudoku_board")).toMatchObject({
-      ready: false,
-      reason: "implementation",
-      dependencies: expect.arrayContaining(["sudoku_cell"]),
-      blockingDependencies: [],
-    });
-    expect(byName.get("main")).toMatchObject({
-      ready: false,
-      reason: "dependency",
-      dependencies: expect.arrayContaining(["sudoku_app", "test_sudoku"]),
-      blockingDependencies: expect.arrayContaining(["sudoku_app", "test_sudoku"]),
-    });
-
-    await compileCodeSheetToTypeScript(reactSudokuComponentSheet, "main", {
-      cache,
-      complete: reactSudokuCompletion,
-      strategy: "parallel",
-    });
-
-    const completedByName = new Map(definitionReadiness(parsed, cache).map((item) => [item.name, item]));
-    expect(completedByName.get("main")).toMatchObject({
-      ready: true,
-      blockingDependencies: [],
-    });
-  });
-
-  it("compiles the Sudoku ReactComponent contract to a hosted React app program", async () => {
-    const testCase = sampleReactAppEvalCases.find((item) => item.sampleId === "react-sudoku-components");
-    expect(testCase).toBeDefined();
-    if (!testCase) return;
-
-    const starts: string[] = [];
-    const compiled = await compileCodeSheetToTypeScript(testCase.sheet, testCase.runnable, {
-      cache: new Map(),
-      complete: (prompt) => {
-        starts.push(requestedCompletionName(prompt));
-        return reactSudokuCompletion(prompt);
-      },
-      strategy: "parallel",
-    });
-
-    expect(starts.indexOf("sudoku_cell")).toBeLessThan(starts.indexOf("sudoku_board"));
-    expect(starts.indexOf("sudoku_board")).toBeLessThan(starts.indexOf("sudoku_app"));
-    expect(starts.indexOf("sudoku_controls")).toBeLessThan(starts.indexOf("sudoku_app"));
-    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
-    expect(compiled.completed.source).toContain("type ReactComponent = React.ReactElement");
-    expect(compiled.completed.source).toContain("type ReactApp = ReactComponent");
-    expect(compiled.completed.source).toContain("function sudoku_board");
-    expect(compiled.completed.source).toContain("React.useState");
-    expect(compiled.completed.source).toContain("sudoku_cell(cell, rowIndex, colIndex)");
-    expect(() => transpileTypeScript(compiled.program)).not.toThrow();
-    expect(compiled.program).toContain("logos-react-app-");
-    expect(compiled.program).toContain('"iframe-url"');
-    expect(compiled.program).toContain("createRoot(root).render(main())");
-  });
-
-  it("waits for dependency implementations before prompting dependent functions", async () => {
-    const sheet = `function first(): number;
-
-// Must call first.
-function second(): number;
-
-// Must call second.
-function third(): number;
-
-function main(): void {
-  console.log(third());
-}`;
-    const starts: string[] = [];
-    const prompts = new Map<string, string>();
-
-    const compiled = await compileCodeSheetToTypeScript(sheet, "main", {
-      cache: new Map(),
-      complete: (prompt) => {
-        const name = requestedCompletionName(prompt);
-        starts.push(name);
-        prompts.set(name, prompt);
-        if (name === "first") {
-          return `function first(): number {
-  return 1;
-}`;
-        }
-        if (name === "second") {
-          expect(prompt).toContain(`function first(): number {
-  return 1;
-}`);
-          return `function second(): number {
-  return first() + 1;
-}`;
-        }
-        if (name === "third") {
-          expect(prompt).toContain(`function second(): number {
-  return first() + 1;
-}`);
-          return `function third(): number {
-  return second() + 1;
-}`;
-        }
-        throw new Error(`Unexpected prompt: ${prompt}`);
-      },
-      strategy: "parallel",
-    });
-
-    expect(starts).toEqual(["first", "second", "third"]);
-    expect(prompts.get("second")).not.toContain("function first(): number;");
-    expect(prompts.get("third")).not.toContain("function second(): number;");
-    expect(compiled.completed.source).toContain("return second() + 1;");
-  });
-
-  it("does not reuse a dependent cached completion when a dependency implementation changes", async () => {
-    const sheet = `function first(): number;
-
-// Must call first.
-function second(): number;
-
-function main(): void {
-  console.log(second());
-}`;
-    const cache: CodeCache = new Map();
-
-    const first = await compileCodeSheetToTypeScript(sheet, "main", {
-      cache,
-      complete: (prompt) => {
-        const name = requestedCompletionName(prompt);
-        if (name === "first") {
-          return `function first(): number {
-  return 1;
-}`;
-        }
-        if (name === "second") {
-          expect(prompt).toContain("return 1;");
-          return `function second(): number {
-  return first() + 1;
-}`;
-        }
-        throw new Error(`Unexpected prompt: ${prompt}`);
-      },
-      strategy: "parallel",
-    });
-    expect(first.completed.source).toContain("return first() + 1;");
-
-    const changedDependencySheet = sheet.replace(
-      "function first(): number;",
-      `function first(): number {
-  return 10;
-}`,
-    );
-    const secondStarts: string[] = [];
-    const second = await compileCodeSheetToTypeScript(changedDependencySheet, "main", {
-      cache,
-      complete: (prompt) => {
-        const name = requestedCompletionName(prompt);
-        secondStarts.push(name);
-        if (name === "second") {
-          expect(prompt).toContain("return 10;");
-          return `function second(): number {
-  return first() + 10;
-}`;
-        }
-        throw new Error(`Unexpected prompt: ${prompt}`);
-      },
-      strategy: "parallel",
-    });
-
-    expect(secondStarts).toEqual(["second"]);
-    expect(second.completed.source).toContain("return first() + 10;");
-    expect(second.completed.source).not.toContain("return first() + 1;");
-  });
-
-  it("does not reuse a dependent cached completion when the cached dependency implementation changes", async () => {
-    const sheet = `function first(): number;
-
-// Must call first.
-function second(): number;
-
-function main(): void {
-  console.log(second());
-}`;
-    const cache: CodeCache = new Map();
-
-    const firstCompile = await compileCodeSheetToTypeScript(sheet, "main", {
-      cache,
-      complete: (prompt) => {
-        const name = requestedCompletionName(prompt);
-        if (name === "first") {
-          return `function first(): number {
-  return 1;
-}`;
-        }
-        if (name === "second") {
-          expect(prompt).toContain("return 1;");
-          return `function second(): number {
-  return first() + 1;
-}`;
-        }
-        throw new Error(`Unexpected prompt: ${prompt}`);
-      },
-      strategy: "parallel",
-    });
-
-    const firstCompletion = firstCompile.completed.completions.find((completion) => completion.snippet.startsWith("function first"));
-    expect(firstCompletion).toBeDefined();
-    if (!firstCompletion) return;
-    cache.set(firstCompletion.hash, `function first(): number {
-  return 10;
-}`);
-
-    const starts: string[] = [];
-    const secondCompile = await compileCodeSheetToTypeScript(sheet, "main", {
-      cache,
-      complete: (prompt) => {
-        const name = requestedCompletionName(prompt);
-        starts.push(name);
-        if (name === "second") {
-          expect(prompt).toContain("return 10;");
-          return `function second(): number {
-  return first() + 10;
-}`;
-        }
-        throw new Error(`Unexpected prompt: ${prompt}`);
-      },
-      strategy: "parallel",
-    });
-
-    expect(starts).toEqual(["second"]);
-    expect(secondCompile.completed.source).toContain("return first() + 10;");
-    expect(secondCompile.completed.source).not.toContain("return first() + 1;");
-  });
-
-  it("rejects completed code sheets that still contain unimplemented stubs", async () => {
-    await expect(compileCodeSheetToTypeScript(`function helper(): number;
-
-function main(): void {
-  console.log(helper());
-}`, "main", {
-      cache: new Map(),
-      complete: (prompt) => {
-        const target = requestedCompletionSnippet(prompt);
-        if (target.includes("function helper")) {
-          return "function helper(): number;";
-        }
-        throw new Error(`Unexpected prompt: ${prompt}`);
-      },
-      strategy: "parallel",
-    })).rejects.toThrow(/Completion for requested snippet left incomplete Logos stubs: function helper\(\): number;/);
-  });
-
-  it("retries a completion that returns an unimplemented declaration stub", async () => {
-    let calls = 0;
-    const compiled = await compileCodeSheetToTypeScript(`function helper(): number;
-
-function main(): void {
-  console.log(helper());
-}`, "main", {
-      cache: new Map(),
-      complete: (prompt) => {
-        expect(requestedCompletionSnippet(prompt)).toContain("function helper");
-        calls += 1;
-        return calls === 1
-          ? "function helper(): number;"
-          : `function helper(): number {
-  return 42;
-}`;
-      },
-      strategy: "parallel",
-    });
-
-    expect(calls).toBe(2);
-    expect(compiled.completed.source).toContain("return 42;");
-    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
-  });
-
-  it("invalidates cached declaration stubs before compiling dependent React components", async () => {
-    const parsed = parse(reactSudokuComponentSheet);
-    const cellSnippet = parsed.incompleteSnippets.find((snippet) => snippet.snippet.startsWith("function sudoku_cell"));
-    expect(cellSnippet).toBeDefined();
-    if (!cellSnippet) return;
-
-    const cache: CodeCache = new Map();
-    cache.set(
-      hashCompletionInput(parsed, cellSnippet.snippet, cellSnippet.annotationContexts),
-      "function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent;",
-    );
-
-    const starts: string[] = [];
-    const compiled = await compileCodeSheetToTypeScript(reactSudokuComponentSheet, "main", {
-      cache,
-      complete: (prompt) => {
-        starts.push(requestedCompletionName(prompt));
-        return reactSudokuCompletion(prompt);
-      },
-      strategy: "parallel",
-    });
-
-    expect(starts).toContain("sudoku_cell");
-    expect(compiled.completed.source).toContain("function sudoku_cell(cell: CellState, row: number, col: number): ReactComponent {");
-    expect(compiled.completed.source).toContain("function sudoku_controls(): ReactComponent {");
-    expect(parse(compiled.completed.lowered.parsed.source).incompleteSnippets.filter((snippet) => snippet.kind !== "natural")).toEqual([]);
-  });
-
-  it("treats App aliases to ReactApp as hosted React apps", () => {
-    const program = buildTypeScriptProgram(`type App = ReactApp;
-
-function main(): App {
-  return React.createElement("main", {}, "Hello React");
-}`, "main");
-
-    expect(() => transpileTypeScript(program)).not.toThrow();
-    expect(program).toContain('"iframe-url"');
-    expect(program).toContain("createRoot(root).render(main())");
-    expect(program).not.toContain("const __logosResult = main()");
   });
 
   it("discovers class snippets that need implementation", () => {
@@ -823,7 +267,7 @@ function main(): App {
       cache: new Map(),
       complete: (nextPrompt) => {
         prompt = nextPrompt;
-        return shadcnCounterBody;
+        return shadcnCounterSheetWithBody(shadcnCounterBody);
       },
     });
 
@@ -862,37 +306,29 @@ function main(): void {
     expect(hashCompletionInput(baseParsed, addSnippet)).not.toBe(hashCompletionInput(changedDependencyParsed, addSnippet));
   });
 
-  it("reuses cached function completions when only the runnable body changes", async () => {
+  it("reuses cached whole-sheet completions when the sheet is unchanged", async () => {
     const base = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
 
 function main(): void {
   console.log(add(1, 2));
 }`;
-    const changedRunnable = base.replace(
-      "console.log(add(1, 2));",
-      "console.log(add(1, 2));\n  console.log(mul(2, 3));",
-    );
     const cache: CodeCache = new Map();
-    const firstEvents = await collectCompileEvents(cache, base, (prompt) => {
-      if (prompt.includes("function add")) {
-        return "function add(x: number, y: number): number {\n  return x + y;\n}";
-      }
-      if (prompt.includes("function mul")) {
-        return "function mul(x: number, y: number): number {\n  return x * y;\n}";
-      }
-      throw new Error(`Unexpected prompt: ${prompt}`);
-    });
-    const secondEvents = await collectCompileEvents(cache, changedRunnable, () => {
-      throw new Error("unchanged function completions should come from cache");
+    const completedBase = arithmeticCompletedSheet.replace(
+      "  console.log(mul(2, 3));\n",
+      "",
+    );
+    const firstEvents = await collectCompileEvents(cache, base, () => completedBase);
+    const secondEvents = await collectCompileEvents(cache, base, () => {
+      throw new Error("unchanged sheet completion should come from cache");
     });
 
-    expect(firstEvents.filter((event) => event.kind === "llm-complete")).toHaveLength(2);
-    expect(secondEvents.filter((event) => event.kind === "cache-hit")).toHaveLength(2);
+    expect(firstEvents.filter((event) => event.kind === "llm-complete")).toHaveLength(1);
+    expect(secondEvents.filter((event) => event.kind === "cache-hit")).toHaveLength(1);
     expect(secondEvents.some((event) => event.kind === "llm-start")).toBe(false);
   });
 
-  it("starts independent TypeScript completions in parallel", async () => {
+  it("starts one whole-sheet TypeScript completion", async () => {
     const sheet = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
 
@@ -900,42 +336,43 @@ function main(): void {
   console.log(add(1, 2));
   console.log(mul(2, 3));
 }`;
-    const started: string[] = [];
+    let started = 0;
     const resolvers: Array<(value: string) => void> = [];
     const eventsPromise = collectCompileEvents(new Map(), sheet, (prompt) => {
-      const target = completionTargetName(prompt);
-      started.push(target);
+      expect(prompt).toContain("compile this Logos-TS worksheet into one complete TypeScript code sheet");
+      expect(prompt).toContain("function add(x: number, y: number): number;");
+      expect(prompt).toContain("function mul(x: number, y: number): number;");
+      started += 1;
       return new Promise<string>((resolve) => {
         resolvers.push(resolve);
       });
     }, "parallel");
 
-    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
-    expect(resolvers).toHaveLength(2);
-    resolvers[0]("function add(x: number, y: number): number {\n  return x + y;\n}");
-    resolvers[1]("function mul(x: number, y: number): number {\n  return x * y;\n}");
+    await eventually(() => expect(started).toBe(1));
+    expect(resolvers).toHaveLength(1);
+    resolvers[0](arithmeticCompletedSheet);
 
     const events = await eventsPromise;
-    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(2);
+    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(1);
     expect(events.at(-1)?.kind).toBe("compiled");
   });
 
-  it("streams tokens from parallel TypeScript completions before all snippets finish", async () => {
+  it("streams tokens from a whole-sheet TypeScript completion", async () => {
     const sheet = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;`;
     const gates: Array<() => void> = [];
-    const eventsPromise = collectCompileEvents(new Map(), sheet, async function* (prompt) {
-      const target = completionTargetName(prompt);
-      yield target === "add"
-        ? "function add(x: number, y: number): number {\n"
-        : "function mul(x: number, y: number): number {\n";
+    const eventsPromise = collectCompileEvents(new Map(), sheet, async function* () {
+      yield "function add(x: number, y: number): number {\n";
       await new Promise<void>((resolve) => gates.push(resolve));
-      yield target === "add" ? "  return x + y;\n}" : "  return x * y;\n}";
+      yield `  return x + y;
+}
+function mul(x: number, y: number): number {
+  return x * y;
+}`;
     }, "parallel");
 
-    await eventually(() => expect(gates).toHaveLength(2));
+    await eventually(() => expect(gates).toHaveLength(1));
     gates[0]?.();
-    gates[1]?.();
     const events = await eventsPromise;
     const firstCompleteIndex = events.findIndex((event) => event.kind === "llm-complete");
     const tokenEventsBeforeCompletion = events.slice(0, firstCompleteIndex).filter((event) => event.kind === "llm-token");
@@ -944,7 +381,7 @@ function mul(x: number, y: number): number;`;
     expect(events.at(-1)?.kind).toBe("compiled");
   });
 
-  it("passes parallel strategy through the TypeScript runner", async () => {
+  it("passes compilation strategy through the TypeScript runner", async () => {
     const sheet = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
 
@@ -952,22 +389,21 @@ function main(): void {
   console.log(add(1, 2));
   console.log(mul(2, 3));
 }`;
-    const started: string[] = [];
+    let started = 0;
     const resolvers: Array<(value: string) => void> = [];
     const runPromise = runCodeSheet(sheet, "main", {
       compilationStrategy: "parallel",
       complete(prompt) {
-        const target = completionTargetName(prompt);
-        started.push(target);
+        expect(prompt).toContain("compile this Logos-TS worksheet into one complete TypeScript code sheet");
+        started += 1;
         return new Promise<string>((resolve) => {
           resolvers.push(resolve);
         });
       },
     });
 
-    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
-    resolvers[0]("function add(x: number, y: number): number {\n  return x + y;\n}");
-    resolvers[1]("function mul(x: number, y: number): number {\n  return x * y;\n}");
+    await eventually(() => expect(started).toBe(1));
+    resolvers[0](arithmeticCompletedSheet);
 
     const result = await runPromise;
     expect(result.ok).toBe(true);
@@ -986,7 +422,7 @@ function main(): void {
   it("checks generated WebPage code with generic code quality gates", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
-      complete: () => shadcnCounterBody,
+      complete: () => shadcnCounterSheetWithBody(shadcnCounterBody),
     });
 
     expect(checkCode(generated.code, {
@@ -1011,7 +447,7 @@ function main(): void {
   it("rejects generated shadcn buttons that put handlers in text children", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
-      complete: () => borkedCounterBody,
+      complete: () => shadcnCounterSheetWithBody(borkedCounterBody),
     });
 
     const result = checkCode(generated.code, {
@@ -1026,11 +462,11 @@ function main(): void {
   it("rejects generated WebPage code that fakes interactivity with alerts", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
-      complete: () => `return shadcn.renderApp(
+      complete: () => shadcnCounterSheetWithBody(`return shadcn.renderApp(
   shadcn.Page({ title: "Strategy Viewer" },
     shadcn.Button({ onClick: "alert('Strategy applied. Re-render required for updated state.')" }, "Apply")
   )
-);`,
+);`),
     });
 
     const codeResult = checkCode(generated.code, { expectedKind: "webpage" });
@@ -1106,7 +542,7 @@ function main(): App {
       "Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers",
     );
     expect(prompt).toContain(
-      "If another class, result type, helper, or function is referenced elsewhere in the sheet or in an attached declaration comment, use it as an existing dependency",
+      "If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency",
     );
   });
 
@@ -1180,6 +616,18 @@ ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(result.artifacts[0].content).toContain('id="increment"');
   });
 
+  it("treats WebPage as a predefined runtime type", () => {
+    const program = buildTypeScriptProgram(`type WebPage = string;
+
+function main(): WebPage {
+  return shadcn.renderApp(shadcn.Page({ title: "Explicit WebPage" }, "ok"));
+}`, "main");
+
+    expect(program.match(/^type WebPage = string;/gm)).toHaveLength(1);
+    expect(program).not.toContain("type WebPage = string;\n\ntype WebPage = string;");
+    expect(() => transpileTypeScript(program)).not.toThrow();
+  });
+
   it("allows shadcn Script to use the same props-first shape as other helpers", async () => {
     const body = `const count = 0;
 
@@ -1227,6 +675,95 @@ ${body.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(html).toContain("window.incrementCounter");
     expect(html).toContain('id="counter-display"');
     expect(html).toContain('onclick="window.incrementCounter()"');
+  });
+
+  it("accepts a shadcn Script as renderApp shorthand options", async () => {
+    const program = buildTypeScriptProgram(`function main(): WebPage {
+  const script = shadcn.Script(\`
+    window.fromRenderAppShorthand = true;
+  \`);
+  return shadcn.renderApp(
+    shadcn.Page({ title: "Script shorthand" }, shadcn.Text("ok")),
+    script,
+  );
+}`, "main");
+
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    const result = await runTypeScript(program);
+    const html = result.artifacts[0]?.content ?? "";
+
+    expect(result.ok).toBe(true);
+    expect(html).toContain("window.fromRenderAppShorthand");
+    expect(html).not.toContain("<script><script>");
+  });
+
+  it("runs Claude output with top-level const declarations verbatim", async () => {
+    const program = buildTypeScriptProgram(`type CellState =
+  | { kind: "filled"; value: number }
+  | { kind: "notes"; value: number[] }
+
+class SudokuState {
+  grid: CellState[][];
+
+  constructor() {
+    this.grid = Array.from({ length: 9 }, () =>
+      Array.from({ length: 9 }, () => ({ kind: "filled", value: 0 } as CellState))
+    );
+  }
+}
+
+const test_sudoku: SudokuState = (() => {
+  const state = new SudokuState();
+  state.grid[0][0] = { kind: "filled", value: 5 };
+  state.grid[0][1] = { kind: "notes", value: [1, 2, 3] };
+  return state;
+})();
+
+function main(): WebPage {
+  const rows = test_sudoku.grid.map((rowCells, r) => {
+    const cells = rowCells.map((cell, c) => {
+      return cell.kind === "filled"
+        ? shadcn.Div({ className: "cell", "data-row": r, "data-col": c }, String(cell.value))
+        : shadcn.Div({ className: "cell notes" }, cell.value.join(""));
+    }).join("");
+    return shadcn.Row({}, cells);
+  }).join("");
+
+  return shadcn.renderApp(
+    shadcn.Page({ title: "Sudoku" }, shadcn.Div({ id: "sudoku-board" }, rows)),
+    { title: "Sudoku Viewer" },
+  );
+}`, "main");
+
+    expect(program).toContain("const test_sudoku: SudokuState");
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    const result = await runTypeScript(program);
+    const html = result.artifacts[0]?.content ?? "";
+
+    expect(result.ok).toBe(true);
+    expect(html).toContain("sudoku-board");
+    expect(html).toContain("123");
+  });
+
+  it("compiles ReactApp runnables to hosted iframe artifacts", () => {
+    const program = buildTypeScriptProgram(`function main(): ReactApp {
+  return reactApp(
+    \`function App(props) {
+      const tuple = React.useState(props.initial);
+      const value = tuple[0];
+      const setValue = tuple[1];
+      return React.createElement("button", { id: "counter", onClick: function() { setValue(value + 1); } }, "Count " + value);
+    }\`,
+    { initial: 0 },
+    { title: "React Counter" },
+  );
+}`, "main");
+
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    expect(program).toContain('"iframe-url"');
+    expect(program).toContain("logos-react-app-");
+    expect(program).toContain("createRoot(root)");
+    expect(program).toContain("function App(props)");
   });
 
   it("rejects webpages with object-string rendering artifacts", () => {
