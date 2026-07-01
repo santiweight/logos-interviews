@@ -80,6 +80,24 @@ const page = shadcn.Page("Counter Button", card, counterScript);
 
 return shadcn.renderApp(page);`;
 
+function shadcnCounterSheetWithBody(body: string): string {
+  return `function main(): WebPage {
+${body.split("\n").map((line) => `  ${line}`).join("\n")}
+}`;
+}
+
+const arithmeticCompletedSheet = `function add(x: number, y: number): number {
+  return x + y;
+}
+function mul(x: number, y: number): number {
+  return x * y;
+}
+
+function main(): void {
+  console.log(add(1, 2));
+  console.log(mul(2, 3));
+}`;
+
 async function collectCompileEvents(
   cache: CodeCache,
   sheet: string,
@@ -110,11 +128,6 @@ async function eventually(assertion: () => void, timeoutMs = 1000): Promise<void
   }
 }
 
-function completionTargetName(prompt: string): "add" | "mul" {
-  const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
-  return target.includes("function mul") ? "mul" : "add";
-}
-
 describe("Logos-TS compiler shape", () => {
   it("uses the counter app as the base project and keeps migrated files as eval targets", () => {
     const evalProjectIds = [
@@ -126,8 +139,8 @@ describe("Logos-TS compiler shape", () => {
     ];
     const appEvalProjectIds = ["sudoku-human-viewer"];
 
-    expect(defaultProjectIds).toEqual(["counter-button", "sudoku-human-viewer"]);
-    expect(samples.map((sample) => sample.id)).toEqual(["counter-button", ...evalProjectIds, ...appEvalProjectIds]);
+    expect(defaultProjectIds).toEqual(["counter-button", "simple-sudoku"]);
+    expect(samples.map((sample) => sample.id)).toEqual(["counter-button", "simple-sudoku", ...evalProjectIds, ...appEvalProjectIds]);
     expect(sampleTemplateGroups.flatMap((group) => group.sampleIds)).toEqual(samples.map((sample) => sample.id));
     expect(sampleEvalCases.map((testCase) => testCase.sampleId)).toEqual(evalProjectIds);
     expect(sampleAppEvalCases.map((testCase) => testCase.sampleId)).toEqual(appEvalProjectIds);
@@ -254,7 +267,7 @@ function main(): App {
       cache: new Map(),
       complete: (nextPrompt) => {
         prompt = nextPrompt;
-        return shadcnCounterBody;
+        return shadcnCounterSheetWithBody(shadcnCounterBody);
       },
     });
 
@@ -293,37 +306,29 @@ function main(): void {
     expect(hashCompletionInput(baseParsed, addSnippet)).not.toBe(hashCompletionInput(changedDependencyParsed, addSnippet));
   });
 
-  it("reuses cached function completions when only the runnable body changes", async () => {
+  it("reuses cached whole-sheet completions when the sheet is unchanged", async () => {
     const base = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
 
 function main(): void {
   console.log(add(1, 2));
 }`;
-    const changedRunnable = base.replace(
-      "console.log(add(1, 2));",
-      "console.log(add(1, 2));\n  console.log(mul(2, 3));",
-    );
     const cache: CodeCache = new Map();
-    const firstEvents = await collectCompileEvents(cache, base, (prompt) => {
-      if (prompt.includes("function add")) {
-        return "function add(x: number, y: number): number {\n  return x + y;\n}";
-      }
-      if (prompt.includes("function mul")) {
-        return "function mul(x: number, y: number): number {\n  return x * y;\n}";
-      }
-      throw new Error(`Unexpected prompt: ${prompt}`);
-    });
-    const secondEvents = await collectCompileEvents(cache, changedRunnable, () => {
-      throw new Error("unchanged function completions should come from cache");
+    const completedBase = arithmeticCompletedSheet.replace(
+      "  console.log(mul(2, 3));\n",
+      "",
+    );
+    const firstEvents = await collectCompileEvents(cache, base, () => completedBase);
+    const secondEvents = await collectCompileEvents(cache, base, () => {
+      throw new Error("unchanged sheet completion should come from cache");
     });
 
-    expect(firstEvents.filter((event) => event.kind === "llm-complete")).toHaveLength(2);
-    expect(secondEvents.filter((event) => event.kind === "cache-hit")).toHaveLength(2);
+    expect(firstEvents.filter((event) => event.kind === "llm-complete")).toHaveLength(1);
+    expect(secondEvents.filter((event) => event.kind === "cache-hit")).toHaveLength(1);
     expect(secondEvents.some((event) => event.kind === "llm-start")).toBe(false);
   });
 
-  it("starts independent TypeScript completions in parallel", async () => {
+  it("starts one whole-sheet TypeScript completion", async () => {
     const sheet = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
 
@@ -331,42 +336,43 @@ function main(): void {
   console.log(add(1, 2));
   console.log(mul(2, 3));
 }`;
-    const started: string[] = [];
+    let started = 0;
     const resolvers: Array<(value: string) => void> = [];
     const eventsPromise = collectCompileEvents(new Map(), sheet, (prompt) => {
-      const target = completionTargetName(prompt);
-      started.push(target);
+      expect(prompt).toContain("compile this Logos-TS worksheet into one complete TypeScript code sheet");
+      expect(prompt).toContain("function add(x: number, y: number): number;");
+      expect(prompt).toContain("function mul(x: number, y: number): number;");
+      started += 1;
       return new Promise<string>((resolve) => {
         resolvers.push(resolve);
       });
     }, "parallel");
 
-    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
-    expect(resolvers).toHaveLength(2);
-    resolvers[0]("function add(x: number, y: number): number {\n  return x + y;\n}");
-    resolvers[1]("function mul(x: number, y: number): number {\n  return x * y;\n}");
+    await eventually(() => expect(started).toBe(1));
+    expect(resolvers).toHaveLength(1);
+    resolvers[0](arithmeticCompletedSheet);
 
     const events = await eventsPromise;
-    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(2);
+    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(1);
     expect(events.at(-1)?.kind).toBe("compiled");
   });
 
-  it("streams tokens from parallel TypeScript completions before all snippets finish", async () => {
+  it("streams tokens from a whole-sheet TypeScript completion", async () => {
     const sheet = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;`;
     const gates: Array<() => void> = [];
-    const eventsPromise = collectCompileEvents(new Map(), sheet, async function* (prompt) {
-      const target = completionTargetName(prompt);
-      yield target === "add"
-        ? "function add(x: number, y: number): number {\n"
-        : "function mul(x: number, y: number): number {\n";
+    const eventsPromise = collectCompileEvents(new Map(), sheet, async function* () {
+      yield "function add(x: number, y: number): number {\n";
       await new Promise<void>((resolve) => gates.push(resolve));
-      yield target === "add" ? "  return x + y;\n}" : "  return x * y;\n}";
+      yield `  return x + y;
+}
+function mul(x: number, y: number): number {
+  return x * y;
+}`;
     }, "parallel");
 
-    await eventually(() => expect(gates).toHaveLength(2));
+    await eventually(() => expect(gates).toHaveLength(1));
     gates[0]?.();
-    gates[1]?.();
     const events = await eventsPromise;
     const firstCompleteIndex = events.findIndex((event) => event.kind === "llm-complete");
     const tokenEventsBeforeCompletion = events.slice(0, firstCompleteIndex).filter((event) => event.kind === "llm-token");
@@ -375,7 +381,7 @@ function mul(x: number, y: number): number;`;
     expect(events.at(-1)?.kind).toBe("compiled");
   });
 
-  it("passes parallel strategy through the TypeScript runner", async () => {
+  it("passes compilation strategy through the TypeScript runner", async () => {
     const sheet = `function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
 
@@ -383,22 +389,21 @@ function main(): void {
   console.log(add(1, 2));
   console.log(mul(2, 3));
 }`;
-    const started: string[] = [];
+    let started = 0;
     const resolvers: Array<(value: string) => void> = [];
     const runPromise = runCodeSheet(sheet, "main", {
       compilationStrategy: "parallel",
       complete(prompt) {
-        const target = completionTargetName(prompt);
-        started.push(target);
+        expect(prompt).toContain("compile this Logos-TS worksheet into one complete TypeScript code sheet");
+        started += 1;
         return new Promise<string>((resolve) => {
           resolvers.push(resolve);
         });
       },
     });
 
-    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
-    resolvers[0]("function add(x: number, y: number): number {\n  return x + y;\n}");
-    resolvers[1]("function mul(x: number, y: number): number {\n  return x * y;\n}");
+    await eventually(() => expect(started).toBe(1));
+    resolvers[0](arithmeticCompletedSheet);
 
     const result = await runPromise;
     expect(result.ok).toBe(true);
@@ -417,7 +422,7 @@ function main(): void {
   it("checks generated WebPage code with generic code quality gates", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
-      complete: () => shadcnCounterBody,
+      complete: () => shadcnCounterSheetWithBody(shadcnCounterBody),
     });
 
     expect(checkCode(generated.code, {
@@ -442,7 +447,7 @@ function main(): void {
   it("rejects generated shadcn buttons that put handlers in text children", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
-      complete: () => borkedCounterBody,
+      complete: () => shadcnCounterSheetWithBody(borkedCounterBody),
     });
 
     const result = checkCode(generated.code, {
@@ -457,11 +462,11 @@ function main(): void {
   it("rejects generated WebPage code that fakes interactivity with alerts", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
-      complete: () => `return shadcn.renderApp(
+      complete: () => shadcnCounterSheetWithBody(`return shadcn.renderApp(
   shadcn.Page({ title: "Strategy Viewer" },
     shadcn.Button({ onClick: "alert('Strategy applied. Re-render required for updated state.')" }, "Apply")
   )
-);`,
+);`),
     });
 
     const codeResult = checkCode(generated.code, { expectedKind: "webpage" });
@@ -611,6 +616,18 @@ ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(result.artifacts[0].content).toContain('id="increment"');
   });
 
+  it("treats WebPage as a predefined runtime type", () => {
+    const program = buildTypeScriptProgram(`type WebPage = string;
+
+function main(): WebPage {
+  return shadcn.renderApp(shadcn.Page({ title: "Explicit WebPage" }, "ok"));
+}`, "main");
+
+    expect(program.match(/^type WebPage = string;/gm)).toHaveLength(1);
+    expect(program).not.toContain("type WebPage = string;\n\ntype WebPage = string;");
+    expect(() => transpileTypeScript(program)).not.toThrow();
+  });
+
   it("allows shadcn Script to use the same props-first shape as other helpers", async () => {
     const body = `const count = 0;
 
@@ -658,6 +675,95 @@ ${body.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(html).toContain("window.incrementCounter");
     expect(html).toContain('id="counter-display"');
     expect(html).toContain('onclick="window.incrementCounter()"');
+  });
+
+  it("accepts a shadcn Script as renderApp shorthand options", async () => {
+    const program = buildTypeScriptProgram(`function main(): WebPage {
+  const script = shadcn.Script(\`
+    window.fromRenderAppShorthand = true;
+  \`);
+  return shadcn.renderApp(
+    shadcn.Page({ title: "Script shorthand" }, shadcn.Text("ok")),
+    script,
+  );
+}`, "main");
+
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    const result = await runTypeScript(program);
+    const html = result.artifacts[0]?.content ?? "";
+
+    expect(result.ok).toBe(true);
+    expect(html).toContain("window.fromRenderAppShorthand");
+    expect(html).not.toContain("<script><script>");
+  });
+
+  it("runs Claude output with top-level const declarations verbatim", async () => {
+    const program = buildTypeScriptProgram(`type CellState =
+  | { kind: "filled"; value: number }
+  | { kind: "notes"; value: number[] }
+
+class SudokuState {
+  grid: CellState[][];
+
+  constructor() {
+    this.grid = Array.from({ length: 9 }, () =>
+      Array.from({ length: 9 }, () => ({ kind: "filled", value: 0 } as CellState))
+    );
+  }
+}
+
+const test_sudoku: SudokuState = (() => {
+  const state = new SudokuState();
+  state.grid[0][0] = { kind: "filled", value: 5 };
+  state.grid[0][1] = { kind: "notes", value: [1, 2, 3] };
+  return state;
+})();
+
+function main(): WebPage {
+  const rows = test_sudoku.grid.map((rowCells, r) => {
+    const cells = rowCells.map((cell, c) => {
+      return cell.kind === "filled"
+        ? shadcn.Div({ className: "cell", "data-row": r, "data-col": c }, String(cell.value))
+        : shadcn.Div({ className: "cell notes" }, cell.value.join(""));
+    }).join("");
+    return shadcn.Row({}, cells);
+  }).join("");
+
+  return shadcn.renderApp(
+    shadcn.Page({ title: "Sudoku" }, shadcn.Div({ id: "sudoku-board" }, rows)),
+    { title: "Sudoku Viewer" },
+  );
+}`, "main");
+
+    expect(program).toContain("const test_sudoku: SudokuState");
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    const result = await runTypeScript(program);
+    const html = result.artifacts[0]?.content ?? "";
+
+    expect(result.ok).toBe(true);
+    expect(html).toContain("sudoku-board");
+    expect(html).toContain("123");
+  });
+
+  it("compiles ReactApp runnables to hosted iframe artifacts", () => {
+    const program = buildTypeScriptProgram(`function main(): ReactApp {
+  return reactApp(
+    \`function App(props) {
+      const tuple = React.useState(props.initial);
+      const value = tuple[0];
+      const setValue = tuple[1];
+      return React.createElement("button", { id: "counter", onClick: function() { setValue(value + 1); } }, "Count " + value);
+    }\`,
+    { initial: 0 },
+    { title: "React Counter" },
+  );
+}`, "main");
+
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    expect(program).toContain('"iframe-url"');
+    expect(program).toContain("logos-react-app-");
+    expect(program).toContain("createRoot(root)");
+    expect(program).toContain("function App(props)");
   });
 
   it("rejects webpages with object-string rendering artifacts", () => {

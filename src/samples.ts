@@ -55,6 +55,25 @@ function main(): WebPage {
   \`\`\`
 }`;
 
+const simpleSudoku = `// Simple Sudoku
+
+type CellState =
+ | { kind: "filled"; value: number }
+ | { kind: "notes"; value: number[] }
+class SudokuState {
+  grid: CellState[][]
+}
+
+const test_sudoku = number[][];
+
+function main(): ReactApp {
+  \`\`\`
+  render test_sudoku.
+  supports clicking cells and filling values.
+  underneath the board is a toggle to switch between notes/filling.
+  \`\`\`
+}`;
+
 const starterArithmetic = `// Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
 
 function add(x: number, y: number): number;
@@ -338,6 +357,11 @@ export const sampleGroups: SampleGroup[] = [
         label: "Counter button",
         code: counterButton,
       },
+      {
+        id: "simple-sudoku",
+        label: "Simple Sudoku",
+        code: simpleSudoku,
+      },
     ],
   },
   {
@@ -386,13 +410,13 @@ export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.sa
 
 export const defaultProjectIds = [
   "counter-button",
-  "sudoku-human-viewer",
+  "simple-sudoku",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
     label: "Base Project",
-    sampleIds: ["counter-button"],
+    sampleIds: ["counter-button", "simple-sudoku"],
   },
   {
     label: "Baseline Logos-TS",

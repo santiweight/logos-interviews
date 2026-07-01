@@ -66,6 +66,9 @@ type RunChunk = {
 type RunArtifact = {
   kind: "html";
   content: string;
+} | {
+  kind: "iframe-url";
+  url: string;
 };
 
 type RunStatus =
@@ -467,11 +470,19 @@ let runnableStateByLine = new Map<number, RunnableState>();
 let incompleteSnippetsByLine = new Map<number, IncompleteSnippetTarget[]>();
 let incompleteSnippetByHash = new Map<SnippetHash, IncompleteSnippetTarget>();
 let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
+let claudeCompileDraft: ClaudeCompileDraft = {
+  hash: null,
+  streamed: "",
+  implementation: null,
+  status: null,
+};
 let selectedSnippetHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
 let selectedWholeFileImplementation = false;
 let naturalSnippetEditorMode: "python" | "natural" = "python";
 let latestImplementationSource = seedCode;
+let latestCompiledPageSource: string | null = null;
+let latestCompiledPageSourceByTabId = new Map<string, string>();
 let runTabs: RunTab[] = [];
 let activeToolTabId: ToolTabId = null;
 
@@ -513,6 +524,13 @@ type SnippetPreviewState = {
   streamed: string;
   implementation: string | null;
   status: "stub" | "generating" | "cached" | "complete";
+};
+
+type ClaudeCompileDraft = {
+  hash: string | null;
+  streamed: string;
+  implementation: string | null;
+  status: "generating" | "cached" | "complete" | null;
 };
 
 const logosTypeScriptLanguageId = "logos-typescript";
@@ -932,6 +950,7 @@ window.setInterval(() => {
 
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
+  const runSource = latestCompiledPageSource ?? source;
   const runnable = requestedRunnable ?? firstRunnable(source);
   if (!runnable) {
     sessionCapture.track("run_blocked", { reason: "no_runnable" }, true);
@@ -940,14 +959,14 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     return;
   }
 
-  const runTab = createRunTab(runnable, source, definitionHash(source));
-  sessionCapture.track("run_requested", { runnable, source }, true);
+  const runTab = createRunTab(runnable, runSource, definitionHash(source));
+  sessionCapture.track("run_requested", { runnable, source, runSource }, true);
   runStatus.textContent = `Running ${runnable} · last run ${lastRunAgeLabel()}`;
   runStatus.dataset.state = "";
   setActiveTab(runTab.id);
   renderRunTabs();
 
-  const result = await startInteractiveRunViaDevApi(source, runnable).catch((error: unknown) => ({
+  const result = await startInteractiveRunViaDevApi(runSource, runnable).catch((error: unknown) => ({
     ok: false as const,
     error: error instanceof Error ? error.message : String(error),
   }));
@@ -1001,6 +1020,8 @@ async function resetWorkspace(): Promise<void> {
     }
 
     await clearUserState();
+    latestCompiledPageSourceByTabId = new Map();
+    latestCompiledPageSource = null;
     const defaultState = defaultSourceTabState();
     sourceTabs = defaultState.tabs;
     activeSourceTabId = defaultState.activeTabId;
@@ -1093,11 +1114,23 @@ function scheduleCompilation(delayMs: number): void {
   compileVersion += 1;
   const version = compileVersion;
   const source = editor.getValue();
+  const sourceTabId = activeSourceTabId;
+  latestCompiledPageSource = sourceTabId === null
+    ? null
+    : latestCompiledPageSourceByTabId.get(sourceTabId) ?? null;
 
   compileController?.abort();
   compileController = null;
   compilationPending = true;
-  latestImplementationSource = source;
+  if (latestCompiledPageSource === null) {
+    latestImplementationSource = source;
+  }
+  claudeCompileDraft = {
+    hash: null,
+    streamed: "",
+    implementation: latestCompiledPageSource,
+    status: latestCompiledPageSource === null ? null : "complete",
+  };
   refreshIncompleteSnippets(source);
   updateTypeCheckMarkers([]);
   updateReadinessDecorations(localReadiness(source));
@@ -1110,7 +1143,7 @@ function scheduleCompilation(delayMs: number): void {
 
   compileTimer = setTimeout(() => {
     compileTimer = null;
-    streamImplementation(source, version);
+    streamImplementation(source, version, sourceTabId);
   }, delayMs);
 }
 
@@ -1171,6 +1204,7 @@ function closeSourceTab(tabId: string): void {
 
   syncActiveSourceTab();
   sourceTabs = sourceTabs.filter((tab) => tab.id !== tabId);
+  latestCompiledPageSourceByTabId.delete(tabId);
 
   if (activeSourceTabId === tabId) {
     activeSourceTabId = sourceTabs[closingIndex]?.id ?? sourceTabs[closingIndex - 1]?.id ?? null;
@@ -1459,9 +1493,10 @@ function openUserDatabase(): Promise<IDBDatabase> {
   });
 }
 
-async function streamImplementation(source: string, version: number): Promise<void> {
+async function streamImplementation(source: string, version: number, sourceTabId: string | null): Promise<void> {
   const controller = new AbortController();
   compileController = controller;
+  let receivedImplementation = false;
   sessionCapture.track("compile_stream_started", { version, source }, false);
 
   try {
@@ -1475,11 +1510,25 @@ async function streamImplementation(source: string, version: number): Promise<vo
         (event.kind === "implementation" || event.kind === "compiled") &&
         typeof event.implementation === "string"
       ) {
+        receivedImplementation = true;
+        if (sourceTabId !== null) {
+          latestCompiledPageSourceByTabId.set(sourceTabId, event.implementation);
+        }
+        latestCompiledPageSource = event.implementation;
         latestImplementationSource = event.implementation;
         renderSnippetPanel();
       }
 
       updateSnippetPreviewFromCompileEvent(event);
+
+      if (event.kind === "compiled" && !receivedImplementation) {
+        if (sourceTabId !== null) {
+          latestCompiledPageSourceByTabId.set(sourceTabId, source);
+        }
+        latestCompiledPageSource = source;
+        latestImplementationSource = source;
+        renderSnippetPanel();
+      }
 
       if (event.kind === "readiness" && Array.isArray(event.definitions)) {
         updateReadinessDecorations(event.definitions);
@@ -1495,7 +1544,6 @@ async function streamImplementation(source: string, version: number): Promise<vo
       return;
     }
 
-    latestImplementationSource = source;
     renderSnippetPanel();
     console.error(error);
     sessionCapture.track(
@@ -1721,6 +1769,7 @@ function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
 
   const current = snippetPreviewByHash.get(event.hash);
   if (!current) {
+    updateClaudeCompileDraftFromEvent(event);
     return;
   }
 
@@ -1755,6 +1804,56 @@ function updateSnippetPreviewFromCompileEvent(event: CompileWireEvent): void {
       implementation: event.implementation,
       status: event.kind === "cache-hit" ? "cached" : "complete",
     });
+    renderSnippetPanel();
+  }
+}
+
+function updateClaudeCompileDraftFromEvent(event: CompileWireEvent): void {
+  if (typeof event.hash !== "string") {
+    return;
+  }
+
+  if (event.kind === "llm-start") {
+    claudeCompileDraft = {
+      hash: event.hash,
+      streamed: "",
+      implementation: latestCompiledPageSource,
+      status: latestCompiledPageSource === null ? "generating" : "complete",
+    };
+    renderSnippetPanel();
+    return;
+  }
+
+  if (
+    event.kind === "llm-token" &&
+    typeof event.token === "string" &&
+    (claudeCompileDraft.hash === null || claudeCompileDraft.hash === event.hash)
+  ) {
+    claudeCompileDraft = {
+      ...claudeCompileDraft,
+      hash: event.hash,
+      streamed: claudeCompileDraft.streamed + event.token,
+      status: "generating",
+    };
+    renderSnippetPanel();
+    return;
+  }
+
+  if (
+    (event.kind === "llm-complete" || event.kind === "cache-hit") &&
+    typeof event.implementation === "string"
+  ) {
+    if (activeSourceTabId !== null) {
+      latestCompiledPageSourceByTabId.set(activeSourceTabId, event.implementation);
+    }
+    latestCompiledPageSource = event.implementation;
+    latestImplementationSource = event.implementation;
+    claudeCompileDraft = {
+      hash: event.hash,
+      streamed: "",
+      implementation: event.implementation,
+      status: event.kind === "cache-hit" ? "cached" : "complete",
+    };
     renderSnippetPanel();
   }
 }
@@ -1836,6 +1935,15 @@ function updateSelectedDefinitionDecorations(): void {
 }
 
 function renderSnippetPanel(): void {
+  if (claudeCompileDraft.status !== null) {
+    setSnippetPanelTitle(
+      claudeCompileDraft.status === "generating" ? "Claude draft" : "Claude result",
+      claudeCompileDraft.status,
+    );
+    setSnippetPreviewSource(claudeDraftPreviewSource());
+    return;
+  }
+
   if (selectedDefinitionTarget !== null) {
     const text =
       directPreviewForDefinitionTarget(selectedDefinitionTarget) ??
@@ -1849,8 +1957,8 @@ function renderSnippetPanel(): void {
   }
 
   if (selectedWholeFileImplementation) {
-    setSnippetPanelTitle("Whole file", null);
-    setSnippetPreviewSource(previewImplementationSource());
+    setSnippetPanelTitle("Whole file", claudeCompileDraft.status);
+    setSnippetPreviewSource(claudeDraftPreviewSource() || previewImplementationSource());
     return;
   }
 
@@ -1873,6 +1981,16 @@ function renderSnippetPanel(): void {
 
   setSnippetPanelTitle(target.label, snippetPanelStatus(preview));
   setSnippetPreviewSource(text);
+}
+
+function claudeDraftPreviewSource(): string {
+  if (claudeCompileDraft.status === null) {
+    return "";
+  }
+
+  return claudeCompileDraft.streamed.length > 0
+    ? claudeCompileDraft.streamed
+    : claudeCompileDraft.implementation ?? "// Waiting for Claude to stream the compiled sheet...";
 }
 
 function directPreviewForDefinitionTarget(target: ImplementationTarget): string | null {
@@ -3143,8 +3261,9 @@ function renderRunTab(tab: RunTab): void {
 
 function renderRunArtifacts(container: HTMLElement, artifacts: RunArtifact[]): void {
   container.replaceChildren();
+  const iframeUrl = artifacts.find((artifact) => artifact.kind === "iframe-url");
   const html = artifacts.find((artifact) => artifact.kind === "html");
-  if (!html) {
+  if (!iframeUrl && !html) {
     container.hidden = true;
     return;
   }
@@ -3152,10 +3271,31 @@ function renderRunArtifacts(container: HTMLElement, artifacts: RunArtifact[]): v
   container.hidden = false;
   const frame = document.createElement("iframe");
   frame.className = "run-artifact-frame";
-  frame.sandbox.add("allow-scripts", "allow-forms", "allow-popups", "allow-modals");
-  frame.srcdoc = html.content;
+  frame.sandbox.add("allow-scripts", "allow-same-origin", "allow-forms", "allow-popups", "allow-modals");
+  if (iframeUrl) {
+    frame.src = iframeUrl.url;
+  } else if (html) {
+    frame.srcdoc = html.content;
+  }
   frame.title = "App output";
   container.append(frame);
+}
+
+function runArtifactsEqual(left: RunArtifact[], right: RunArtifact[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((artifact, index) => {
+    const other = right[index];
+    if (!other || artifact.kind !== other.kind) {
+      return false;
+    }
+    if (artifact.kind === "html") {
+      return other.kind === "html" && artifact.content === other.content;
+    }
+    return other.kind === "iframe-url" && artifact.url === other.url;
+  });
 }
 
 function terminalDisplayText(tab: RunTab): string {
@@ -3241,11 +3381,15 @@ async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
     return runTabById(tab.id) !== undefined;
   }
 
+  const artifactsChanged = !runArtifactsEqual(tab.artifacts, result.artifacts);
   tab.implementation = result.implementation;
   tab.artifacts = result.artifacts;
   latestImplementationSource = result.implementation;
   renderSnippetPanel();
   appendTerminalChunks(tab, result.chunks);
+  if (artifactsChanged && result.chunks.length === 0) {
+    renderRunTab(tab);
+  }
   if (result.status.state === "running") {
     return true;
   }
@@ -3309,11 +3453,15 @@ async function pollRunTab(runTabId: string): Promise<void> {
     return;
   }
 
+  const artifactsChanged = !runArtifactsEqual(currentTab.artifacts, result.artifacts);
   currentTab.implementation = result.implementation;
   currentTab.artifacts = result.artifacts;
   latestImplementationSource = result.implementation;
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
+  if (artifactsChanged && result.chunks.length === 0) {
+    renderRunTab(currentTab);
+  }
 
   if (result.status.state === "running") {
     currentTab.status = result.status;
@@ -3862,8 +4010,10 @@ function isRunArtifacts(value: unknown): value is RunArtifact[] {
   return Array.isArray(value) && value.every((artifact) => (
     typeof artifact === "object" &&
     artifact !== null &&
-    (artifact as RunArtifact).kind === "html" &&
-    typeof (artifact as RunArtifact).content === "string"
+    (
+      ((artifact as RunArtifact).kind === "html" && typeof (artifact as { content?: unknown }).content === "string") ||
+      ((artifact as RunArtifact).kind === "iframe-url" && typeof (artifact as { url?: unknown }).url === "string")
+    )
   ));
 }
 
@@ -4163,6 +4313,8 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     }
 
     closeAllRunTabs();
+    latestCompiledPageSourceByTabId = new Map();
+    latestCompiledPageSource = session.compilation.latestImplementationSource || null;
     const restoredState = normalizeSourceTabState({
       tabs: session.sourceTabs.map((tab) => ({ ...tab })),
       activeTabId: session.activeSourceTabId,
@@ -4173,6 +4325,10 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     const active = activeSourceTab();
     editor.setValue(active?.source ?? session.editor.value);
     latestImplementationSource = session.compilation.latestImplementationSource || editor.getValue();
+    latestCompiledPageSource = session.compilation.latestImplementationSource || null;
+    if (activeSourceTabId !== null && latestCompiledPageSource !== null) {
+      latestCompiledPageSourceByTabId.set(activeSourceTabId, latestCompiledPageSource);
+    }
     compileVersion = Math.max(compileVersion + 1, session.compilation.compileVersion);
     lastRunCompletedAtMs = typeof session.run.lastRunCompletedAtMs === "number"
       ? session.run.lastRunCompletedAtMs

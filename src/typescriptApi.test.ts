@@ -12,6 +12,18 @@ function main(): void {
   console.log(mul(2, 3));
 }`;
 
+const completedTypeScriptSheet = `function add(x: number, y: number): number {
+  return x + y;
+}
+function mul(x: number, y: number): number {
+  return x * y;
+}
+
+function main(): void {
+  console.log(add(1, 2));
+  console.log(mul(2, 3));
+}`;
+
 describe("TypeScript API strategy defaults", () => {
   const servers: Array<ReturnType<typeof createServer>> = [];
 
@@ -20,33 +32,34 @@ describe("TypeScript API strategy defaults", () => {
     servers.length = 0;
   });
 
-  it("defaults the compile stream API to parallel completion", async () => {
-    const started: string[] = [];
+  it("defaults the compile stream API to whole-sheet completion", async () => {
+    let started = 0;
     const resolvers: Array<(value: string) => void> = [];
     const baseUrl = await listen(servers, new Map(), (prompt) => {
-      const target = completionTargetName(prompt);
-      started.push(target);
+      expect(prompt).toContain("compile this Logos-TS worksheet into one complete TypeScript code sheet");
+      expect(prompt).toContain("function add(x: number, y: number): number;");
+      expect(prompt).toContain("function mul(x: number, y: number): number;");
+      started += 1;
       return new Promise<string>((resolve) => {
         resolvers.push(resolve);
       });
     });
 
     const compilePromise = compileViaApi(baseUrl, parallelTypeScriptSheet);
-    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
-    resolvers[0]?.("function add(x: number, y: number): number {\n  return x + y;\n}");
-    resolvers[1]?.("function mul(x: number, y: number): number {\n  return x * y;\n}");
+    await eventually(() => expect(started).toBe(1));
+    resolvers[0]?.(completedTypeScriptSheet);
 
     const events = await compilePromise;
-    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(2);
+    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({ kind: "compiled" });
   });
 
-  it("defaults the run start API to parallel completion", async () => {
-    const started: string[] = [];
+  it("defaults the run start API to whole-sheet completion", async () => {
+    let started = 0;
     const resolvers: Array<(value: string) => void> = [];
     const baseUrl = await listen(servers, new Map(), (prompt) => {
-      const target = completionTargetName(prompt);
-      started.push(target);
+      expect(prompt).toContain("compile this Logos-TS worksheet into one complete TypeScript code sheet");
+      started += 1;
       return new Promise<string>((resolve) => {
         resolvers.push(resolve);
       });
@@ -56,9 +69,8 @@ describe("TypeScript API strategy defaults", () => {
       sheet: parallelTypeScriptSheet,
       runnable: "main",
     });
-    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
-    resolvers[0]?.("function add(x: number, y: number): number {\n  return x + y;\n}");
-    resolvers[1]?.("function mul(x: number, y: number): number {\n  return x * y;\n}");
+    await eventually(() => expect(started).toBe(1));
+    resolvers[0]?.(completedTypeScriptSheet);
 
     const startedRun = await runPromise;
     const completed = await pollUntilExited(baseUrl, startedRun.sessionId, startedRun.chunks);
@@ -212,11 +224,6 @@ async function eventually(assertion: () => void, timeoutMs = 1000): Promise<void
   if (lastError) {
     throw lastError;
   }
-}
-
-function completionTargetName(prompt: string): "add" | "mul" {
-  const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
-  return target.includes("function mul") ? "mul" : "add";
 }
 
 function sendJson(
