@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   compile,
   buildCompletionPrompt,
+  definitionReadiness,
   hashCompletionInput,
   parse,
   runnables,
@@ -186,6 +187,92 @@ function main(): App {
     expect(parsed.topLevelComments).toEqual(["// File comment"]);
     expect(module).toContain("// Function comment");
     expect(() => transpileTypeScript(module)).not.toThrow();
+  });
+
+  it("models runnable readiness through TypeScript incomplete definitions and snippets", async () => {
+    const cache: CodeCache = new Map();
+    const sheet = `function add(x: number, y: number): number;
+
+function test(): void {
+  console.log(add(1, 2));
+}`;
+    const parsed = parse(sheet);
+
+    expect(definitionReadiness(parsed, cache)).toEqual([
+      {
+        name: "add",
+        line: 1,
+        kind: "function",
+        ready: false,
+        reason: "implementation",
+        dependencies: [],
+        blockingDependencies: [],
+      },
+      {
+        name: "test",
+        line: 3,
+        kind: "function",
+        ready: false,
+        reason: "dependency",
+        dependencies: ["add"],
+        blockingDependencies: ["add"],
+      },
+    ]);
+
+    await collectCompileEvents(cache, sheet, () => `function add(x: number, y: number): number {
+  return x + y;
+}`);
+
+    expect(definitionReadiness(parsed, cache)).toEqual([
+      {
+        name: "add",
+        line: 1,
+        kind: "function",
+        ready: true,
+        dependencies: [],
+        blockingDependencies: [],
+      },
+      {
+        name: "test",
+        line: 3,
+        kind: "function",
+        ready: true,
+        dependencies: ["add"],
+        blockingDependencies: [],
+      },
+    ]);
+
+    const naturalCache: CodeCache = new Map();
+    const naturalSheet = `function main(): WebPage {
+  \`\`\`
+  render a small status page
+  \`\`\`
+}`;
+    const naturalParsed = parse(naturalSheet);
+    expect(definitionReadiness(naturalParsed, naturalCache)).toEqual([
+      {
+        name: "main",
+        line: 1,
+        kind: "function",
+        ready: false,
+        reason: "implementation",
+        dependencies: [],
+        blockingDependencies: [],
+      },
+    ]);
+
+    await collectCompileEvents(naturalCache, naturalSheet, () => `return "<!doctype html><html><body>Status ready</body></html>";`);
+
+    expect(definitionReadiness(naturalParsed, naturalCache)).toEqual([
+      {
+        name: "main",
+        line: 1,
+        kind: "function",
+        ready: true,
+        dependencies: [],
+        blockingDependencies: [],
+      },
+    ]);
   });
 
   it("emits multiline TypeScript type aliases with variant comments", () => {

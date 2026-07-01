@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type Page } from "playwright";
 import { completeWithAnthropic } from "./anthropicComplete";
 import { checkCode, checkWebPage, generateCode } from "./codegenQualityChecks";
 import { sampleAppEvalCases, sampleEvalCases, samples } from "./samples";
@@ -60,6 +60,34 @@ const borkedCounterHtmlFixture = `<!doctype html>
 const itIfAnthropicCodegen = process.env.RUN_ANTHROPIC_CODEGEN_E2E === "true" && process.env.ANTHROPIC_API_KEY
   ? it
   : it.skip;
+
+type BrowserSourceTab = {
+  id: string;
+  projectId: string;
+  title: string;
+  source: string;
+};
+
+type BrowserLoadableSession = {
+  sourceTabs: BrowserSourceTab[];
+  activeSourceTabId: string | null;
+  editor: {
+    value: string;
+    cursor: { lineNumber: number; column: number } | null;
+    scrollTop: number;
+    scrollLeft: number;
+  };
+  compilation: {
+    compileVersion: number;
+    latestImplementationSource: string;
+    selection: unknown;
+  };
+};
+
+type LogosWindow = Window & {
+  createLogosSessionBundle?: () => BrowserLoadableSession;
+  loadLogosSession?: (session: BrowserLoadableSession) => Promise<void>;
+};
 
 describe("Logos-TS browser baseline", () => {
   beforeAll(async () => {
@@ -124,6 +152,136 @@ describe("Logos-TS browser baseline", () => {
 
     expect(browserErrors).toEqual([]);
     await context.close();
+  }, 180_000);
+
+  it("reports blocked runnable status in the UI while dependencies compile", async () => {
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const source = `function helper(): string;
+
+function main(): WebPage {
+  const value = helper();
+  return "<!doctype html><html><body>" + value + "</body></html>";
+}`;
+    const implementation = `function helper(): string {
+  return "compiled";
+}
+
+function main(): WebPage {
+  const value = helper();
+  return "<!doctype html><html><body>" + value + "</body></html>";
+}`;
+    let startedTargetCompile = false;
+    let releaseCompile: (() => void) | null = null;
+    let resolveCompileStarted: () => void = () => undefined;
+    const compileStarted = new Promise<void>((resolve) => {
+      resolveCompileStarted = resolve;
+    });
+    await page.route("**/api/compile", async (route) => {
+      const body = route.request().postDataJSON() as { sheet?: string };
+      if (body.sheet !== source) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: JSON.stringify({ kind: "compiled" }) + "\n",
+        });
+        return;
+      }
+
+      startedTargetCompile = true;
+      resolveCompileStarted();
+      await new Promise<void>((release) => {
+        releaseCompile = release;
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body: [
+          {
+            kind: "readiness",
+            definitions: [
+              {
+                name: "helper",
+                line: 1,
+                kind: "function",
+                ready: true,
+                dependencies: [],
+                blockingDependencies: [],
+              },
+              {
+                name: "main",
+                line: 3,
+                kind: "function",
+                ready: true,
+                dependencies: ["helper"],
+                blockingDependencies: [],
+              },
+            ],
+          },
+          {
+            kind: "implementation",
+            implementation,
+            completedSnippets: 1,
+            totalSnippets: 1,
+          },
+          { kind: "compiled" },
+        ].map((event) => JSON.stringify(event)).join("\n") + "\n",
+      });
+    });
+    let runStarts = 0;
+    await page.route("**/api/run/start", async (route) => {
+      runStarts += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          sessionId: "compiled-status-run",
+          runnable: "main",
+          implementation,
+          chunks: [{ stream: "stdout", text: "compiled\n" }],
+          artifacts: [],
+          status: { state: "exited", code: 0, signal: null },
+        }),
+      });
+    });
+
+    try {
+      await page.goto(baseUrl, { waitUntil: "networkidle" });
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Compile Status");
+      await page.evaluate(() => {
+        const select = document.querySelector<HTMLSelectElement>("#compilation-strategy-select");
+        if (!select) {
+          throw new Error("Compilation strategy select is unavailable");
+        }
+        select.value = select.value === "sequential" ? "parallel" : "sequential";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await expect.poll(() => startedTargetCompile, { timeout: 15_000 }).toBe(true);
+      await compileStarted;
+      expect(startedTargetCompile).toBe(true);
+
+      const disabledGlyph = page.locator(".runnable-play-glyph-disabled").first();
+      await disabledGlyph.waitFor({ state: "visible", timeout: 15_000 });
+      await disabledGlyph.click();
+      await expect.poll(async () => page.locator("#run-status").textContent()).toBe("Dependencies still compiling");
+      expect(runStarts).toBe(0);
+
+      releaseCompile?.();
+      const enabledGlyph = page.locator(".runnable-play-glyph:not(.runnable-play-glyph-disabled)").first();
+      await enabledGlyph.waitFor({ state: "visible", timeout: 15_000 });
+      await enabledGlyph.click();
+      await expect.poll(() => runStarts).toBe(1);
+      await expect.poll(async () => page.locator("#run-status").textContent()).toContain("Ran main");
+    } finally {
+      releaseCompile?.();
+      await context.close();
+    }
   }, 180_000);
 
   it("streams generated Intro snippet completions through the compiler endpoint", async () => {
@@ -479,6 +637,49 @@ async function runSheetViaApi(sheet: string, runnable: string): Promise<{
       artifacts,
     };
   }, { sheet, runnable });
+}
+
+async function waitForSessionHelpers(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    const logosWindow = window as LogosWindow;
+    return (
+      typeof logosWindow.createLogosSessionBundle === "function" &&
+      typeof logosWindow.loadLogosSession === "function"
+    );
+  });
+}
+
+async function loadSource(page: Page, source: string, title: string): Promise<void> {
+  await page.evaluate(async ({ source, title }) => {
+    const logosWindow = window as LogosWindow;
+    const session = logosWindow.createLogosSessionBundle?.();
+    if (!session || !logosWindow.loadLogosSession) {
+      throw new Error("Logos session helpers are unavailable");
+    }
+
+    const activeSourceTabId = session.activeSourceTabId ?? session.sourceTabs[0]?.id ?? "browser-run";
+    await logosWindow.loadLogosSession({
+      ...session,
+      sourceTabs: [{
+        id: activeSourceTabId,
+        projectId: title.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-"),
+        title,
+        source,
+      }],
+      activeSourceTabId,
+      editor: {
+        ...session.editor,
+        value: source,
+        cursor: { lineNumber: 1, column: 1 },
+        scrollTop: 0,
+        scrollLeft: 0,
+      },
+      compilation: {
+        ...session.compilation,
+        latestImplementationSource: source,
+      },
+    });
+  }, { source, title });
 }
 
 async function findFreePort(): Promise<number> {

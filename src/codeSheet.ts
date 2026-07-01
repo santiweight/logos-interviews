@@ -77,7 +77,7 @@ export type CompilationStrategy = "sequential" | "parallel" | "agentic";
 export type DefinitionReadiness = {
   name: string;
   line: number;
-  kind: "function" | "method";
+  kind: "function" | "method" | "class";
   ready: boolean;
   reason?: "implementation" | "dependency";
   dependencies: string[];
@@ -710,33 +710,93 @@ export function renderImplementation(ir: CompilationIR): CodeSheet {
   return `${imports.join("\n")}\n\n${source}`;
 }
 
-export function definitionReadiness(parsed: ParsedSheet, _codeCache: CodeCache): DefinitionReadiness[] {
-  const incompleteDefinitions = parsed.incompleteSnippets.flatMap((snippet) => {
+export function definitionReadiness(parsed: ParsedSheet, codeCache: CodeCache): DefinitionReadiness[] {
+  const incompleteDefinitions: DefinitionReadiness[] = parsed.incompleteSnippets.flatMap((snippet): DefinitionReadiness[] => {
     const header = parseFunctionHeader(snippet.snippet);
-    return header
-      ? [{
-          name: header.name,
-          line: snippet.line,
-          kind: "function" as const,
-          ready: true,
-          reason: "implementation" as const,
-          dependencies: [],
-          blockingDependencies: [],
-        }]
-      : [];
+    if (header) {
+      const ready = codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts));
+      return [{
+        name: header.name,
+        line: snippet.line,
+        kind: "function" as const,
+        ready,
+        ...(ready ? {} : { reason: "implementation" as const }),
+        dependencies: [],
+        blockingDependencies: [],
+      }];
+    }
+
+    const classDecl = parsed.classDecls.find((decl) => decl.line === snippet.line && decl.snippet === snippet.snippet);
+    if (classDecl) {
+      const ready = codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts));
+      return [{
+        name: classDecl.name,
+        line: snippet.line,
+        kind: "class" as const,
+        ready,
+        ...(ready ? {} : { reason: "implementation" as const }),
+        dependencies: [],
+        blockingDependencies: [],
+      }];
+    }
+
+    return [];
   });
 
-  const runnables = parsed.runnables.map((runnable) => ({
-    name: runnable.name,
-    line: runnable.line,
-    kind: "function" as const,
-    ready: true,
-    reason: "implementation" as const,
-    dependencies: [],
-    blockingDependencies: [],
-  }));
+  const incompleteByName = new Map(incompleteDefinitions.map((definition) => [definition.name, definition]));
+  const runnableBlocks = topLevelFunctionBlocks(parsed.source);
+  const runnables = parsed.runnables.map((runnable) => {
+    const block = runnableBlocks.find((item) => item.name === runnable.name && item.line === runnable.line);
+    const referencedNames = new Set(identifiers(block?.source ?? ""));
+    const dependencies = [...incompleteByName.keys()].filter((name) => referencedNames.has(name));
+    const blockingDependencies = dependencies.filter((name) => incompleteByName.get(name)?.ready === false);
+    const ownPendingSnippets = parsed.incompleteSnippets.some((snippet) => {
+      if (!block || snippet.line < block.line || snippet.line > block.endLine) {
+        return false;
+      }
+      if (parseFunctionHeader(snippet.snippet)) {
+        return false;
+      }
+      const classDecl = parsed.classDecls.find((decl) => decl.line === snippet.line && decl.snippet === snippet.snippet);
+      if (classDecl) {
+        return false;
+      }
+      return !codeCache.has(hashCompletionInput(parsed, snippet.snippet, snippet.annotationContexts));
+    });
+    const ready = blockingDependencies.length === 0 && !ownPendingSnippets;
+
+    return {
+      name: runnable.name,
+      line: runnable.line,
+      kind: "function" as const,
+      ready,
+      ...(ready ? {} : { reason: blockingDependencies.length > 0 ? "dependency" as const : "implementation" as const }),
+      dependencies,
+      blockingDependencies,
+    };
+  });
 
   return [...incompleteDefinitions, ...runnables];
+}
+
+function topLevelFunctionBlocks(source: string): Array<{ name: string; line: number; endLine: number; source: string }> {
+  const lines = source.split("\n");
+  const blocks: Array<{ name: string; line: number; endLine: number; source: string }> = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const header = parseFunctionHeader(lines[index]);
+    if (!header || header.indent.length > 0 || !header.hasBody) {
+      continue;
+    }
+
+    const endLine = lines[index].includes("{") ? bracedBlockEndLine(lines, index) : blockEndLine(lines, index);
+    blocks.push({
+      name: header.name,
+      line: index + 1,
+      endLine,
+      source: lines.slice(index, endLine).join("\n"),
+    });
+  }
+  return blocks;
 }
 
 export function selectionContextAtPosition(
