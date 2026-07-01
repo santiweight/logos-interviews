@@ -36,7 +36,7 @@ const statusOverrides = new Map<string, Pick<MigrationCase, "status" | "note">>(
   keyed("codeSheet.test.ts", "keeps completed cache entries after cancelling an in-progress compile", "todo", "Important TS gap: cancellation/cache integrity needs a TS equivalent."),
   keyed("codeSheet.test.ts", "passes parallel strategy through the runner", "covered", "Covered by Logos-TS runner strategy passthrough test."),
   keyed("codeSheet.test.ts", "auto strategy commits only the first successful strategy cache fork", "todo", "Important TS gap: auto/parallel strategy cache fork behavior is not covered."),
-  keyed("compileStream.test.ts", "does not stream implementation payloads after a cached runnable is ready", "todo", "Important TS gap: cached compile streams should not flash stale/generated payloads."),
+  keyed("compileStream.test.ts", "does not stream implementation payloads after a cached runnable is ready", "covered", "Covered by Logos-TS compile stream API cached-ready event ordering test."),
   keyed("codeCache.test.ts", "hydrates persisted completions across independent cache instances", "todo", "Important TS gap: global cache persistence is outside active test config."),
   keyed("codeCache.test.ts", "supports concurrent hydration from the same persisted cache entry", "todo", "Important TS gap: concurrent cache hydration is outside active test config."),
   keyed("codeCache.test.ts", "clears both memory and the persistent backing store", "todo", "Important TS gap: clear-cache behavior must be tested with unseeded dev cache."),

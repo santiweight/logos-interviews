@@ -41,6 +41,27 @@ describe("TypeScript API strategy defaults", () => {
     expect(events.at(-1)).toMatchObject({ kind: "compiled" });
   });
 
+  it("does not stream implementation payloads after a cached runnable is ready", async () => {
+    const cache: CodeCache = new Map();
+    const baseUrl = await listen(servers, cache, (prompt) => {
+      const target = completionTargetName(prompt);
+      if (target === "add") {
+        return "function add(x: number, y: number): number {\n  return x + y;\n}";
+      }
+      return "function mul(x: number, y: number): number {\n  return x * y;\n}";
+    });
+
+    await compileViaApi(baseUrl, parallelTypeScriptSheet);
+    const events = await compileViaApi(baseUrl, parallelTypeScriptSheet);
+    const readyIndex = events.findIndex((event) => (
+      event.kind === "readiness" &&
+      hasReadyDefinition(event, "main")
+    ));
+
+    expect(readyIndex).toBeGreaterThan(-1);
+    expect(events.slice(readyIndex + 1)).toEqual([{ kind: "compiled" }]);
+  });
+
   it("defaults the run start API to parallel completion", async () => {
     const started: string[] = [];
     const resolvers: Array<(value: string) => void> = [];
@@ -194,6 +215,16 @@ async function compileViaApi(baseUrl: string, sheet: string): Promise<Array<Reco
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+function hasReadyDefinition(event: Record<string, unknown>, name: string): boolean {
+  return Array.isArray(event.definitions) &&
+    event.definitions.some((definition) => (
+      typeof definition === "object" &&
+      definition !== null &&
+      (definition as { name?: unknown }).name === name &&
+      (definition as { ready?: unknown }).ready === true
+    ));
 }
 
 async function eventually(assertion: () => void, timeoutMs = 1000): Promise<void> {

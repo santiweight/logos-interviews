@@ -345,12 +345,14 @@ export async function* compile(
       yield { kind: "cache-hit", hash: hit.hash, snippet: hit.snippet, implementation: hit.implementation };
     }
     yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
-    yield {
-      kind: "implementation",
-      source: renderImplementation(ir),
-      completedSnippets,
-      totalSnippets,
-    };
+    if (completedSnippets < totalSnippets) {
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+    }
   }
 
   for (const node of ir.nodes) {
@@ -466,6 +468,7 @@ async function* compileParallelRemaining(
   });
 
   const nodes: IncompleteCompilationNode[] = [];
+  const initialCacheHits: Array<{ hash: SnippetHash; snippet: string; implementation: string }> = [];
   for (const node of pendingNodes) {
     if (node.state.kind !== "partial") {
       continue;
@@ -481,14 +484,22 @@ async function* compileParallelRemaining(
     node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
     completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
     completedSnippets += 1;
-    if (emitProgress) {
-      yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
-      yield {
-        kind: "implementation",
-        source: renderImplementation(ir),
-        completedSnippets,
-        totalSnippets,
-      };
+    initialCacheHits.push({ hash, snippet, implementation: cachedReplacement });
+  }
+
+  if (emitProgress) {
+    for (const hit of initialCacheHits) {
+      yield { kind: "cache-hit", hash: hit.hash, snippet: hit.snippet, implementation: hit.implementation };
+    }
+    if (initialCacheHits.length > 0) {
+      if (nodes.length > 0) {
+        yield {
+          kind: "implementation",
+          source: renderImplementation(ir),
+          completedSnippets,
+          totalSnippets,
+        };
+      }
       yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
     }
   }
