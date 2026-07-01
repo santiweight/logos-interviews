@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse, runnables } from "./codeSheet";
-import { defaultProjectIds, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
+import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
+import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
 import {
   buildTypeScriptModule,
   buildTypeScriptProgram,
@@ -36,16 +37,21 @@ return shadcn.renderApp(
 );`;
 
 describe("Logos-TS compiler shape", () => {
-  it("keeps the migrated baseline files as the product contract", () => {
-    expect(defaultProjectIds).toEqual([
+  it("uses the counter app as the base project and keeps migrated files as eval targets", () => {
+    const evalProjectIds = [
       "starter-arithmetic",
       "beyond-basics",
       "formula-spreadsheet",
       "annotated-maze",
-    ]);
-    expect(samples.map((sample) => sample.id)).toEqual([...defaultProjectIds, "portfolio-viewer"]);
-    expect(sampleTemplateGroups.flatMap((group) => group.sampleIds)).toEqual([...defaultProjectIds, "portfolio-viewer"]);
-    expect(sampleEvalCases.map((testCase) => testCase.sampleId)).toEqual([...defaultProjectIds, "portfolio-viewer"]);
+      "portfolio-viewer",
+    ];
+    const appEvalProjectIds = ["sudoku-human-viewer"];
+
+    expect(defaultProjectIds).toEqual(["counter-button", "sudoku-human-viewer"]);
+    expect(samples.map((sample) => sample.id)).toEqual(["counter-button", ...evalProjectIds, ...appEvalProjectIds]);
+    expect(sampleTemplateGroups.flatMap((group) => group.sampleIds)).toEqual(samples.map((sample) => sample.id));
+    expect(sampleEvalCases.map((testCase) => testCase.sampleId)).toEqual(evalProjectIds);
+    expect(sampleAppEvalCases.map((testCase) => testCase.sampleId)).toEqual(appEvalProjectIds);
   });
 
   it("discovers the runnable for each baseline file", () => {
@@ -54,10 +60,15 @@ describe("Logos-TS compiler shape", () => {
         { line: expect.any(Number), name: testCase.runnable },
       ]);
     }
+    for (const testCase of sampleAppEvalCases) {
+      expect(runnables(testCase.sheet), testCase.name).toEqual([
+        { line: expect.any(Number), name: testCase.runnable },
+      ]);
+    }
   });
 
   it("keeps class-based samples in TypeScript-shaped class syntax", () => {
-    for (const sampleId of ["beyond-basics", "formula-spreadsheet", "annotated-maze", "portfolio-viewer"]) {
+    for (const sampleId of ["beyond-basics", "formula-spreadsheet", "annotated-maze", "portfolio-viewer", "sudoku-human-viewer"]) {
       const sample = samples.find((item) => item.id === sampleId);
       expect(sample, sampleId).toBeDefined();
       if (!sample) continue;
@@ -121,6 +132,55 @@ function main(): App {
     expect(() => transpileTypeScript(compiled.program)).not.toThrow();
   });
 
+  it("seeds the base counter app as shadcn WebPage code", async () => {
+    const sample = samples.find((item) => item.id === "counter-button");
+    expect(sample).toBeDefined();
+    if (!sample) return;
+
+    const cache = new Map();
+    await seedSampleCodeCache(cache);
+    const compiled = await compileCodeSheetToTypeScript(sample.code, "main", {
+      cache,
+      complete: () => {
+        throw new Error("counter base project should be seeded");
+      },
+    });
+
+    expect(compiled.completed.source).toContain("shadcn.renderApp");
+    expect(compiled.program).toContain("Counter Button");
+    expect(() => transpileTypeScript(compiled.program)).not.toThrow();
+
+    const result = await runTypeScript(compiled.program);
+    expect(result.ok).toBe(true);
+    expect(result.artifacts[0]?.content).toContain('id="increment"');
+    expect(result.artifacts[0]?.content).toContain('id="count"');
+  });
+
+  it("seeds the human Sudoku viewer as a shadcn WebPage app", async () => {
+    const testCase = sampleAppEvalCases.find((item) => item.sampleId === "sudoku-human-viewer");
+    expect(testCase).toBeDefined();
+    if (!testCase) return;
+
+    const cache = new Map();
+    await seedSampleCodeCache(cache);
+    const compiled = await compileCodeSheetToTypeScript(testCase.sheet, testCase.runnable, {
+      cache,
+      complete: () => {
+        throw new Error("sudoku app sample should be seeded");
+      },
+    });
+
+    expect(compiled.completed.source).toContain("class SudokuState");
+    expect(compiled.completed.source).toContain("function apply_strategy");
+    expect(compiled.completed.source).toContain("shadcn.renderApp");
+    expect(() => transpileTypeScript(compiled.program)).not.toThrow();
+
+    const result = await runTypeScript(compiled.program);
+    expect(result.ok).toBe(true);
+    const html = result.artifacts.find((artifact) => artifact.kind === "html")?.content ?? "";
+    expect(testCase.htmlCheck.matches(html)).toBe(true);
+  });
+
   it("runs hard-coded shadcn app code to an interactive HTML artifact", async () => {
     const program = buildTypeScriptProgram(`function main(): WebPage {
 ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
@@ -149,6 +209,7 @@ ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
       "magicSquare",
       "spreadsheetRuntime",
       "mazeRuntime",
+      "SudokuState",
     ]) {
       expect(source, forbidden).not.toContain(forbidden);
     }

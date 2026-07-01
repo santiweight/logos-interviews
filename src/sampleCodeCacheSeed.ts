@@ -44,6 +44,312 @@ function naturalIncludes(value: string): (snippet: IncompleteSnippet) => boolean
 
 const seedCompletions: SeedCompletion[] = [
   {
+    sampleId: "counter-button",
+    match: naturalIncludes("counter that starts at 0"),
+    implementation: `
+const incrementScript = "window.incrementCounter = () => { const el = document.getElementById('count'); if (!el) return; el.textContent = String(Number(el.textContent || '0') + 1); };";
+return shadcn.renderApp(
+  shadcn.Page({ title: "Counter Button", description: "A tiny Logos WebPage app." },
+    shadcn.Card(
+      shadcn.CardHeader(
+        shadcn.CardTitle("Counter"),
+        shadcn.CardDescription("Click the button to increment the value."),
+      ),
+      shadcn.CardContent(
+        shadcn.Stack(
+          shadcn.Metric({ id: "count" }, "0"),
+          shadcn.Button({ id: "increment", onClick: "window.incrementCounter()" }, "Increment"),
+        ),
+      ),
+    ),
+  ),
+  { title: "Counter Button", scripts: [incrementScript] },
+);`,
+  },
+  {
+    sampleId: "sudoku-human-viewer",
+    match: snippetIncludes("class SudokuState"),
+    implementation: `
+function solved(value: number): CellAnnotation {
+  return { kind: "Solved", value };
+}
+
+function annotations(values: number[]): CellAnnotation {
+  return { kind: "Annotations", values: [...new Set(values)].sort((left, right) => left - right) };
+}
+
+function isCellAnnotation(value: unknown): value is CellAnnotation {
+  return typeof value === "object" && value !== null && "kind" in value;
+}
+
+function cloneCell(cell: CellAnnotation): CellAnnotation {
+  return cell.kind === "Solved" ? solved(cell.value) : annotations(cell.values);
+}
+
+function candidateValuesForBoard(board: number[][], row: number, col: number): number[] {
+  if (board[row][col] !== 0) return [];
+  const blocked = new Set<number>();
+  for (let index = 0; index < 9; index += 1) {
+    if (board[row][index] !== 0) blocked.add(board[row][index]);
+    if (board[index][col] !== 0) blocked.add(board[index][col]);
+  }
+  const boxRow = Math.floor(row / 3) * 3;
+  const boxCol = Math.floor(col / 3) * 3;
+  for (let r = boxRow; r < boxRow + 3; r += 1) {
+    for (let c = boxCol; c < boxCol + 3; c += 1) {
+      if (board[r][c] !== 0) blocked.add(board[r][c]);
+    }
+  }
+  return [1, 2, 3, 4, 5, 6, 7, 8, 9].filter((value) => !blocked.has(value));
+}
+
+class SudokuState {
+  grid: CellAnnotation[][];
+
+  constructor(grid: Array<Array<number | CellAnnotation>>) {
+    const numeric = grid.map((row) => row.map((cell) => {
+      if (typeof cell === "number") return cell;
+      return cell.kind === "Solved" ? cell.value : 0;
+    }));
+
+    this.grid = grid.map((row, rowIndex) => row.map((cell, colIndex) => {
+      if (isCellAnnotation(cell)) return cloneCell(cell);
+      return cell === 0 ? annotations(candidateValuesForBoard(numeric, rowIndex, colIndex)) : solved(cell);
+    }));
+  }
+
+  values(): number[][] {
+    return this.grid.map((row) => row.map((cell) => cell.kind === "Solved" ? cell.value : 0));
+  }
+
+  candidates(row: number, col: number): number[] {
+    const cell = this.grid[row][col];
+    return cell.kind === "Solved" ? [] : [...cell.values];
+  }
+}`,
+  },
+  {
+    sampleId: "sudoku-human-viewer",
+    match: snippetIncludes("function apply_strategy"),
+    implementation: `
+function cloneGrid(state: SudokuState): CellAnnotation[][] {
+  return state.grid.map((row) => row.map(cloneCell));
+}
+
+function candidateCells(grid: CellAnnotation[][], cells: Array<[number, number]>, value: number): Array<[number, number]> {
+  return cells.filter(([row, col]) => {
+    const cell = grid[row][col];
+    return cell.kind === "Annotations" && cell.values.includes(value);
+  });
+}
+
+function solveCell(grid: CellAnnotation[][], row: number, col: number, value: number): SudokuState {
+  const next = grid.map((line) => line.map(cloneCell));
+  next[row][col] = solved(value);
+  return new SudokuState(next);
+}
+
+function removeCandidate(grid: CellAnnotation[][], row: number, col: number, value: number): boolean {
+  const cell = grid[row][col];
+  if (cell.kind === "Solved" || !cell.values.includes(value)) return false;
+  cell.values = cell.values.filter((candidate) => candidate !== value);
+  return true;
+}
+
+function boxCells(boxRow: number, boxCol: number): Array<[number, number]> {
+  const cells: Array<[number, number]> = [];
+  for (let row = boxRow; row < boxRow + 3; row += 1) {
+    for (let col = boxCol; col < boxCol + 3; col += 1) cells.push([row, col]);
+  }
+  return cells;
+}
+
+function apply_strategy(state: SudokuState, strategy: SudokuStrategy): SudokuState {
+  const grid = cloneGrid(state);
+
+  if (strategy === "HiddenSingle") {
+    for (let row = 0; row < 9; row += 1) {
+      for (let col = 0; col < 9; col += 1) {
+        const cell = grid[row][col];
+        if (cell.kind === "Annotations" && cell.values.length === 1) return solveCell(grid, row, col, cell.values[0]);
+      }
+    }
+    return new SudokuState(grid);
+  }
+
+  if (strategy === "UniqueLineSolve") {
+    for (let value = 1; value <= 9; value += 1) {
+      for (let row = 0; row < 9; row += 1) {
+        const cells = candidateCells(grid, Array.from({ length: 9 }, (_, col) => [row, col] as [number, number]), value);
+        if (cells.length === 1) return solveCell(grid, cells[0][0], cells[0][1], value);
+      }
+      for (let col = 0; col < 9; col += 1) {
+        const cells = candidateCells(grid, Array.from({ length: 9 }, (_, row) => [row, col] as [number, number]), value);
+        if (cells.length === 1) return solveCell(grid, cells[0][0], cells[0][1], value);
+      }
+    }
+    return new SudokuState(grid);
+  }
+
+  if (strategy === "UniqueBoxSolve") {
+    for (let value = 1; value <= 9; value += 1) {
+      for (let boxRow = 0; boxRow < 9; boxRow += 3) {
+        for (let boxCol = 0; boxCol < 9; boxCol += 3) {
+          const cells = candidateCells(grid, boxCells(boxRow, boxCol), value);
+          if (cells.length === 1) return solveCell(grid, cells[0][0], cells[0][1], value);
+        }
+      }
+    }
+    return new SudokuState(grid);
+  }
+
+  if (strategy === "HiddenDoubleInBox") {
+    for (let boxRow = 0; boxRow < 9; boxRow += 3) {
+      for (let boxCol = 0; boxCol < 9; boxCol += 3) {
+        for (let left = 1; left <= 8; left += 1) {
+          for (let right = left + 1; right <= 9; right += 1) {
+            const leftCells = candidateCells(grid, boxCells(boxRow, boxCol), left);
+            const rightCells = candidateCells(grid, boxCells(boxRow, boxCol), right);
+            const samePair = leftCells.length === 2 &&
+              rightCells.length === 2 &&
+              leftCells.every((cell, index) => cell[0] === rightCells[index][0] && cell[1] === rightCells[index][1]);
+            if (!samePair) continue;
+            let changed = false;
+            for (const [row, col] of leftCells) {
+              const cell = grid[row][col];
+              if (cell.kind === "Annotations") {
+                const nextValues = cell.values.filter((value) => value === left || value === right);
+                changed ||= nextValues.length !== cell.values.length;
+                cell.values = nextValues;
+              }
+            }
+            if (changed) return new SudokuState(grid);
+          }
+        }
+      }
+    }
+    return new SudokuState(grid);
+  }
+
+  if (strategy === "LineCompleteExceptForBox") {
+    for (let value = 1; value <= 9; value += 1) {
+      for (let row = 0; row < 9; row += 1) {
+        const cells = candidateCells(grid, Array.from({ length: 9 }, (_, col) => [row, col] as [number, number]), value);
+        if (cells.length > 0 && cells.every(([, col]) => Math.floor(col / 3) === Math.floor(cells[0][1] / 3))) {
+          const boxRow = Math.floor(row / 3) * 3;
+          const boxCol = Math.floor(cells[0][1] / 3) * 3;
+          let changed = false;
+          for (const [r, c] of boxCells(boxRow, boxCol)) {
+            if (r !== row) changed ||= removeCandidate(grid, r, c, value);
+          }
+          if (changed) return new SudokuState(grid);
+        }
+      }
+      for (let col = 0; col < 9; col += 1) {
+        const cells = candidateCells(grid, Array.from({ length: 9 }, (_, row) => [row, col] as [number, number]), value);
+        if (cells.length > 0 && cells.every(([row]) => Math.floor(row / 3) === Math.floor(cells[0][0] / 3))) {
+          const boxRow = Math.floor(cells[0][0] / 3) * 3;
+          const boxCol = Math.floor(col / 3) * 3;
+          let changed = false;
+          for (const [r, c] of boxCells(boxRow, boxCol)) {
+            if (c !== col) changed ||= removeCandidate(grid, r, c, value);
+          }
+          if (changed) return new SudokuState(grid);
+        }
+      }
+    }
+  }
+
+  return new SudokuState(grid);
+}`,
+  },
+  {
+    sampleId: "sudoku-human-viewer",
+    match: snippetIncludes("function human_sudoku_demo"),
+    implementation: `
+function human_sudoku_demo(): SudokuState {
+  const start = new SudokuState([
+    [0, 2, 3, 4, 5, 6, 7, 8, 9],
+    [4, 5, 6, 0, 0, 0, 0, 0, 0],
+    [7, 8, 9, 0, 0, 0, 0, 0, 0],
+    [2, 3, 4, 0, 0, 0, 0, 0, 0],
+    [5, 6, 7, 0, 0, 0, 0, 0, 0],
+    [8, 9, 2, 0, 0, 0, 0, 0, 0],
+    [3, 4, 5, 0, 0, 0, 0, 0, 0],
+    [6, 7, 8, 0, 0, 0, 0, 0, 0],
+    [9, 1, 2, 0, 0, 0, 0, 0, 0],
+  ]);
+  return apply_strategy(start, "UniqueLineSolve");
+}`,
+  },
+  {
+    sampleId: "sudoku-human-viewer",
+    match: naturalIncludes("Render a frontend view for the human-style Sudoku strategy example"),
+    implementation: `
+const state = human_sudoku_demo();
+const values = state.values();
+const strategies = [
+  ["Unique Box Solve", "Only one square in a 3x3 box can hold a number."],
+  ["Unique Line Solve", "Only one square in a row or column can hold a number."],
+  ["Hidden Single", "A cell has exactly one candidate left."],
+  ["Hidden Double In Box", "Two numbers share the same two cells in a box."],
+  ["Line Complete Except For Box", "A line confines a number to one box, removing it elsewhere."],
+];
+const cellHtml = values.map((row, rowIndex) => row.map((value, colIndex) => {
+  const candidates = state.candidates(rowIndex, colIndex);
+  const classes = ["sudoku-cell", value === 0 ? "sudoku-cell-unsolved" : "sudoku-cell-solved"];
+  if (rowIndex === 0 && colIndex === 0) classes.push("sudoku-cell-highlight");
+  const inner = value === 0
+    ? \`<span class="sudoku-candidates">\${candidates.map((candidate) => \`<span>\${candidate}</span>\`).join("")}</span>\`
+    : \`<span class="sudoku-value">\${value}</span>\`;
+  return \`<div class="\${classes.join(" ")}">\${inner}</div>\`;
+}).join("")).join("");
+const strategyHtml = strategies.map(([name, detail]) =>
+  \`<li><strong>\${shadcn.html(name)}</strong><span>\${shadcn.html(detail)}</span></li>\`
+).join("");
+return shadcn.renderApp(
+  shadcn.Page({ title: "Human Sudoku Strategy Viewer", description: "One-pass Sudoku reasoning with SudokuState candidates." },
+    shadcn.Row(
+      shadcn.Card({ className: "sudoku-board-card" },
+        shadcn.CardHeader(
+          shadcn.CardTitle("SudokuState"),
+          shadcn.CardDescription("Filled values and candidate annotations after Unique Line Solve."),
+        ),
+        shadcn.CardContent(\`<div class="sudoku-board">\${cellHtml}</div>\`),
+      ),
+      shadcn.Card({ className: "sudoku-strategy-card" },
+        shadcn.CardHeader(
+          shadcn.CardTitle("Human strategies"),
+          shadcn.CardDescription("No guessing. No backtracking. One named pass at a time."),
+        ),
+        shadcn.CardContent(\`<p class="sudoku-badge">No guessing</p><ol class="sudoku-strategies">\${strategyHtml}</ol>\`),
+      ),
+    ),
+  ),
+  {
+    title: "Human Sudoku Strategy Viewer",
+    styles: \`
+      .logos-row { align-items: flex-start; }
+      .sudoku-board-card { flex: 1 1 520px; }
+      .sudoku-strategy-card { flex: 1 1 320px; }
+      .sudoku-board { display: grid; grid-template-columns: repeat(9, minmax(38px, 1fr)); border: 2px solid #18181b; background: #18181b; gap: 1px; aspect-ratio: 1; max-width: 620px; }
+      .sudoku-cell { position: relative; display: grid; place-items: center; min-width: 0; background: #ffffff; color: #18181b; font-variant-numeric: tabular-nums; }
+      .sudoku-cell:nth-child(3n) { border-right: 2px solid #18181b; }
+      .sudoku-cell:nth-child(9n) { border-right: 0; }
+      .sudoku-cell:nth-child(n + 19):nth-child(-n + 27), .sudoku-cell:nth-child(n + 46):nth-child(-n + 54) { border-bottom: 2px solid #18181b; }
+      .sudoku-cell-solved { background: #f8fafc; }
+      .sudoku-cell-highlight { background: #ecfeff; box-shadow: inset 0 0 0 2px #0891b2; }
+      .sudoku-value { font-size: 28px; font-weight: 720; line-height: 1; }
+      .sudoku-candidates { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; width: 100%; padding: 4px; color: #64748b; font-size: 10px; text-align: center; }
+      .sudoku-badge { display: inline-flex; margin: 0 0 14px; border: 1px solid #bae6fd; border-radius: 999px; background: #f0f9ff; color: #075985; font-size: 12px; font-weight: 680; padding: 4px 10px; }
+      .sudoku-strategies { display: grid; gap: 12px; margin: 0; padding-left: 20px; }
+      .sudoku-strategies li strong { display: block; font-size: 14px; }
+      .sudoku-strategies li span { display: block; color: #71717a; font-size: 13px; margin-top: 2px; }
+    \`,
+  },
+);`,
+  },
+  {
     sampleId: "starter-arithmetic",
     match: snippetIncludes("function add"),
     implementation: `

@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
-import { sampleEvalCases, samples } from "./samples";
+import { sampleAppEvalCases, sampleEvalCases, samples } from "./samples";
 
 const execFileAsync = promisify(execFile);
 
@@ -35,7 +35,7 @@ describe("Logos-TS browser baseline", () => {
     }
   });
 
-  it("runs the default Intro to Logos file from the real UI run glyph", async () => {
+  it("runs the default Counter Button app from the real UI run glyph", async () => {
     if (!browser) {
       throw new Error("Browser was not started");
     }
@@ -54,14 +54,13 @@ describe("Logos-TS browser baseline", () => {
     await runnableGlyph.waitFor({ state: "visible", timeout: 15_000 });
     await runnableGlyph.click();
 
-    await page.waitForFunction(
-      () => document.body.innerText.includes("Regular TypeScript: 9") &&
-        document.body.innerText.includes("Logos: 9") &&
-        document.body.innerText.includes("Mixed Logos: 9") &&
-        document.body.innerText.includes("18"),
-      undefined,
-      { timeout: 120_000 },
-    );
+    await page.locator(".run-artifact-frame").waitFor({ state: "attached", timeout: 120_000 });
+    const frame = page.frameLocator(".run-artifact-frame");
+    await expect.poll(async () => frame.locator("#count").textContent(), { timeout: 120_000 }).toBe("0");
+    await frame.locator("#increment").click();
+    await expect.poll(async () => frame.locator("#count").textContent(), { timeout: 15_000 }).toBe("1");
+    await frame.locator("#increment").click();
+    await expect.poll(async () => frame.locator("#count").textContent(), { timeout: 15_000 }).toBe("2");
 
     expect(browserErrors).toEqual([]);
     await context.close();
@@ -152,6 +151,42 @@ describe("Logos-TS browser baseline", () => {
     expect(text).toMatch(/Asset Class|Instrument|Contributor|Detractor/i);
 
     expect(browserErrors).toEqual([]);
+  }, 240_000);
+
+  it("runs the human Sudoku viewer as an HTML app artifact", async () => {
+    const testCase = sampleAppEvalCases.find((item) => item.sampleId === "sudoku-human-viewer");
+    expect(testCase).toBeDefined();
+    if (!testCase) {
+      return;
+    }
+
+    const result = await runSheetViaApi(testCase.sheet, testCase.runnable);
+    expect(result.ok).toBe(true);
+    const html = result.artifacts.find((artifact) => artifact.kind === "html")?.content;
+    expect(html).toBeDefined();
+    if (html === undefined) return;
+    expect(testCase.htmlCheck.matches(html)).toBe(true);
+
+    if (!browser) {
+      throw new Error("Browser was not started");
+    }
+    const page = await browser.newPage();
+    const browserErrors: string[] = [];
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error") {
+        browserErrors.push(message.text());
+      }
+    });
+
+    await page.setContent(html, { waitUntil: "load" });
+    await expect.poll(async () => page.locator(".sudoku-cell").count()).toBe(81);
+    const text = await page.locator("body").innerText();
+    expect(text).toContain("Human Sudoku Strategy Viewer");
+    expect(text).toContain("No guessing");
+    expect(text).toContain("Unique Box Solve");
+    expect(browserErrors).toEqual([]);
+    await page.close();
   }, 240_000);
 
   it("renders a hard-coded shadcn counter HTML artifact and handles clicks", async () => {

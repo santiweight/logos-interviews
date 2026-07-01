@@ -34,6 +34,27 @@ export type SampleStdoutCheck = {
   };
 };
 
+export type SampleAppEvalCase = {
+  sampleId: string;
+  name: string;
+  sheet: CodeSheet;
+  runnable: Runnable;
+  htmlCheck: SampleHtmlCheck;
+};
+
+export type SampleHtmlCheck = {
+  description: string;
+  matches: (html: string) => boolean;
+};
+
+const counterButton = `# Counter Button
+
+function main(): WebPage {
+  \`\`\`
+  a counter that starts at 0 and increments each time the button is clicked
+  \`\`\`
+}`;
+
 const starterArithmetic = `# Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
 
 function add(x: number, y: number): number;
@@ -144,6 +165,39 @@ function main(): void {
   Print the maze, and then the solved maze.
 
   Use colors to make it clear where the path went.
+  \`\`\`
+}`;
+
+const humanSudokuViewer = `# Human-style Sudoku strategy viewer.
+# apply_strategy performs exactly one named human strategy pass.
+# It must not guess, recurse, backtrack, or fill unrelated cells.
+# SudokuState accepts a 9x9 integer board where 0 means unsolved, or a 9x9 CellAnnotation grid.
+# values returns a 9x9 integer board with 0 for unsolved cells.
+# candidates returns a sorted candidate list for an unsolved cell and [] for solved cells.
+
+type SudokuStrategy = "UniqueBoxSolve" | "UniqueLineSolve" | "HiddenDoubleInBox" | "LineCompleteExceptForBox" | "HiddenSingle";
+type CellAnnotation = { kind: "Solved"; value: number } | { kind: "Annotations"; values: number[] };
+type App = WebPage;
+
+class SudokuState {
+  grid: CellAnnotation[][];
+
+  values(): number[][];
+  candidates(row: number, col: number): number[];
+}
+
+function apply_strategy(state: SudokuState, strategy: SudokuStrategy): SudokuState;
+function human_sudoku_demo(): SudokuState;
+
+function main(): App {
+  \`\`\`
+  Render a frontend view for the human-style Sudoku strategy example.
+
+  Show the current SudokuState as a 9x9 board.
+  Filled cells should show large values.
+  Unsolved cells should show compact candidate annotations.
+  Include a short strategy rail for the five human strategies.
+  Highlight that this is a one-pass, no-guessing strategy viewer.
   \`\`\`
 }`;
 
@@ -277,6 +331,16 @@ function main(): App {
 
 export const sampleGroups: SampleGroup[] = [
   {
+    label: "Base Project",
+    samples: [
+      {
+        id: "counter-button",
+        label: "Counter button",
+        code: counterButton,
+      },
+    ],
+  },
+  {
     label: "Baseline Logos-TS",
     samples: [
       {
@@ -299,10 +363,20 @@ export const sampleGroups: SampleGroup[] = [
         label: "Annotated maze",
         code: annotatedMaze,
       },
+    ],
+  },
+  {
+    label: "Applications",
+    samples: [
       {
         id: "portfolio-viewer",
         label: "Portfolio viewer",
         code: portfolioViewer,
+      },
+      {
+        id: "sudoku-human-viewer",
+        label: "Human Sudoku viewer",
+        code: humanSudokuViewer,
       },
     ],
   },
@@ -311,20 +385,27 @@ export const sampleGroups: SampleGroup[] = [
 export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.samples);
 
 export const defaultProjectIds = [
-  "starter-arithmetic",
-  "beyond-basics",
-  "formula-spreadsheet",
-  "annotated-maze",
+  "counter-button",
+  "sudoku-human-viewer",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
+    label: "Base Project",
+    sampleIds: ["counter-button"],
+  },
+  {
     label: "Baseline Logos-TS",
-    sampleIds: [...defaultProjectIds],
+    sampleIds: [
+      "starter-arithmetic",
+      "beyond-basics",
+      "formula-spreadsheet",
+      "annotated-maze",
+    ],
   },
   {
     label: "Applications",
-    sampleIds: ["portfolio-viewer"],
+    sampleIds: ["portfolio-viewer", "sudoku-human-viewer"],
   },
 ];
 
@@ -392,6 +473,19 @@ export const sampleEvalCases: SampleEvalCase[] = [
   },
 ];
 
+export const sampleAppEvalCases: SampleAppEvalCase[] = [
+  {
+    sampleId: "sudoku-human-viewer",
+    name: "logos-ts human sudoku viewer renders",
+    sheet: sampleById("sudoku-human-viewer").code,
+    runnable: "main",
+    htmlCheck: {
+      description: "renders a shadcn-backed Sudoku board with human strategy context",
+      matches: isHumanSudokuHtml,
+    },
+  },
+];
+
 function sampleById(id: string): SampleProgram {
   const sample = samples.find((item) => item.id === id);
   if (!sample) {
@@ -430,6 +524,18 @@ function isPortfolioViewerStdout(stdout: string[]): boolean {
     /Top Contributors\s+NVDA, MSFT, HYG/.test(joined) &&
     /Top Detractors\s+CVNA, TLT, EURUSD/.test(joined) &&
     /HTML bytes\s+\d+/.test(joined)
+  );
+}
+
+function isHumanSudokuHtml(html: string): boolean {
+  return (
+    /Human Sudoku Strategy Viewer/.test(html) &&
+    /data-shadcn-runtime/.test(html) &&
+    /sudoku-board/.test(html) &&
+    /sudoku-cell/.test(html) &&
+    /Unique Box Solve/.test(html) &&
+    /Hidden Double In Box/.test(html) &&
+    /No guessing/.test(html)
   );
 }
 

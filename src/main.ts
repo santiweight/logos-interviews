@@ -177,6 +177,15 @@ const staleDefaultProjectIdSets = [
     "ascii-fractal",
     "formula-spreadsheet",
   ],
+  [
+    "starter-arithmetic",
+    "beyond-basics",
+    "formula-spreadsheet",
+    "annotated-maze",
+  ],
+  [
+    "counter-button",
+  ],
 ];
 
 const initialSourceTabState = defaultSourceTabState();
