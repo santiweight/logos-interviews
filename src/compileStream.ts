@@ -76,7 +76,7 @@ function compileStrategy(strategy: unknown): CompilationStrategy {
     return "parallel";
   }
 
-  return "sequential";
+  return "parallel";
 }
 
 function experimentalCompilePreviewStrategy(strategy: "parallel-methods" | "agentic-methods"): CompilationStrategy {

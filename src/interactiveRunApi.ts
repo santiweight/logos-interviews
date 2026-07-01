@@ -192,7 +192,7 @@ function compilationMode(strategy: unknown): CompilationMode {
     return strategy;
   }
 
-  return "sequential";
+  return "parallel";
 }
 
 export type InteractiveRunWireStatus = InteractiveRunStatus;
