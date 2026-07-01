@@ -107,6 +107,12 @@ export function checkCode(code: string, options: CheckCodeOptions = {}): CheckRe
     if (hasStringHandlerShadcnButton(code)) {
       failures.push("generated WebPage code passes a string handler as Button text instead of an onClick prop");
     }
+    if (/\b(?:alert|confirm|prompt)\s*\(/.test(code)) {
+      failures.push("generated WebPage code uses blocking browser dialogs instead of rendering UI state");
+    }
+    if (/\bre-?render required\b/i.test(code)) {
+      failures.push("generated WebPage code contains a fake re-render placeholder");
+    }
   }
 
   return toResult(failures);
@@ -124,6 +130,12 @@ export function checkWebPageHtml(html: string, options: CheckWebPageOptions = {}
   }
   if (options.expectShadcn !== false && !/data-shadcn-runtime/.test(html)) {
     failures.push("webpage html is missing the shadcn runtime marker");
+  }
+  if (/\b(?:alert|confirm|prompt)\s*\(/.test(html)) {
+    failures.push("webpage html uses blocking browser dialogs instead of rendering UI state");
+  }
+  if (/\bre-?render required\b/i.test(html)) {
+    failures.push("webpage html contains a fake re-render placeholder");
   }
   for (const [pattern, label] of invalidHtmlOutputPatterns()) {
     if (pattern.test(html)) {

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   compile,
+  buildCompletionPrompt,
   hashCompletionInput,
   parse,
   runnables,
@@ -386,6 +387,49 @@ function main(): void {
 
     expect(result.ok).toBe(false);
     expect(result.failures).toContain("generated WebPage code passes a string handler as Button text instead of an onClick prop");
+  });
+
+  it("rejects generated WebPage code that fakes interactivity with alerts", async () => {
+    const generated = await generateCode(shadcnCounterSheet, "main", {
+      cache: new Map(),
+      complete: () => `return shadcn.renderApp(
+  shadcn.Page({ title: "Strategy Viewer" },
+    shadcn.Button({ onClick: "alert('Strategy applied. Re-render required for updated state.')" }, "Apply")
+  )
+);`,
+    });
+
+    const codeResult = checkCode(generated.code, { expectedKind: "webpage" });
+    const htmlResult = checkWebPageHtml(
+      '<!doctype html><html><body data-shadcn-runtime><button onclick="alert(\'Strategy applied. Re-render required for updated state.\')">Apply</button></body></html>',
+    );
+
+    expect(codeResult.ok).toBe(false);
+    expect(codeResult.failures).toEqual(expect.arrayContaining([
+      "generated WebPage code uses blocking browser dialogs instead of rendering UI state",
+      "generated WebPage code contains a fake re-render placeholder",
+    ]));
+    expect(htmlResult.ok).toBe(false);
+    expect(htmlResult.failures).toEqual(expect.arrayContaining([
+      "webpage html uses blocking browser dialogs instead of rendering UI state",
+      "webpage html contains a fake re-render placeholder",
+    ]));
+  });
+
+  it("tells WebPage codegen not to use modal placeholders for client state", () => {
+    const snippet = parse(shadcnCounterSheet).incompleteSnippets[0]?.snippet;
+    expect(snippet).toBeDefined();
+    if (!snippet) return;
+    const prompt = buildCompletionPrompt(
+      shadcnCounterSheet,
+      snippet,
+      "natural",
+    );
+
+    expect(prompt).toContain("static browser page");
+    expect(prompt).toContain("updates the DOM directly");
+    expect(prompt).toContain("Do not use alert(), confirm(), prompt()");
+    expect(prompt).toContain("re-render required");
   });
 
   it("seeds the base counter app as shadcn WebPage code", async () => {

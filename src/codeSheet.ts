@@ -862,7 +862,7 @@ function appReturnPromptGuidance(source: string, snippet: string): string {
   }
 
   const beforeSnippet = source.slice(0, index);
-  const functionHeaders = [...beforeSnippet.matchAll(/(?:^|\n)\s*(?:(?:fn)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*([^{\n]+)|(?:function)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*:\s*([^{\n]+))\s*\{/g)];
+  const functionHeaders = [...beforeSnippet.matchAll(/(?:^|\n)\s*(?:(?:fn)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*([A-Za-z_][A-Za-z0-9_]*)|(?:function)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*:\s*([A-Za-z_][A-Za-z0-9_]*))/g)];
   const current = functionHeaders.at(-1);
   const returnType = (current?.[1] ?? current?.[2])?.trim();
   if (returnType !== "App" && returnType !== "WebPage") {
@@ -874,6 +874,7 @@ The surrounding function returns App/WebPage. Generate valid TypeScript statemen
 When writing UI code, think only about producing executable code. Do not explain the design, mention these instructions, or invent a design-system abstraction.
 The Logos app runtime provides a global shadcn helper object. Use it for UI output instead of hand-writing raw page chrome. Available helpers include shadcn.renderApp, shadcn.Page, shadcn.Card, shadcn.CardHeader, shadcn.CardTitle, shadcn.CardDescription, shadcn.CardContent, shadcn.Button, shadcn.SecondaryButton, shadcn.Row, shadcn.Stack, shadcn.Metric, shadcn.Text, shadcn.Div, shadcn.Span, and shadcn.Script.
 Use shadcn helpers with props first and children after: shadcn.Button({ onClick: "window.someHandler()" }, "Label"). Do not put JavaScript handlers in button text, such as shadcn.Button("Label", "someHandler()"). Interactive buttons must have a visible human label and an onClick prop or equivalent handler.
+The returned HTML is produced once by TypeScript and then runs as a static browser page. Any client-side interaction must be implemented with self-contained JavaScript in shadcn.Script that updates the DOM directly, or by precomputing alternate views and toggling them in the browser. Do not call Logos/TypeScript functions from browser handlers unless you also define equivalent browser-side JavaScript. Do not use alert(), confirm(), prompt(), console-only handlers, or messages like "re-render required" as substitutes for real UI updates.
 Use a shadcn/ui-style operational interface: neutral background, white surfaces, subtle borders, radius <= 8px, compact typography, tabular numbers, table-first layouts, metric cards for headline numbers, standard button/card/form patterns, and restrained color for positive/negative state.
 Do not hand-roll unusual controls or decorative chrome. Avoid gradients, blobs, marketing heroes, oversized illustration, and ornamental panels.`;
 }
