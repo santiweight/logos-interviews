@@ -2208,7 +2208,7 @@ function registerLogosTypeScriptLanguage(): void {
       ...indentationLanguage.tokenizer,
       root: [
         indentationLanguage.tokenizer.root[0],
-        [/#.*$/, "comment"],
+        [/\/\/.*$/, "comment"],
         [/```/, "naturalSnippet.delimiter", "@logosTripleNaturalSnippet"],
         [/`/, "naturalSnippet.delimiter", "@logosInlineNaturalSnippet"],
         ...indentationLanguage.tokenizer.root.slice(1),
@@ -2377,12 +2377,12 @@ function insertTextAtCursor(targetEditor: monaco.editor.IStandaloneCodeEditor, t
 }
 
 function commentContinuationPrefix(line: string): string | null {
-  const match = line.match(/^(\s*)# ?/);
+  const match = line.match(/^(\s*)\/\/ ?/);
   if (!match) {
     return null;
   }
 
-  return `${match[1]}# `;
+  return `${match[1]}// `;
 }
 
 function openStandaloneTripleBacktickIndentAt(source: string, offset: number): string | null {

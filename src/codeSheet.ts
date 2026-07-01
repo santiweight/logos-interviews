@@ -206,7 +206,7 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
     sumTypes,
     typeAliases,
     classDecls,
-    topLevelComments: lines.filter((line) => line.startsWith("#")),
+    topLevelComments: lines.filter((line) => line.startsWith("//")),
   };
 }
 

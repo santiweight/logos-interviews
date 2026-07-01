@@ -829,7 +829,7 @@ function stripComment(source: string): string {
       continue;
     }
 
-    if (char === "#") {
+    if (char === "/" && source[index + 1] === "/") {
       return source.slice(0, index);
     }
   }

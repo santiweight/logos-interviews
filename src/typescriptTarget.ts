@@ -359,7 +359,7 @@ function parseTypeScriptSheet(codeSheet: CodeSheet): ParsedTypeScriptSheet {
   for (let index = 0; index < lines.length; index += 1) {
     const raw = lines[index];
     const line = raw.trim();
-    if (line.length === 0 || line.startsWith("#") || line.startsWith("@logos")) {
+    if (line.length === 0 || line.startsWith("//") || line.startsWith("@logos")) {
       continue;
     }
 
@@ -634,8 +634,8 @@ function lowerBody(body: string): string {
     if (trimmed.length === 0 || trimmed.startsWith("```")) {
       continue;
     }
-    if (trimmed.startsWith("#")) {
-      output.push(`//${trimmed.slice(1)}`);
+    if (trimmed.startsWith("//")) {
+      output.push(trimmed);
       continue;
     }
     if (/^(?:const|let|var|return|if|for|while|switch|try|throw|class|function|interface|type)\b/.test(trimmed)) {

@@ -165,6 +165,29 @@ describe("Logos-TS compiler shape", () => {
     }
   });
 
+  it("uses TypeScript double-slash comments in baseline samples", () => {
+    for (const sample of samples) {
+      expect(sample.code, sample.id).not.toMatch(/^\s*#/m);
+    }
+    expect(samples.some((sample) => /^\s*\/\//m.test(sample.code))).toBe(true);
+  });
+
+  it("parses and lowers double-slash comments without hash-comment support", () => {
+    const sheet = `// File comment
+type App = WebPage;
+
+function main(): App {
+  // Function comment
+  return "<!doctype html><html><body>ok</body></html>";
+}`;
+    const parsed = parse(sheet);
+    const module = buildTypeScriptModule(sheet);
+
+    expect(parsed.topLevelComments).toEqual(["// File comment"]);
+    expect(module).toContain("// Function comment");
+    expect(() => transpileTypeScript(module)).not.toThrow();
+  });
+
   it("discovers class snippets that need implementation", () => {
     const sample = samples.find((item) => item.id === "beyond-basics");
     expect(sample).toBeDefined();

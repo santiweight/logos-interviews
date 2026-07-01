@@ -47,7 +47,7 @@ export type SampleHtmlCheck = {
   matches: (html: string) => boolean;
 };
 
-const counterButton = `# Counter Button
+const counterButton = `// Counter Button
 
 function main(): WebPage {
   \`\`\`
@@ -55,7 +55,7 @@ function main(): WebPage {
   \`\`\`
 }`;
 
-const starterArithmetic = `# Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
+const starterArithmetic = `// Logos-TS supports TypeScript function declarations, natural snippets, and TypeScript-target execution.
 
 function add(x: number, y: number): number;
 function mul(x: number, y: number): number;
@@ -69,7 +69,7 @@ function main(): void {
   \`output added + product\`
 }`;
 
-const beyondBasics = `# Logos-TS supports classes, incomplete methods, and natural-language runnable bodies.
+const beyondBasics = `// Logos-TS supports classes, incomplete methods, and natural-language runnable bodies.
 
 class MagicSquare {
   size: number;
@@ -89,9 +89,9 @@ function magic_square_example(): void {
   \`\`\`
 }`;
 
-const formulaSpreadsheet = `# Spreadsheet cell storage uses A1-style addressing.
-# Treat Record<string, Record<number, T>> as a nested mapping keyed by column then row.
-# Parse expression strings containing ints, A1 refs, +, -, *, /, and parentheses.
+const formulaSpreadsheet = `// Spreadsheet cell storage uses A1-style addressing.
+// Treat Record<string, Record<number, T>> as a nested mapping keyed by column then row.
+// Parse expression strings containing ints, A1 refs, +, -, *, /, and parentheses.
 
 type Operator = "Mul" | "Div" | "Add" | "Sub";
 type Expr = { kind: "Val"; field0: number } | { kind: "BinOp"; field0: Operator; field1: Expr; field2: Expr } | { kind: "Cell"; field0: string; field1: number };
@@ -135,9 +135,9 @@ function main(): void {
   \`\`\`
 }`;
 
-const annotatedMaze = `# Maze generator, renderer, and solver.
-# A size 10 maze has 10 rows and 10 columns of cells.
-# When printed, it has outside edge walls added, so it is 12 rows tall and 12 columns wide.
+const annotatedMaze = `// Maze generator, renderer, and solver.
+// A size 10 maze has 10 rows and 10 columns of cells.
+// When printed, it has outside edge walls added, so it is 12 rows tall and 12 columns wide.
 
 class Maze {
   grid: string[][];
@@ -168,12 +168,12 @@ function main(): void {
   \`\`\`
 }`;
 
-const humanSudokuViewer = `# Human-style Sudoku strategy viewer.
-# apply_strategy performs exactly one named human strategy pass.
-# It must not guess, recurse, backtrack, or fill unrelated cells.
-# SudokuState accepts a 9x9 integer board where 0 means unsolved, or a 9x9 CellAnnotation grid.
-# values returns a 9x9 integer board with 0 for unsolved cells.
-# candidates returns a sorted candidate list for an unsolved cell and [] for solved cells.
+const humanSudokuViewer = `// Human-style Sudoku strategy viewer.
+// apply_strategy performs exactly one named human strategy pass.
+// It must not guess, recurse, backtrack, or fill unrelated cells.
+// SudokuState accepts a 9x9 integer board where 0 means unsolved, or a 9x9 CellAnnotation grid.
+// values returns a 9x9 integer board with 0 for unsolved cells.
+// candidates returns a sorted candidate list for an unsolved cell and [] for solved cells.
 
 type SudokuStrategy = "UniqueBoxSolve" | "UniqueLineSolve" | "HiddenDoubleInBox" | "LineCompleteExceptForBox" | "HiddenSingle";
 type CellAnnotation = { kind: "Solved"; value: number } | { kind: "Annotations"; values: number[] };
@@ -201,8 +201,8 @@ function main(): App {
   \`\`\`
 }`;
 
-const portfolioViewer = `# Portfolio Performance Monitor
-# Why did we make or lose money today?
+const portfolioViewer = `// Portfolio Performance Monitor
+// Why did we make or lose money today?
 
 type AssetClass = "Equities" | "Credit" | "Rates" | "Commodities" | "Fx";
 type Side = "Long" | "Short";
