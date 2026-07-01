@@ -458,6 +458,55 @@ ${shadcnCounterBody.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(result.artifacts[0].content).toContain('id="increment"');
   });
 
+  it("allows shadcn Script to use the same props-first shape as other helpers", async () => {
+    const body = `const count = 0;
+
+const html = shadcn.renderApp(
+  shadcn.Page(
+    {},
+    shadcn.Card(
+      { style: "max-width: 320px; margin: 80px auto;" },
+      shadcn.CardHeader(
+        {},
+        shadcn.CardTitle({}, "Counter"),
+        shadcn.CardDescription({}, "Click the button to increment the counter.")
+      ),
+      shadcn.CardContent(
+        {},
+        shadcn.Stack(
+          {},
+          shadcn.Metric({ id: "counter-display" }, String(count)),
+          shadcn.Button({ onClick: "window.incrementCounter()" }, "Increment")
+        )
+      )
+    ),
+    shadcn.Script(
+      {},
+      \`
+        window._count = 0;
+        window.incrementCounter = function() {
+          window._count += 1;
+          document.getElementById('counter-display').textContent = window._count;
+        };
+      \`
+    )
+  )
+);
+
+return html;`;
+    const program = buildTypeScriptProgram(`function main(): WebPage {
+${body.split("\n").map((line) => `  ${line}`).join("\n")}
+}`, "main");
+
+    expect(() => transpileTypeScript(program)).not.toThrow();
+    const result = await runTypeScript(program);
+    expect(result.ok).toBe(true);
+    const html = result.artifacts[0]?.content ?? "";
+    expect(html).toContain("window.incrementCounter");
+    expect(html).toContain('id="counter-display"');
+    expect(html).toContain('onclick="window.incrementCounter()"');
+  });
+
   it("rejects webpages with object-string rendering artifacts", () => {
     const html = `<!doctype html><html><head><style data-shadcn-runtime="true"></style></head><body><button>[object Object]</button></body></html>`;
 

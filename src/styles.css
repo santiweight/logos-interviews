@@ -306,8 +306,8 @@ textarea:disabled {
 
 .shell {
   --agent-pane-width: 292px;
-  --code-pane-basis: 0;
-  --code-pane-grow: 0.98;
+  --code-pane-basis: 50%;
+  --code-pane-grow: 0;
 
   position: relative;
   display: flex;
@@ -365,7 +365,7 @@ textarea:disabled {
 }
 
 .output-pane {
-  flex: 1.32 1 520px;
+  flex: 1 1 50%;
   min-width: 520px;
   background: #f7f5ef;
 }

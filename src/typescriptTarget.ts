@@ -585,7 +585,10 @@ const shadcn = (() => {
         : "";
       return element("main", { ...props, className: classNames("logos-page", props.className) }, header, ...(children.length > 0 ? children : [props.children]));
     },
-    Script: (source: string) => \`<script>\${source}</script>\`,
+    Script: (...args: ShadcnChild[]) => {
+      const { children } = normalizeArgs(args);
+      return \`<script>\${renderChildren(children)}</script>\`;
+    },
     renderApp: (body: ShadcnChild, options: { title?: string; scripts?: string[]; styles?: string } = {}): WebPage => \`<!doctype html>
 <html>
 <head>
