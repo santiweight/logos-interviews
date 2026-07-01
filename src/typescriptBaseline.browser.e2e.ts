@@ -1,5 +1,8 @@
 import { spawn, execFile } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
@@ -13,6 +16,7 @@ const execFileAsync = promisify(execFile);
 let serverProcess: ReturnType<typeof spawn> | null = null;
 let browser: Browser | null = null;
 let baseUrl = "";
+let codeCacheDir: string | null = null;
 const codegenCounterSheet = `function main(): WebPage {
   \`\`\`
   a counter that starts at 0 and increments each time the button is clicked
@@ -66,8 +70,14 @@ describe("Logos-TS browser baseline", () => {
 
     const port = await findFreePort();
     baseUrl = `http://127.0.0.1:${port}`;
+    codeCacheDir = await mkdtemp(join(tmpdir(), "logos-ts-e2e-code-cache-"));
     serverProcess = spawn("node", ["dist-server/server.mjs"], {
-      env: { ...process.env, PORT: String(port), SEED_SAMPLE_CODE_CACHE: "true" },
+      env: {
+        ...process.env,
+        PORT: String(port),
+        CODE_CACHE_DIR: codeCacheDir,
+        SEED_SAMPLE_CODE_CACHE: "true",
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     await waitForServer(serverProcess, port);
@@ -78,6 +88,10 @@ describe("Logos-TS browser baseline", () => {
     await browser?.close();
     if (serverProcess && !serverProcess.killed) {
       serverProcess.kill("SIGTERM");
+    }
+    if (codeCacheDir) {
+      await rm(codeCacheDir, { recursive: true, force: true });
+      codeCacheDir = null;
     }
   });
 

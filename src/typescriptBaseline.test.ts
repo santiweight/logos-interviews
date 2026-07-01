@@ -542,4 +542,12 @@ ${body.split("\n").map((line) => `  ${line}`).join("\n")}
     expect(source).toContain('process.env.SEED_SAMPLE_CODE_CACHE === "true"');
     expect(source).toContain('await import("./sampleCodeCacheSeed")');
   });
+
+  it("keeps seeded browser e2e completions out of the developer cache", () => {
+    const source = readFileSync(new URL("./typescriptBaseline.browser.e2e.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("mkdtemp");
+    expect(source).toContain("CODE_CACHE_DIR: codeCacheDir");
+    expect(source).toContain('SEED_SAMPLE_CODE_CACHE: "true"');
+  });
 });
