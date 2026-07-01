@@ -7,9 +7,11 @@ import {
   runnables,
   type CodeCache,
   type CompilationEvent,
+  type CompilationStrategy,
   type CompleteFunction,
 } from "./codeSheet";
 import { checkCode, checkWebPageHtml, generateCode } from "./codegenQualityChecks";
+import { runCodeSheet } from "./codeSheetRunner";
 import { seedSampleCodeCache } from "./sampleCodeCacheSeed";
 import { defaultProjectIds, sampleAppEvalCases, sampleEvalCases, samples, sampleTemplateGroups } from "./samples";
 import {
@@ -80,12 +82,35 @@ async function collectCompileEvents(
   cache: CodeCache,
   sheet: string,
   complete: CompleteFunction,
+  strategy: CompilationStrategy = "sequential",
 ): Promise<CompilationEvent[]> {
   const events: CompilationEvent[] = [];
-  for await (const event of compile(cache, sheet, complete)) {
+  for await (const event of compile(cache, sheet, complete, { strategy })) {
     events.push(event);
   }
   return events;
+}
+
+async function eventually(assertion: () => void, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  let lastError: unknown;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+}
+
+function completionTargetName(prompt: string): "add" | "mul" {
+  const target = prompt.split("Your job is to finish the implementation of:").at(-1) ?? prompt;
+  return target.includes("function mul") ? "mul" : "add";
 }
 
 describe("Logos-TS compiler shape", () => {
@@ -241,6 +266,88 @@ function main(): void {
     expect(secondEvents.some((event) => event.kind === "llm-start")).toBe(false);
   });
 
+  it("starts independent TypeScript completions in parallel", async () => {
+    const sheet = `function add(x: number, y: number): number;
+function mul(x: number, y: number): number;
+
+function main(): void {
+  console.log(add(1, 2));
+  console.log(mul(2, 3));
+}`;
+    const started: string[] = [];
+    const resolvers: Array<(value: string) => void> = [];
+    const eventsPromise = collectCompileEvents(new Map(), sheet, (prompt) => {
+      const target = completionTargetName(prompt);
+      started.push(target);
+      return new Promise<string>((resolve) => {
+        resolvers.push(resolve);
+      });
+    }, "parallel");
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    expect(resolvers).toHaveLength(2);
+    resolvers[0]("function add(x: number, y: number): number {\n  return x + y;\n}");
+    resolvers[1]("function mul(x: number, y: number): number {\n  return x * y;\n}");
+
+    const events = await eventsPromise;
+    expect(events.filter((event) => event.kind === "llm-start")).toHaveLength(2);
+    expect(events.at(-1)?.kind).toBe("compiled");
+  });
+
+  it("streams tokens from parallel TypeScript completions before all snippets finish", async () => {
+    const sheet = `function add(x: number, y: number): number;
+function mul(x: number, y: number): number;`;
+    const gates: Array<() => void> = [];
+    const eventsPromise = collectCompileEvents(new Map(), sheet, async function* (prompt) {
+      const target = completionTargetName(prompt);
+      yield target === "add"
+        ? "function add(x: number, y: number): number {\n"
+        : "function mul(x: number, y: number): number {\n";
+      await new Promise<void>((resolve) => gates.push(resolve));
+      yield target === "add" ? "  return x + y;\n}" : "  return x * y;\n}";
+    }, "parallel");
+
+    await eventually(() => expect(gates).toHaveLength(2));
+    gates[0]?.();
+    gates[1]?.();
+    const events = await eventsPromise;
+    const firstCompleteIndex = events.findIndex((event) => event.kind === "llm-complete");
+    const tokenEventsBeforeCompletion = events.slice(0, firstCompleteIndex).filter((event) => event.kind === "llm-token");
+
+    expect(tokenEventsBeforeCompletion.length).toBeGreaterThanOrEqual(2);
+    expect(events.at(-1)?.kind).toBe("compiled");
+  });
+
+  it("passes parallel strategy through the TypeScript runner", async () => {
+    const sheet = `function add(x: number, y: number): number;
+function mul(x: number, y: number): number;
+
+function main(): void {
+  console.log(add(1, 2));
+  console.log(mul(2, 3));
+}`;
+    const started: string[] = [];
+    const resolvers: Array<(value: string) => void> = [];
+    const runPromise = runCodeSheet(sheet, "main", {
+      compilationStrategy: "parallel",
+      complete(prompt) {
+        const target = completionTargetName(prompt);
+        started.push(target);
+        return new Promise<string>((resolve) => {
+          resolvers.push(resolve);
+        });
+      },
+    });
+
+    await eventually(() => expect([...started].sort()).toEqual(["add", "mul"]));
+    resolvers[0]("function add(x: number, y: number): number {\n  return x + y;\n}");
+    resolvers[1]("function mul(x: number, y: number): number {\n  return x * y;\n}");
+
+    const result = await runPromise;
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toEqual(["3", "6"]);
+  });
+
   it("checks generated WebPage code with generic code quality gates", async () => {
     const generated = await generateCode(shadcnCounterSheet, "main", {
       cache: new Map(),
@@ -288,11 +395,17 @@ function main(): void {
 
     const cache = new Map();
     await seedSampleCodeCache(cache);
+    const parsed = parse(sample.code);
+    expect(parsed.incompleteSnippets.map((item) => item.snippet)).toHaveLength(1);
+    const snippet = parsed.incompleteSnippets[0];
+    expect(snippet).toBeDefined();
+    expect(cache.has(hashCompletionInput(parsed, snippet?.snippet ?? "", snippet?.annotationContexts))).toBe(true);
     const compiled = await compileCodeSheetToTypeScript(sample.code, "main", {
       cache,
       complete: () => {
         throw new Error("counter base project should be seeded");
       },
+      strategy: "parallel",
     });
 
     expect(compiled.completed.source).toContain("shadcn.renderApp");

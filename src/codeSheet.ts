@@ -114,6 +114,19 @@ export type CompilationNode =
       state: CompletionState;
     };
 
+type IncompleteCompilationNode = Extract<CompilationNode, { kind: "incomplete" }>;
+
+type ParallelCompletionEvent =
+  | { kind: "token"; hash: SnippetHash; token: string }
+  | {
+      kind: "complete";
+      node: IncompleteCompilationNode;
+      hash: SnippetHash;
+      snippet: string;
+      replacement: string;
+    }
+  | { kind: "error"; error: unknown };
+
 export type Declaration =
   | { kind: "sum-type"; name: string; line: number; source: string }
   | { kind: "class"; name: string; line: number; source: string }
@@ -291,6 +304,23 @@ export async function* compile(
     return;
   }
 
+  if (options.strategy === "parallel" && complete) {
+    for await (const event of compileParallelRemaining(
+      ir,
+      parsed,
+      codeCache,
+      complete,
+      options,
+      completions,
+      completedSnippets,
+      totalSnippets,
+      emitProgress,
+    )) {
+      yield event;
+    }
+    return;
+  }
+
   for (const node of ir.nodes) {
     if (node.kind !== "incomplete" || node.state.kind !== "partial") {
       continue;
@@ -418,6 +448,232 @@ export async function* compile(
       ir,
     },
   };
+}
+
+async function* compileParallelRemaining(
+  ir: CompilationIR,
+  parsed: ParsedSheet,
+  codeCache: CodeCache,
+  complete: CompleteFunction,
+  options: CompileOptions,
+  completions: Completion[],
+  completedSnippets: number,
+  totalSnippets: number,
+  emitProgress: boolean,
+): AsyncIterable<CompilationEvent> {
+  const pendingNodes = ir.nodes.filter((node): node is IncompleteCompilationNode => {
+    return node.kind === "incomplete" && node.state.kind === "partial";
+  });
+
+  const nodes: IncompleteCompilationNode[] = [];
+  for (const node of pendingNodes) {
+    if (node.state.kind !== "partial") {
+      continue;
+    }
+
+    const { hash, snippet } = node.state;
+    const cachedReplacement = await cachedImplementation(codeCache, hash);
+    if (cachedReplacement === undefined) {
+      nodes.push(node);
+      continue;
+    }
+
+    node.state = { kind: "complete", hash, snippet, implementation: cachedReplacement };
+    completions.push({ hash, snippet, replacement: cachedReplacement, cached: true });
+    completedSnippets += 1;
+    if (emitProgress) {
+      yield { kind: "cache-hit", hash, snippet, implementation: cachedReplacement };
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+    }
+  }
+
+  if (nodes.length === 0 || options.signal?.aborted) {
+    yield compiledEvent(ir, completions);
+    return;
+  }
+
+  const queue = new AsyncEventQueue<ParallelCompletionEvent>();
+  let activeTasks = nodes.length;
+  const promptSource = renderImplementation(ir);
+
+  for (const node of nodes) {
+    const { hash, snippet } = node.state;
+    if (emitProgress) {
+      yield { kind: "llm-start", hash, snippet };
+    }
+
+    void runParallelCompletionTask(
+      queue,
+      node,
+      promptSource,
+      codeCache,
+      complete,
+      options,
+    ).finally(() => {
+      activeTasks -= 1;
+      if (activeTasks === 0) {
+        queue.close();
+      }
+    });
+  }
+
+  for await (const event of queue) {
+    if (options.signal?.aborted) {
+      return;
+    }
+
+    if (event.kind === "error") {
+      throw event.error;
+    }
+
+    if (event.kind === "token") {
+      if (emitProgress && options.streamTokens !== false) {
+        yield { kind: "llm-token", hash: event.hash, token: event.token };
+      }
+      continue;
+    }
+
+    event.node.state = {
+      kind: "complete",
+      hash: event.hash,
+      snippet: event.snippet,
+      implementation: event.replacement,
+    };
+    completions.push({
+      hash: event.hash,
+      snippet: event.snippet,
+      replacement: event.replacement,
+      cached: false,
+    });
+    completedSnippets += 1;
+
+    if (emitProgress) {
+      yield { kind: "llm-complete", hash: event.hash, implementation: event.replacement };
+      yield {
+        kind: "implementation",
+        source: renderImplementation(ir),
+        completedSnippets,
+        totalSnippets,
+      };
+      yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+    }
+  }
+
+  yield compiledEvent(ir, completions);
+}
+
+async function runParallelCompletionTask(
+  queue: AsyncEventQueue<ParallelCompletionEvent>,
+  node: IncompleteCompilationNode,
+  promptSource: string,
+  codeCache: CodeCache,
+  complete: CompleteFunction,
+  options: CompileOptions,
+): Promise<void> {
+  if (node.state.kind !== "partial") {
+    return;
+  }
+
+  const { hash, snippet } = node.state;
+  try {
+    const prompt = buildCompletionPrompt(
+      promptSource,
+      snippet,
+      node.snippetKind,
+      node.annotationContexts,
+    );
+    let replacement = "";
+    const result = complete(
+      prompt,
+      options.abortCurrentCompletion ? { signal: options.signal } : undefined,
+    );
+
+    if (isAsyncIterable(result)) {
+      for await (const token of result) {
+        replacement += token;
+        if (!options.signal?.aborted) {
+          queue.push({ kind: "token", hash, token });
+        }
+      }
+    } else {
+      replacement = await result;
+    }
+
+    replacement = normalizeSnippet(
+      replacement,
+      node.snippetKind,
+      snippet,
+      promptSource,
+    );
+    await cacheImplementation(codeCache, hash, replacement);
+    if (!options.signal?.aborted) {
+      queue.push({ kind: "complete", node, hash, snippet, replacement });
+    }
+  } catch (error) {
+    queue.push({ kind: "error", error });
+  }
+}
+
+function compiledEvent(ir: CompilationIR, completions: Completion[]): CompilationEvent {
+  return {
+    kind: "compiled",
+    completed: {
+      source: renderImplementation(ir),
+      lowered: ir.lowered,
+      completions,
+      ir,
+    },
+  };
+}
+
+class AsyncEventQueue<T> implements AsyncIterable<T> {
+  private readonly values: T[] = [];
+  private readonly waiters: Array<(result: IteratorResult<T>) => void> = [];
+  private closed = false;
+
+  push(value: T): void {
+    if (this.closed) {
+      return;
+    }
+
+    const waiter = this.waiters.shift();
+    if (waiter) {
+      waiter({ value, done: false });
+      return;
+    }
+
+    this.values.push(value);
+  }
+
+  close(): void {
+    this.closed = true;
+    while (this.waiters.length > 0) {
+      this.waiters.shift()?.({ value: undefined, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<T> {
+    return {
+      next: () => {
+        const value = this.values.shift();
+        if (value !== undefined) {
+          return Promise.resolve({ value, done: false });
+        }
+        if (this.closed) {
+          return Promise.resolve({ value: undefined, done: true });
+        }
+        return new Promise<IteratorResult<T>>((resolve) => {
+          this.waiters.push(resolve);
+        });
+      },
+    };
+  }
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {

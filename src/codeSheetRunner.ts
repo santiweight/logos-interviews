@@ -1,6 +1,7 @@
 import type {
   CodeCache,
   CodeSheet,
+  CompilationStrategy,
   CompleteFunction,
   Runnable,
 } from "./codeSheet";
@@ -56,6 +57,7 @@ export async function runCodeSheet(
   const compiled = await compileCodeSheetToTypeScript(codeSheet, runnable, {
     cache: options.cache,
     complete: options.complete,
+    strategy: compileStrategy(options.compilationStrategy),
   });
   const executed = await runTypeScript(compiled.program, options.node ?? "node", options.onStdoutLine);
 
@@ -86,6 +88,7 @@ export async function startInteractiveCodeSheet(
   const compiled = await compileCodeSheetToTypeScript(codeSheet, runnable, {
     cache: options.cache,
     complete: options.complete,
+    strategy: compileStrategy(options.compilationStrategy),
   });
   return {
     session: new InteractiveTypeScriptRun(compiled.program, options.node ?? "node"),
@@ -95,4 +98,14 @@ export async function startInteractiveCodeSheet(
 
 function stdoutLines(stdout: string): string[] {
   return stdout.trimEnd().length === 0 ? [] : stdout.trimEnd().split(/\r?\n/);
+}
+
+function compileStrategy(strategy: CompilationMode | undefined): CompilationStrategy {
+  if (strategy === "agentic" || strategy === "agentic-methods") {
+    return "agentic";
+  }
+  if (strategy === "sequential") {
+    return "sequential";
+  }
+  return "parallel";
 }

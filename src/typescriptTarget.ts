@@ -5,6 +5,7 @@ import {
   completeSheet,
   type CodeCache,
   type CodeSheet,
+  type CompilationStrategy,
   type CompletedCodeSheet,
   type CompleteFunction,
   lower,
@@ -87,11 +88,12 @@ export async function compileCodeSheetToTypeScript(
   options: {
     cache?: CodeCache;
     complete?: CompleteFunction;
+    strategy?: CompilationStrategy;
   } = {},
 ): Promise<TypeScriptCompileResult> {
   const cache = options.cache ?? new Map();
   const completedLogos = await completeSheet(cache, codeSheet, options.complete, {
-    strategy: "sequential",
+    strategy: options.strategy ?? "sequential",
   });
   const parsed = parse(completedLogos.source);
   const lowered = lower(parsed);
