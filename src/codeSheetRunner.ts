@@ -1,48 +1,44 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import {
-  completeSheet,
-  type CodeCache,
-  type CodeSheet,
-  type CompleteFunction,
-  type CompletedCodeSheet,
-  type CompileOptions,
-  type CompilationStrategy,
-  type Runnable,
+import type {
+  CodeCache,
+  CodeSheet,
+  CompleteFunction,
+  Runnable,
 } from "./codeSheet";
-import { compilationStrategies } from "./compilationStrategies";
 import {
-  buildPythonProgram,
-  type RunResult,
-  type StrategyRunOptions,
-} from "./compilationStrategies/shared";
-import {
-  defaultAutoStrategyOrder,
-  type CompilationMode,
-  type RunnerStrategy,
-} from "./compilationStrategies/types";
+  buildTypeScriptProgram,
+  compileCodeSheetToTypeScript,
+  InteractiveTypeScriptRun,
+  runTypeScript,
+  type InteractiveRunStatus,
+  type RunChunk,
+} from "./typescriptTarget";
+import type { CompilationMode } from "./compilationStrategies/types";
 
-export type { RunResult } from "./compilationStrategies/shared";
-export type { CompilationMode, RunnerStrategy } from "./compilationStrategies/types";
-export { buildPythonProgram } from "./compilationStrategies/shared";
+export type RunResult =
+  | { ok: true; stdout: string[]; completed: Awaited<ReturnType<typeof compileCodeSheetToTypeScript>>["completed"] }
+  | {
+      ok: false;
+      error: string;
+      stdout: string[];
+      stderr: string;
+      completed: Awaited<ReturnType<typeof compileCodeSheetToTypeScript>>["completed"];
+    };
 
-export type RunOptions = StrategyRunOptions & {
+export type { CompilationMode } from "./compilationStrategies/types";
+export type { InteractiveRunStatus, RunChunk };
+export { buildTypeScriptProgram };
+
+export type RunOptions = {
   complete?: CompleteFunction;
   cache?: CodeCache;
   compilationStrategy?: CompilationMode;
+  node?: string;
+  onStdoutLine?: (line: string) => void;
 };
-
-export type RunChunk = {
-  stream: "stdout" | "stderr";
-  text: string;
-};
-
-export type InteractiveRunStatus =
-  | { state: "running" }
-  | { state: "exited"; code: number | null; signal: NodeJS.Signals | null; error?: string };
 
 export type InteractiveRunStart = {
-  session: InteractivePythonRun;
-  completed: CompletedCodeSheet;
+  session: InteractiveTypeScriptRun;
+  completed: Awaited<ReturnType<typeof compileCodeSheetToTypeScript>>["completed"];
 };
 
 export async function runCodeSheet(
@@ -50,28 +46,27 @@ export async function runCodeSheet(
   runnable: Runnable,
   options: RunOptions = {},
 ): Promise<RunResult> {
-  const cache = options.cache ?? new Map();
-  const mode = compilationMode(options);
-  if (mode !== "auto") {
-    return compileAndRunStrategy(cache, codeSheet, runnable, options, mode);
+  const compiled = await compileCodeSheetToTypeScript(codeSheet, runnable, {
+    cache: options.cache,
+    complete: options.complete,
+  });
+  const executed = await runTypeScript(compiled.program, options.node ?? "node", options.onStdoutLine);
+
+  if (executed.ok) {
+    return {
+      ok: true,
+      stdout: stdoutLines(executed.stdout),
+      completed: compiled.completed,
+    };
   }
 
-  let lastResult: RunResult | null = null;
-  for (const strategy of strategyOrder()) {
-    const forkedCache = new Map(cache);
-    const result = await compileAndRunStrategy(forkedCache, codeSheet, runnable, options, strategy);
-    if (result.ok) {
-      commitCache(cache, forkedCache);
-      return result;
-    }
-    lastResult = result;
-  }
-
-  if (lastResult) {
-    return lastResult;
-  }
-
-  throw new Error("No compilation strategy was attempted");
+  return {
+    ok: false,
+    error: executed.stderr.trim() || executed.stdout.trim() || `Node exited ${executed.code}`,
+    stdout: stdoutLines(executed.stdout),
+    stderr: executed.stderr,
+    completed: compiled.completed,
+  };
 }
 
 export async function startInteractiveCodeSheet(
@@ -79,123 +74,16 @@ export async function startInteractiveCodeSheet(
   runnable: Runnable,
   options: RunOptions = {},
 ): Promise<InteractiveRunStart> {
-  const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(interactiveStrategy(options)));
-  const source = buildPythonProgram(completed.source, runnable);
+  const compiled = await compileCodeSheetToTypeScript(codeSheet, runnable, {
+    cache: options.cache,
+    complete: options.complete,
+  });
   return {
-    session: new InteractivePythonRun(source, options.python ?? "python3"),
-    completed,
+    session: new InteractiveTypeScriptRun(compiled.program, options.node ?? "node"),
+    completed: compiled.completed,
   };
 }
 
-function compileAndRunStrategy(
-  cache: CodeCache,
-  codeSheet: CodeSheet,
-  runnable: Runnable,
-  options: RunOptions,
-  strategy: RunnerStrategy,
-): Promise<RunResult> {
-  const definition = compilationStrategies[strategy];
-  const fallbackStrategy = "fallback" in definition ? definition.fallback : undefined;
-  const fallback = fallbackStrategy === undefined
-    ? () => Promise.reject(new Error(`Strategy ${strategy} has no fallback`))
-    : () => compileAndRunStrategy(cache, codeSheet, runnable, options, fallbackStrategy);
-  return definition.run({ cache, codeSheet, runnable, options }, fallback);
-}
-
-function compileOptions(strategy: CompilationStrategy): CompileOptions {
-  return {
-    strategy,
-  };
-}
-
-function compilationMode(options: RunOptions): CompilationMode {
-  if (options.compilationStrategy) {
-    return options.compilationStrategy;
-  }
-
-  return "sequential";
-}
-
-function interactiveStrategy(options: RunOptions): CompilationStrategy {
-  const mode = compilationMode(options);
-  if (mode === "auto") {
-    return "parallel";
-  }
-  return mode === "agentic-methods" ? "agentic" : mode === "parallel-methods" ? "parallel" : mode;
-}
-
-function strategyOrder(): RunnerStrategy[] {
-  return [...defaultAutoStrategyOrder];
-}
-
-function commitCache(target: CodeCache, source: CodeCache): void {
-  target.clear();
-  for (const [key, value] of source) {
-    target.set(key, value);
-  }
-}
-
-export class InteractivePythonRun {
-  private readonly child: ChildProcessWithoutNullStreams;
-  private readonly chunks: RunChunk[] = [];
-  private exitStatus: InteractiveRunStatus | null = null;
-
-  constructor(source: string, command: string) {
-    this.child = spawn(command, ["-u", "-c", source], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    this.child.stdout.on("data", (chunk: Buffer) => {
-      this.chunks.push({ stream: "stdout", text: chunk.toString("utf8") });
-    });
-    this.child.stderr.on("data", (chunk: Buffer) => {
-      this.chunks.push({ stream: "stderr", text: chunk.toString("utf8") });
-    });
-    this.child.on("error", (error) => {
-      this.chunks.push({ stream: "stderr", text: error.message });
-      this.exitStatus = {
-        state: "exited",
-        code: null,
-        signal: null,
-        error: error.message,
-      };
-    });
-    this.child.on("close", (code, signal) => {
-      this.exitStatus = {
-        state: "exited",
-        code,
-        signal,
-        error: this.exitStatus?.state === "exited" ? this.exitStatus.error : undefined,
-      };
-    });
-  }
-
-  writeInput(input: string): boolean {
-    if (this.exitStatus?.state === "exited" || this.child.stdin.destroyed) {
-      return false;
-    }
-
-    try {
-      return this.child.stdin.write(input);
-    } catch {
-      return false;
-    }
-  }
-
-  drainOutput(): RunChunk[] {
-    return this.chunks.splice(0, this.chunks.length);
-  }
-
-  status(): InteractiveRunStatus {
-    return this.exitStatus ?? { state: "running" };
-  }
-
-  stop(): void {
-    if (this.exitStatus?.state === "exited") {
-      return;
-    }
-
-    this.child.kill("SIGTERM");
-  }
+function stdoutLines(stdout: string): string[] {
+  return stdout.trimEnd().length === 0 ? [] : stdout.trimEnd().split(/\r?\n/);
 }

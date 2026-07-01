@@ -2,8 +2,8 @@ import "./styles.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import {
-  conf as pythonLanguageConfiguration,
-  language as pythonLanguage,
+  conf as indentationLanguageConfiguration,
+  language as indentationLanguage,
 } from "monaco-editor/esm/vs/basic-languages/python/python.js";
 import {
   completionSnippetHashes,
@@ -497,9 +497,9 @@ type SnippetPreviewState = {
   status: "stub" | "generating" | "cached" | "complete";
 };
 
-const logosPythonLanguageId = "logos-python";
+const logosTypeScriptLanguageId = "logos-typescript";
 
-registerLogosPythonLanguage();
+registerLogosTypeScriptLanguage();
 
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
@@ -522,22 +522,22 @@ monaco.editor.defineTheme("interview-light", {
     { token: "predefined", foreground: "4f677c" },
     { token: "naturalSnippet", foreground: "b74716" },
     { token: "naturalSnippet.delimiter", foreground: "9b4d2e" },
-    { token: "comment.logos-python", foreground: "607fa0" },
-    { token: "keyword.logos-python", foreground: "7a5268", fontStyle: "normal" },
-    { token: "identifier.logos-python", foreground: "20242a" },
-    { token: "number.logos-python", foreground: "3f6f6a" },
-    { token: "number.hex.logos-python", foreground: "3f6f6a" },
-    { token: "string.logos-python", foreground: "7a5a3a" },
-    { token: "string.escape.logos-python", foreground: "8a6844" },
-    { token: "delimiter.logos-python", foreground: "aca59b" },
-    { token: "delimiter.curly.logos-python", foreground: "aca59b" },
-    { token: "delimiter.bracket.logos-python", foreground: "aca59b" },
-    { token: "delimiter.parenthesis.logos-python", foreground: "aca59b" },
-    { token: "operator.logos-python", foreground: "8e8375" },
-    { token: "type.logos-python", foreground: "3f6f6a" },
-    { token: "predefined.logos-python", foreground: "4f677c" },
-    { token: "naturalSnippet.logos-python", foreground: "b74716" },
-    { token: "naturalSnippet.delimiter.logos-python", foreground: "9b4d2e" },
+    { token: "comment.logos-typescript", foreground: "607fa0" },
+    { token: "keyword.logos-typescript", foreground: "7a5268", fontStyle: "normal" },
+    { token: "identifier.logos-typescript", foreground: "20242a" },
+    { token: "number.logos-typescript", foreground: "3f6f6a" },
+    { token: "number.hex.logos-typescript", foreground: "3f6f6a" },
+    { token: "string.logos-typescript", foreground: "7a5a3a" },
+    { token: "string.escape.logos-typescript", foreground: "8a6844" },
+    { token: "delimiter.logos-typescript", foreground: "aca59b" },
+    { token: "delimiter.curly.logos-typescript", foreground: "aca59b" },
+    { token: "delimiter.bracket.logos-typescript", foreground: "aca59b" },
+    { token: "delimiter.parenthesis.logos-typescript", foreground: "aca59b" },
+    { token: "operator.logos-typescript", foreground: "8e8375" },
+    { token: "type.logos-typescript", foreground: "3f6f6a" },
+    { token: "predefined.logos-typescript", foreground: "4f677c" },
+    { token: "naturalSnippet.logos-typescript", foreground: "b74716" },
+    { token: "naturalSnippet.delimiter.logos-typescript", foreground: "9b4d2e" },
   ],
   colors: {
     "editor.background": "#fbfaf6",
@@ -566,7 +566,7 @@ monaco.editor.defineTheme("interview-light", {
 
 const editor = monaco.editor.create(editorEl, {
   value: seedCode,
-  language: logosPythonLanguageId,
+  language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
   fontFamily:
@@ -598,7 +598,7 @@ const editor = monaco.editor.create(editorEl, {
 
 const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   value: "",
-  language: logosPythonLanguageId,
+  language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
   fontFamily:
@@ -1521,7 +1521,7 @@ function definitionBlocks(source: string): string[] {
   let current: string[] = [];
 
   for (const line of lines) {
-    const isTopLevelDefinition = /^(class|def|type)\s+/.test(line);
+    const isTopLevelDefinition = /^(class|def|fn|function|type)\s+/.test(line);
     if (isTopLevelDefinition && current.length > 0) {
       blocks.push(current.join("\n").trimEnd());
       current = [];
@@ -1601,7 +1601,7 @@ function refreshIncompleteSnippets(source: string): void {
       snippet: target.snippet,
       streamed: existing?.streamed ?? "",
       implementation: existing?.implementation ?? null,
-      status: existing?.status ?? "stub",
+      status: existing?.status === "cached" ? "stub" : existing?.status ?? "stub",
     });
   }
 
@@ -2175,24 +2175,24 @@ function indentGuideLevel(line: string, tabSize: number): number {
   return Math.floor(width / tabSize);
 }
 
-function registerLogosPythonLanguage(): void {
+function registerLogosTypeScriptLanguage(): void {
   monaco.languages.register({
-    id: logosPythonLanguageId,
-    aliases: ["Logos Python", "logos-python"],
-    mimetypes: ["text/x-logos-python"],
+    id: logosTypeScriptLanguageId,
+    aliases: ["Logos TypeScript", "logos-typescript"],
+    mimetypes: ["text/x-logos-typescript"],
   });
-  monaco.languages.setLanguageConfiguration(logosPythonLanguageId, pythonLanguageConfiguration);
-  monaco.languages.setMonarchTokensProvider(logosPythonLanguageId, {
-    ...pythonLanguage,
-    tokenPostfix: ".logos-python",
+  monaco.languages.setLanguageConfiguration(logosTypeScriptLanguageId, indentationLanguageConfiguration);
+  monaco.languages.setMonarchTokensProvider(logosTypeScriptLanguageId, {
+    ...indentationLanguage,
+    tokenPostfix: ".logos-typescript",
     tokenizer: {
-      ...pythonLanguage.tokenizer,
+      ...indentationLanguage.tokenizer,
       root: [
-        pythonLanguage.tokenizer.root[0],
+        indentationLanguage.tokenizer.root[0],
         [/#.*$/, "comment"],
         [/```/, "naturalSnippet.delimiter", "@logosTripleNaturalSnippet"],
         [/`/, "naturalSnippet.delimiter", "@logosInlineNaturalSnippet"],
-        ...pythonLanguage.tokenizer.root.slice(1),
+        ...indentationLanguage.tokenizer.root.slice(1),
       ],
       logosInlineNaturalSnippet: [
         [/[^`]+/, "naturalSnippet"],

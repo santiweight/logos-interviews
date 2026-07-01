@@ -8,13 +8,13 @@ import type {
 import {
   startInteractiveCodeSheet,
   type CompilationMode,
-  type InteractivePythonRun,
+  type InteractiveRunStart,
   type InteractiveRunStatus,
 } from "./codeSheetRunner";
 import { isCompilationMode } from "./compilationStrategies/types";
 
 type InteractiveRunRecord = {
-  session: InteractivePythonRun;
+  session: InteractiveRunStart["session"];
   runnable: Runnable;
   implementation: string;
   updatedAt: number;

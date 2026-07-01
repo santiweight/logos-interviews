@@ -39,9 +39,10 @@ export async function handleCompileStream(
 
   try {
     for await (const event of compile(cache, sheet, complete, {
+      strategy: compileStrategy(compilationStrategy),
       signal: abortController.signal,
       streamTokens: true,
-      strategy: compileStrategy(compilationStrategy),
+      abortCurrentCompletion: true,
     })) {
       if (abortController.signal.aborted || res.destroyed) {
         return;

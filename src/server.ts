@@ -7,15 +7,18 @@ import { createGlobalCodeCache } from "./codeCache";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
+import { completeWithFixture, streamCompleteWithFixture } from "./testCompletion";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 const codeCache: CodeCache = createGlobalCodeCache();
+const complete = process.env.LOGOS_TEST_COMPLETION === "1" ? completeWithFixture : completeWithAnthropic;
+const streamComplete = process.env.LOGOS_TEST_COMPLETION === "1" ? streamCompleteWithFixture : streamCompleteWithAnthropic;
 const interactiveRunApi = createInteractiveRunApi({
   cache: codeCache,
-  complete: completeWithAnthropic,
+  complete,
 });
 const port = Number(process.env.PORT ?? 8080);
 const distDir = resolve(fileURLToPath(new URL("../dist", import.meta.url)));
@@ -55,7 +58,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/compile") {
-      await handleCompileStream(req, res, codeCache, streamCompleteWithAnthropic);
+      await handleCompileStream(req, res, codeCache, streamComplete);
       return;
     }
 
@@ -124,7 +127,7 @@ async function handleComplete(req: IncomingMessage, res: ServerResponse): Promis
     return;
   }
 
-  sendJson(res, 200, { completion: await completeWithAnthropic(prompt) });
+  sendJson(res, 200, { completion: await complete(prompt) });
 }
 
 async function handleAgentChat(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -139,7 +142,7 @@ async function handleAgentChat(req: IncomingMessage, res: ServerResponse): Promi
     return;
   }
 
-  sendJson(res, 200, await runSheetAgent(sheet, messages, completeWithAnthropic));
+  sendJson(res, 200, await runSheetAgent(sheet, messages, complete));
 }
 
 function isAgentMessages(value: unknown): value is AgentChatMessage[] {

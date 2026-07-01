@@ -1,12 +1,16 @@
-# Spreadsheet Interview Tool
+# Logos TypeScript Baseline
 
-A small browser-based interviewing tool for exploring an Excel-style sheet evaluator.
+A browser-based Logos workbench hard-forked to target TypeScript instead of
+Python.
 
 It includes:
 
-- A candidate scaffold editor that detects `???` holes and generates focused fill prompts.
-- A TypeScript spreadsheet evaluator with `get`, `set`, formulas, cell references, recursive-cycle detection, and division-by-zero errors.
-- A spreadsheet sandbox for trying values and formulas directly in the browser.
+- A Logos editor with four migrated baseline samples:
+  `Intro to Logos`, `Beyond Basics`, `Formula spreadsheet`, and `Annotated maze`.
+- A TypeScript compilation target that emits executable TypeScript modules.
+- A Node-backed run path for compiled programs.
+- A focused baseline test suite that runs those four samples through the
+  TypeScript target.
 
 ## Commands
 
@@ -21,17 +25,16 @@ pnpm start
 
 `pnpm dev` runs the Vite development server. `pnpm build && pnpm start`
 builds and serves the deployable app with a production Node server.
-`pnpm test:e2e` runs deterministic end-to-end tests. The live Anthropic
-reliability eval is opt-in with `RUN_ANTHROPIC_E2E=true pnpm test:e2e`.
-The `Anthropic E2E` GitHub Actions workflow runs that live eval on relevant
-`main` changes and on a weekday work-hours cadence, skipping scheduled runs
-when the current `main` SHA has already passed.
 
-The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
-Vite build from `dist`, exposes interactive run session endpoints under
-`/api/run/*`, and caches completed snippets in a process-local map backed by
-durable storage. Local development uses files under `logs/` unless object
-storage is configured.
+`pnpm test` is intentionally scoped to the destructive TypeScript migration
+contract: the four baseline sample files must compile and run through the
+TypeScript target.
+
+The production server requires `ANTHROPIC_API_KEY` only when live LLM completion
+is used. Program execution uses Node, not Python. The server serves the Vite
+build from `dist`, exposes interactive run session endpoints under `/api/run/*`,
+and caches completed snippets in a process-local map backed by durable storage.
+Local development uses files under `logs/` unless object storage is configured.
 
 ## Object Storage
 
@@ -90,5 +93,5 @@ Fly deployment is configured with `Dockerfile`, `fly.toml`, and
 - object-storage secrets such as `BUCKET_NAME`, `AWS_ENDPOINT_URL_S3`,
   `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`
 
-The main code sheet compiler lives in `src/codeSheet.ts`. The runtime API lives
-in `src/codeSheetRunner.ts` and `src/server.ts`.
+The TypeScript target compiler lives in `src/typescriptTarget.ts`. The runtime
+API lives in `src/codeSheetRunner.ts` and `src/server.ts`.
