@@ -16,7 +16,23 @@ const shadcnCounterSheet = `fn main() -> WebPage:
   \`\`\``;
 
 const shadcnCounterBody = `const incrementScript = "window.incrementCounter = () => { const el = document.getElementById('count'); if (!el) return; el.textContent = String(Number(el.textContent || '0') + 1); };";
-return shadcn.renderApp(shadcn.Page({ title: "Hello shadcn", description: "Counter demo" }, shadcn.Card({}, shadcn.CardHeader({}, shadcn.CardTitle({}, "Counter"), shadcn.CardDescription({}, "Click the button to increment the value.")), shadcn.CardContent({}, shadcn.Stack({}, shadcn.Metric({ id: "count" }, "0"), shadcn.Button({ id: "increment", onClick: "window.incrementCounter()" }, "Increment"))))), { title: "Hello shadcn Counter", scripts: [incrementScript] });`;
+return shadcn.renderApp(
+  shadcn.Page({ title: "Hello shadcn", description: "Counter demo" },
+    shadcn.Card(
+      shadcn.CardHeader(
+        shadcn.CardTitle("Counter"),
+        shadcn.CardDescription("Click the button to increment the value."),
+      ),
+      shadcn.CardContent(
+        shadcn.Stack(
+          shadcn.Metric({ id: "count" }, "0"),
+          shadcn.Button({ id: "increment", onClick: "window.incrementCounter()" }, "Increment"),
+        ),
+      ),
+    ),
+  ),
+  { title: "Hello shadcn Counter", scripts: [incrementScript] },
+);`;
 
 describe("Logos-TS compiler shape", () => {
   it("keeps the migrated baseline files as the product contract", () => {

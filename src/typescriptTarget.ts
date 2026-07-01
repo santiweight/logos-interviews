@@ -524,6 +524,12 @@ const shadcn = (() => {
     return String(child);
   };
   const renderChildren = (children: ShadcnChild[]): string => children.map(renderChild).join("");
+  const isProps = (value: ShadcnChild): value is ShadcnProps =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+  const normalizeArgs = (args: ShadcnChild[]): { props: ShadcnProps; children: ShadcnChild[] } =>
+    args.length > 0 && isProps(args[0])
+      ? { props: args[0], children: args.slice(1) }
+      : { props: {}, children: args };
   const attrs = (props: ShadcnProps): string => Object.entries(props)
     .filter(([key, value]) => key !== "children" && value !== undefined && value !== null && value !== false)
     .map(([key, value]) => {
@@ -536,24 +542,33 @@ const shadcn = (() => {
     const attr = attrs(props);
     return \`<\${tag}\${attr.length > 0 ? \` \${attr}\` : ""}>\${inner}</\${tag}>\`;
   };
+  const component = (tag: string, baseClass: string) => (...args: ShadcnChild[]): string => {
+    const { props, children } = normalizeArgs(args);
+    return element(tag, { ...props, className: classNames(baseClass, props.className) }, ...children);
+  };
+  const buttonComponent = (baseClass: string) => (...args: ShadcnChild[]): string => {
+    const { props, children } = normalizeArgs(args);
+    return element("button", { type: "button", ...props, className: classNames(baseClass, props.className) }, ...children);
+  };
 
   return {
     cn: classNames,
     html: escapeHtml,
-    Div: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", props, ...children),
-    Span: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("span", props, ...children),
-    Text: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("p", { ...props, className: classNames("logos-muted", props.className) }, ...children),
-    Button: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("button", { type: "button", ...props, className: classNames("logos-button", props.className) }, ...children),
-    SecondaryButton: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("button", { type: "button", ...props, className: classNames("logos-button logos-button-secondary", props.className) }, ...children),
-    Card: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("section", { ...props, className: classNames("logos-card", props.className) }, ...children),
-    CardHeader: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-card-header", props.className) }, ...children),
-    CardTitle: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("h2", { ...props, className: classNames("logos-card-title", props.className) }, ...children),
-    CardDescription: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("p", { ...props, className: classNames("logos-card-description", props.className) }, ...children),
-    CardContent: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-card-content", props.className) }, ...children),
-    Metric: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-metric", props.className) }, ...children),
-    Row: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-row", props.className) }, ...children),
-    Stack: (props: ShadcnProps = {}, ...children: ShadcnChild[]) => element("div", { ...props, className: classNames("logos-stack", props.className) }, ...children),
-    Page: (props: ShadcnProps & { title?: string; description?: string } = {}, ...children: ShadcnChild[]) => {
+    Div: component("div", ""),
+    Span: component("span", ""),
+    Text: component("p", "logos-muted"),
+    Button: buttonComponent("logos-button"),
+    SecondaryButton: buttonComponent("logos-button logos-button-secondary"),
+    Card: component("section", "logos-card"),
+    CardHeader: component("div", "logos-card-header"),
+    CardTitle: component("h2", "logos-card-title"),
+    CardDescription: component("p", "logos-card-description"),
+    CardContent: component("div", "logos-card-content"),
+    Metric: component("div", "logos-metric"),
+    Row: component("div", "logos-row"),
+    Stack: component("div", "logos-stack"),
+    Page: (...args: ShadcnChild[]) => {
+      const { props, children } = normalizeArgs(args);
       const header = props.title || props.description
         ? element("header", { className: "logos-page-header" },
           element("div", {},
@@ -586,9 +601,11 @@ function lowerBody(body: string): string {
   const lines = body.split("\n");
   const output: string[] = [];
   let inTemplateLiteral = false;
+  let continuationDepth = 0;
   for (const raw of lines) {
     if (inTemplateLiteral) {
       output.push(raw);
+      continuationDepth += bracketDelta(raw);
       if (hasOddUnescapedBackticks(raw)) {
         inTemplateLiteral = false;
       }
@@ -596,6 +613,15 @@ function lowerBody(body: string): string {
     }
 
     const trimmed = raw.trim();
+    if (continuationDepth > 0) {
+      output.push(trimmed);
+      continuationDepth = Math.max(0, continuationDepth + bracketDelta(trimmed));
+      if (hasOddUnescapedBackticks(trimmed)) {
+        inTemplateLiteral = true;
+      }
+      continue;
+    }
+
     if (trimmed.length === 0 || trimmed.startsWith("```")) {
       continue;
     }
@@ -605,6 +631,7 @@ function lowerBody(body: string): string {
     }
     if (/^(?:const|let|var|return|if|for|while|switch|try|throw|class|function|interface|type)\b/.test(trimmed)) {
       output.push(trimmed);
+      continuationDepth = Math.max(0, bracketDelta(trimmed));
       if (hasOddUnescapedBackticks(trimmed)) {
         inTemplateLiteral = true;
       }
@@ -612,16 +639,41 @@ function lowerBody(body: string): string {
     }
     if (/^[}\])]/.test(trimmed) || /^[A-Za-z_][A-Za-z0-9_]*\s*[).]/.test(trimmed) || trimmed.endsWith(";")) {
       output.push(trimmed.endsWith(";") || trimmed.endsWith("{") || trimmed.endsWith("}") ? trimmed : `${trimmed};`);
+      continuationDepth = Math.max(0, bracketDelta(trimmed));
       continue;
     }
     const assignment = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
     if (assignment) {
       output.push(`const ${safeName(assignment[1])} = ${assignment[2].replace(/;$/, "")};`);
+      continuationDepth = Math.max(0, bracketDelta(trimmed));
       continue;
     }
     output.push(`${trimmed};`);
+    continuationDepth = Math.max(0, bracketDelta(trimmed));
   }
   return output.join("\n");
+}
+
+function bracketDelta(source: string): number {
+  let delta = 0;
+  let quote: "'" | "\"" | "`" | null = null;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const previous = source[index - 1];
+    if (quote) {
+      if (char === quote && previous !== "\\") {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === "\"" || char === "`") {
+      quote = char;
+      continue;
+    }
+    if (char === "(" || char === "[" || char === "{") delta += 1;
+    if (char === ")" || char === "]" || char === "}") delta -= 1;
+  }
+  return delta;
 }
 
 function hasOddUnescapedBackticks(source: string): boolean {
