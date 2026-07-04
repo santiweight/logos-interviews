@@ -103,7 +103,7 @@ export async function* runClaudeSingleFileAgent(
   options: SingleFileAgentOptions = {},
 ): AsyncIterable<SingleFileAgentEvent> {
   const client = anthropicClient(options.apiKey);
-  const model = options.model ?? process.env.ANTHROPIC_CODEGEN_MODEL ?? process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-4-6";
+  const model = options.model ?? process.env.ANTHROPIC_CODEGEN_MODEL ?? process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-5";
   const maxTurns = options.maxTurns ?? 8;
   let currentCode = normalizeNewlines(input.currentCode);
   const messages: MessageParam[] = [{
