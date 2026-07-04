@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import {
+  cachedCompiledSheet,
   completeSheet,
   type CodeCache,
   type CodeSheet,
@@ -12,6 +13,8 @@ import {
 import { compilationStrategies } from "./compilationStrategies";
 import {
   buildPythonProgram,
+  runPython,
+  runResult,
   type RunResult,
   type StrategyRunOptions,
 } from "./compilationStrategies/shared";
@@ -51,6 +54,16 @@ export async function runCodeSheet(
   options: RunOptions = {},
 ): Promise<RunResult> {
   const cache = options.cache ?? new Map();
+  const cached = await cachedCompiledSheet(cache, codeSheet);
+  if (cached) {
+    const executed = await runPython(
+      buildPythonProgram(cached.source, runnable),
+      options.python ?? "python3",
+      options.onStdoutLine,
+    );
+    return runResult(executed, cached);
+  }
+
   const mode = compilationMode(options);
   if (mode !== "auto") {
     return compileAndRunStrategy(cache, codeSheet, runnable, options, mode);
@@ -80,7 +93,8 @@ export async function startInteractiveCodeSheet(
   options: RunOptions = {},
 ): Promise<InteractiveRunStart> {
   const cache = options.cache ?? new Map();
-  const completed = await completeSheet(cache, codeSheet, options.complete, compileOptions(interactiveStrategy(options)));
+  const completed = await cachedCompiledSheet(cache, codeSheet) ??
+    await completeSheet(cache, codeSheet, options.complete, compileOptions(interactiveStrategy(options)));
   const source = buildPythonProgram(completed.source, runnable);
   return {
     session: new InteractivePythonRun(source, options.python ?? "python3"),

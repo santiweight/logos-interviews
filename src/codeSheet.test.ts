@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cachedCompiledSheet,
   compile,
   completionSnippetHashes,
   definitionReadiness,
@@ -269,6 +270,19 @@ def unrelated_public():
       buildPythonProgram("class AsciiArt:\n  def rotate(self) -> AsciiArt:\n    return self", "main")
         .startsWith("from __future__ import annotations\n\n"),
     ).toBe(true);
+  });
+
+  it("does not execute an agent-provided main guard in addition to the requested runnable", async () => {
+    const result = await runCodeSheet(`def test():
+  print("once")
+
+if __name__ == "__main__":
+  test()`, "test");
+
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["once"],
+    });
   });
 
   it("captures run outputs", async () => {
@@ -1592,6 +1606,46 @@ print(square.pretty())`;
     expect(cache.get(compiled.completed.completions[0].hash)).toBe(
       "def add(x: int, y: int) -> int:\n  return x + y",
     );
+  });
+
+  it("agentic compilation produces a whole-sheet cache entry that run can reuse", async () => {
+    const cache: CodeCache = new Map();
+    const events: CompilationEvent[] = [];
+    const prompts: string[] = [];
+
+    for await (const event of compile(
+      cache,
+      sheet,
+      (prompt) => {
+        prompts.push(prompt);
+        return `def add(x: int, y: int) -> int:
+  return x + y
+
+def test():
+  print(add(1,2))`;
+      },
+      { strategy: "agentic" },
+    )) {
+      events.push(event);
+    }
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("compile this Logos worksheet");
+    expect(events.map((event) => event.kind)).toContain("llm-start");
+    await expect(cachedCompiledSheet(cache, sheet)).resolves.toMatchObject({
+      source: expect.stringContaining("return x + y"),
+    });
+
+    const result = await runCodeSheet(sheet, "test", {
+      cache,
+      complete: () => {
+        throw new Error("run should use cached compiled sheet");
+      },
+    });
+    expect(simplifyRunResult(result)).toEqual({
+      ok: true,
+      stdout: ["3"],
+    });
   });
 
   it("can start independent completions in parallel", async () => {

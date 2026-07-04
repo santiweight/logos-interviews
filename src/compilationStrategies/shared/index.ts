@@ -78,11 +78,41 @@ export function runResult(executed: PythonExecution, completed: CompletedCodeShe
 export function buildPythonProgram(source: string, runnable: Runnable): string {
   return `from __future__ import annotations
 
-${source}
+${stripTopLevelMainGuard(source)}
 
 if __name__ == "__main__":
   ${runnable}()
 `;
+}
+
+function stripTopLevelMainGuard(source: string): string {
+  const lines = source.replaceAll("\r\n", "\n").split("\n");
+  const output: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!isTopLevelMainGuard(line)) {
+      output.push(line);
+      continue;
+    }
+
+    index += 1;
+    while (index < lines.length) {
+      const nested = lines[index] ?? "";
+      if (nested.trim().length === 0 || /^[ \t]/.test(nested)) {
+        index += 1;
+        continue;
+      }
+      index -= 1;
+      break;
+    }
+  }
+
+  return output.join("\n").trimEnd();
+}
+
+function isTopLevelMainGuard(line: string): boolean {
+  return /^if\s+__name__\s*==\s*["']__main__["']\s*:\s*(?:#.*)?$/.test(line);
 }
 
 export function runPython(

@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
+import { AgentCompilationFramework } from "./agentCompilation";
 import { createGlobalCodeCache } from "./codeCache";
 import type { CodeCache, CompleteFunction } from "./codeSheet";
 import { handleCompileStream } from "./compileStream";
@@ -324,6 +325,77 @@ describe("interactive run API", () => {
       }
     }
   });
+
+  it("joins an active agent compilation when a run starts for the same sheet", async () => {
+    const cache: CodeCache = new Map();
+    const agentStarted = deferred<void>();
+    const releaseAgent = deferred<void>();
+    let agentCalls = 0;
+    const sheet = `def test_basic():
+  print("ok")`;
+    const implementation = sheet;
+    const agentCompilation = new AgentCompilationFramework({
+      cache,
+      fileAgent: async function* () {
+        agentCalls += 1;
+        agentStarted.resolve();
+        await releaseAgent.promise;
+        yield { kind: "file", source: implementation };
+        yield { kind: "done", source: implementation };
+      },
+    });
+    const runApi = createInteractiveRunApi({
+      cache,
+      compileSheet: (code) => agentCompilation.compile(code),
+      complete: () => {
+        throw new Error("run/start should join the active agent compilation");
+      },
+    });
+    const server = createServer(async (req, res) => {
+      if (req.url === "/api/compile") {
+        await handleCompileStream(req, res, cache, () => {
+          throw new Error("compile should use the agent framework");
+        }, agentCompilation);
+        return;
+      }
+
+      if (req.url === "/api/run/start") {
+        await runApi.handleStart(req, res);
+        return;
+      }
+
+      if (req.url === "/api/run/poll") {
+        await runApi.handlePoll(req, res);
+        return;
+      }
+
+      sendJson(res, 404, { ok: false, error: "not found" });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Could not start test server");
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const compilePromise = compileViaApi(baseUrl, sheet);
+    await agentStarted.promise;
+    const runStartPromise = postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheet,
+      runnable: "test_basic",
+    });
+    await delay(20);
+
+    expect(agentCalls).toBe(1);
+    releaseAgent.resolve();
+
+    const [, started] = await Promise.all([compilePromise, runStartPromise]);
+    const completed = await pollUntilExited(baseUrl, started.sessionId, started.chunks);
+
+    expect(agentCalls).toBe(1);
+    expect(completed.output.trim()).toBe("ok");
+  });
 });
 
 type RunChunk = {
@@ -515,4 +587,18 @@ function sendJson(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }

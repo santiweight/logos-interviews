@@ -6,6 +6,7 @@ import {
   type CompilationStrategy,
   type CompleteFunction,
 } from "./codeSheet";
+import type { AgentCompilationFramework } from "./agentCompilation";
 import {
   isExperimentalCompilationStrategy,
   isStableCompilationStrategy,
@@ -16,6 +17,7 @@ export async function handleCompileStream(
   res: ServerResponse,
   cache: CodeCache,
   complete: CompleteFunction,
+  agentCompilation?: AgentCompilationFramework,
 ): Promise<void> {
   if (req.method !== "POST") {
     sendJson(res, 405, { ok: false, error: "Method not allowed" });
@@ -38,11 +40,18 @@ export async function handleCompileStream(
   res.flushHeaders();
 
   try {
-    for await (const event of compile(cache, sheet, complete, {
-      signal: abortController.signal,
-      streamTokens: true,
-      strategy: compileStrategy(compilationStrategy),
-    })) {
+    const events = agentCompilation
+      ? agentCompilation.compileEvents(sheet, {
+          signal: abortController.signal,
+          streamTokens: true,
+        })
+      : compile(cache, sheet, complete, {
+          signal: abortController.signal,
+          streamTokens: true,
+          strategy: compileStrategy(compilationStrategy),
+        });
+
+    for await (const event of events) {
       if (abortController.signal.aborted || res.destroyed) {
         return;
       }
@@ -110,8 +119,15 @@ function toWireEvent(event: CompilationEvent): Record<string, unknown> {
         completedSnippets: event.completedSnippets,
         totalSnippets: event.totalSnippets,
       };
-    case "compiled":
-      return { kind: "compiled" };
+    case "compiled": {
+      const totalSnippets = event.completed.ir.nodes.filter((node) => node.kind === "incomplete").length;
+      return {
+        kind: "compiled",
+        implementation: event.completed.source,
+        completedSnippets: totalSnippets,
+        totalSnippets,
+      };
+    }
   }
 }
 

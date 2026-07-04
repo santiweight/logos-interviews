@@ -45,6 +45,7 @@ type SourceTab = {
   projectId: string;
   title: string;
   source: string;
+  implementation?: string | null;
 };
 
 type SourceTabState = {
@@ -204,6 +205,7 @@ const initialSourceTabState = defaultSourceTabState();
 let sourceTabs = initialSourceTabState.tabs;
 let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
+const seedImplementation = activeSourceTab()?.implementation ?? "";
 let appSettings = loadAppSettings();
 const appPages: AppPage[] = [
   { id: "editor", label: "Logos Playground" },
@@ -438,12 +440,24 @@ app.innerHTML = `
           <section id="output-pane" class="output-pane" aria-label="Program output panel">
             <div class="source-tabs-bar output-tabs-bar">
               <div id="tool-tabs-list" class="source-tabs output-tabs" role="tablist" aria-label="Run output views">
+                <div class="source-tab-shell output-tab-shell" data-implementation-tab-shell>
+                  <button
+                    id="implementation-view-tab"
+                    class="source-tab output-tab active"
+                    type="button"
+                    role="tab"
+                    data-tool-tab-id="implementation-view"
+                    aria-selected="true"
+                    aria-controls="implementation-view-panel"
+                  >Implementation</button>
+                </div>
               </div>
               <span id="run-status" class="status"></span>
               ${renderFeedbackControls("output")}
             </div>
             <div id="tool-panels" class="tool-panels">
-              <pre id="run-placeholder" class="output run-placeholder tab-panel active" aria-live="polite">Runs will appear here.</pre>
+              <pre id="implementation-view-panel" class="output implementation-output tab-panel active" role="tabpanel" aria-labelledby="implementation-view-tab" aria-live="polite"></pre>
+              <pre id="run-placeholder" class="output run-placeholder tab-panel" aria-live="polite">Runs will appear here.</pre>
             </div>
           </section>
         </section>
@@ -462,6 +476,8 @@ const codeRunResizeHandle = requiredQuery<HTMLDivElement>("#code-run-resize-hand
 const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
+const implementationViewTab = requiredQuery<HTMLButtonElement>("#implementation-view-tab");
+const implementationViewPanel = requiredQuery<HTMLPreElement>("#implementation-view-panel");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetPanelHeader = requiredQuery<HTMLElement>("#snippet-panel-header");
@@ -511,9 +527,10 @@ let snippetPopupDragging = false;
 let snippetPopupHoveringPanel = false;
 let snippetPopupCloseTimer: ReturnType<typeof setTimeout> | null = null;
 let naturalSnippetEditorMode: "python" | "natural" = "python";
-let latestImplementationSource = seedCode;
+let latestImplementationSource = seedImplementation;
 let runTabs: RunTab[] = [];
-let activeToolTabId: ToolTabId = null;
+const implementationToolTabId = "implementation-view";
+let activeToolTabId: ToolTabId = implementationToolTabId;
 let activeCompilationUnsubscribe: (() => void) | null = null;
 
 type RunnableState = {
@@ -562,13 +579,27 @@ type SourceFingerprint = string;
 
 type CompilationStatus = "idle" | "compiling" | "compiled" | "failed";
 
+type SheetImplementationCacheEntry = {
+  sheetId: SheetId;
+  sheetCode: string;
+  implementation: string;
+};
+
+type CompileSession = {
+  sheetId: SheetId;
+  currentCode: string;
+  lastImplementation: string;
+  draftImplementation: string | null;
+  streamHash: string | null;
+};
+
 type CompilationState = {
   sheetId: SheetId;
   source: string;
   sourceFingerprint: SourceFingerprint;
   strategy: CompilationMode;
   status: CompilationStatus;
-  implementation: string;
+  session: CompileSession;
   readiness: DefinitionReadiness[];
   diagnostics: TypeCheckDiagnostic[];
   snippetPreviews: Map<SnippetHash, SnippetPreviewState>;
@@ -594,8 +625,6 @@ class CompilationService {
   private readonly states = new Map<SheetId, CompilationState>();
   private readonly jobs = new Map<SheetId, CompilationJob>();
   private readonly listeners = new Map<SheetId, Set<CompilationListener>>();
-  private inactiveQueue: SheetId[] = [];
-  private inactiveRunning = false;
 
   compile(sheetId: SheetId): Promise<CompilationState> {
     const request = compilationRequestForSheet(sheetId);
@@ -662,8 +691,6 @@ class CompilationService {
     for (const sheetId of Array.from(this.jobs.keys())) {
       this.abortJob(sheetId);
     }
-    this.inactiveQueue = [];
-    this.inactiveRunning = false;
     this.states.clear();
 
     for (const sheetId of this.listeners.keys()) {
@@ -687,25 +714,6 @@ class CompilationService {
 
     this.abortJob(sheetId);
     this.setState(initialCompilationState(request, "compiling"));
-  }
-
-  compileInactiveSheets(options: { concurrency: 1; onlyStale: boolean }): void {
-    void options.concurrency;
-
-    for (const tab of sourceTabs) {
-      if (tab.id === activeSourceTabId) {
-        continue;
-      }
-      if (options.onlyStale && this.isFresh(tab.id)) {
-        continue;
-      }
-      if (this.inactiveQueue.includes(tab.id) || this.jobs.has(tab.id)) {
-        continue;
-      }
-      this.inactiveQueue.push(tab.id);
-    }
-
-    this.pumpInactiveQueue();
   }
 
   private async runCompile(request: CompilationRequest, controller: AbortController): Promise<CompilationState> {
@@ -755,44 +763,12 @@ class CompilationService {
     }
   }
 
-  private pumpInactiveQueue(): void {
-    if (this.inactiveRunning) {
-      return;
-    }
-
-    const nextSheetId = this.inactiveQueue.shift();
-    if (nextSheetId === undefined) {
-      return;
-    }
-
-    if (nextSheetId === activeSourceTabId || this.isFresh(nextSheetId)) {
-      this.pumpInactiveQueue();
-      return;
-    }
-
-    this.inactiveRunning = true;
-    void this.compile(nextSheetId).finally(() => {
-      this.inactiveRunning = false;
-      this.pumpInactiveQueue();
-    });
-  }
-
-  private isFresh(sheetId: SheetId): boolean {
-    const request = compilationRequestForSheet(sheetId);
-    const state = this.states.get(sheetId);
-    return request !== null &&
-      state !== undefined &&
-      this.stateMatchesRequest(state, request) &&
-      state.status === "compiled";
-  }
-
   private abortJob(sheetId: SheetId): void {
     const job = this.jobs.get(sheetId);
     if (job) {
       job.controller.abort();
       this.jobs.delete(sheetId);
     }
-    this.inactiveQueue = this.inactiveQueue.filter((queuedSheetId) => queuedSheetId !== sheetId);
   }
 
   private jobStillCurrent(request: CompilationRequest, controller: AbortController): boolean {
@@ -850,10 +826,6 @@ function invalidateAllCompilations(): void {
 
 function rememberCompilationState(state: CompilationState): void {
   compilationService.rememberCompilationState(state);
-}
-
-function compileInactiveSheets(): void {
-  compilationService.compileInactiveSheets({ concurrency: 1, onlyStale: true });
 }
 
 const logosPythonLanguageId = "logos-python";
@@ -1161,6 +1133,13 @@ toolTabsList.addEventListener("click", (event) => {
   if (runTabButton) {
     setActiveTab(runTabButton.dataset.runTabId ?? null);
     sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
+    return;
+  }
+
+  const toolTabButton = target.closest<HTMLButtonElement>("[data-tool-tab-id]");
+  if (toolTabButton) {
+    setActiveTab(toolTabButton.dataset.toolTabId ?? implementationToolTabId);
+    sessionCapture.track("tab_changed", { tab: "implementation" }, true);
   }
 });
 appNav.addEventListener("click", (event) => {
@@ -1353,7 +1332,6 @@ renderSourceTabs();
 setActivePage(activePageId);
 updateShellResizeHandles();
 setActiveCompilationSheet(activeSourceTabId);
-compileInactiveSheets();
 void bootWorkspace();
 
 const shellResizeObserver = new ResizeObserver(() => {
@@ -1403,7 +1381,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     return;
   }
 
-  latestImplementationSource = result.implementation;
   rememberActiveCompilationImplementation(result.implementation, source);
   renderSnippetPanel();
   currentTab.sessionId = result.sessionId;
@@ -1476,6 +1453,13 @@ async function clearCodeCache(): Promise<void> {
       throw new Error(payload.error ?? "Could not clear code cache");
     }
 
+    for (const tab of sourceTabs) {
+      tab.implementation = null;
+    }
+    latestImplementationSource = "";
+    invalidateAllCompilations();
+    renderImplementationView();
+    scheduleSaveSourceTabs();
     runStatus.textContent = "Code cache cleared";
     runStatus.dataset.state = "ok";
     sessionCapture.track("code_cache_clear_completed", {
@@ -1488,9 +1472,6 @@ async function clearCodeCache(): Promise<void> {
     sessionCapture.track("code_cache_clear_failed", { error: message }, true);
   } finally {
     clearCodeCacheButton.disabled = false;
-    if (activeSourceTabId !== null) {
-      scheduleCompilation(0);
-    }
   }
 }
 
@@ -1565,9 +1546,7 @@ function scheduleCompilation(delayMs: number): void {
 
   compileTimer = setTimeout(() => {
     compileTimer = null;
-    void compile(sheetId).then(() => {
-      compileInactiveSheets();
-    });
+    void compile(sheetId);
   }, delayMs);
 }
 
@@ -1585,6 +1564,7 @@ function openProjectTab(sample: SampleProgram): void {
     projectId: sample.id,
     title: sample.label,
     source: sample.code,
+    implementation: null,
   };
   sourceTabs = [...sourceTabs, tab];
   activeSourceTabId = tab.id;
@@ -1603,6 +1583,7 @@ function openScratchFile(): void {
     projectId: "scratch",
     title: nextScratchFileTitle(),
     source: "",
+    implementation: null,
   };
 
   sourceTabs = [...sourceTabs, tab];
@@ -1659,6 +1640,8 @@ function applyActiveSourceTab(): void {
   } finally {
     applyingSourceTab = false;
   }
+  latestImplementationSource = sheetImplementationCacheEntry(active?.id ?? "")?.implementation ?? "";
+  renderImplementationView();
   lastRunLabel = "never";
   lastRunCompletedAtMs = null;
   lastRunStatusPrefix = "";
@@ -1672,7 +1655,6 @@ function applyActiveSourceTab(): void {
   setActiveTab(null);
   updateEditorAvailability();
   updateActiveProjectMenuItem();
-  compileInactiveSheets();
 }
 
 function syncActiveSourceTab(): void {
@@ -1707,7 +1689,12 @@ function renderCompilationState(state: CompilationState): void {
   }
 
   compilationPending = state.status === "compiling";
-  latestImplementationSource = state.implementation;
+  latestImplementationSource = visibleImplementationForState(state);
+  if (state.status === "compiled" && state.session.lastImplementation.trim().length > 0) {
+    active.implementation = state.session.lastImplementation;
+    scheduleSaveSourceTabs();
+  }
+  renderImplementationView();
   latestReadinessDefinitions = state.readiness.map((definition) => ({ ...definition }));
   latestTypeCheckDiagnostics = state.diagnostics.map((diagnostic) => ({ ...diagnostic }));
   snippetPreviewByHash = cloneSnippetPreviewMap(state.snippetPreviews);
@@ -1750,12 +1737,62 @@ function rememberActiveCompilationImplementation(implementation: string, source:
     return;
   }
 
+  active.implementation = implementation;
+  latestImplementationSource = implementation;
+  renderImplementationView();
+  scheduleSaveSourceTabs();
+
   rememberCompilationState({
     ...state,
     status: "compiled",
-    implementation,
+    session: completeCompileSession(state.session, implementation),
     error: null,
   });
+}
+
+function sheetImplementationCacheEntry(sheetId: SheetId): SheetImplementationCacheEntry | null {
+  const tab = sourceTabs.find((item) => item.id === sheetId);
+  if (!tab || !tab.implementation) {
+    return null;
+  }
+
+  return {
+    sheetId,
+    sheetCode: tab.source,
+    implementation: tab.implementation,
+  };
+}
+
+function visibleImplementationForState(state: CompilationState): string {
+  if (state.status === "compiling") {
+    return state.session.draftImplementation ?? state.session.lastImplementation;
+  }
+
+  return state.session.lastImplementation;
+}
+
+function completeCompileSession(session: CompileSession, implementation: string): CompileSession {
+  return {
+    ...session,
+    lastImplementation: implementation,
+    draftImplementation: null,
+    streamHash: null,
+  };
+}
+
+function draftCompileSession(session: CompileSession, implementation: string): CompileSession {
+  return {
+    ...session,
+    draftImplementation: implementation,
+  };
+}
+
+function streamingCompileSession(session: CompileSession, hash: string): CompileSession {
+  return {
+    ...session,
+    streamHash: hash,
+    draftImplementation: null,
+  };
 }
 
 function compilationRequestForSheet(sheetId: SheetId): CompilationRequest | null {
@@ -1777,13 +1814,20 @@ function initialCompilationState(
   status: CompilationStatus,
 ): CompilationState {
   const targets = incompleteSnippetTargetsForSource(request.source);
+  const cached = sheetImplementationCacheEntry(request.sheetId);
   return {
     sheetId: request.sheetId,
     source: request.source,
     sourceFingerprint: request.sourceFingerprint,
     strategy: request.strategy,
     status,
-    implementation: request.source,
+    session: {
+      sheetId: request.sheetId,
+      currentCode: request.source,
+      lastImplementation: cached?.implementation ?? "",
+      draftImplementation: null,
+      streamHash: null,
+    },
     readiness: localReadiness(request.source),
     diagnostics: [],
     snippetPreviews: new Map(
@@ -1808,7 +1852,13 @@ function emptyCompilationState(sheetId: SheetId): CompilationState {
     sourceFingerprint: sourceFingerprint(""),
     strategy: appSettings.compilationStrategy,
     status: "idle",
-    implementation: "",
+    session: {
+      sheetId,
+      currentCode: "",
+      lastImplementation: "",
+      draftImplementation: null,
+      streamHash: null,
+    },
     readiness: [],
     diagnostics: [],
     snippetPreviews: new Map(),
@@ -1823,10 +1873,26 @@ function reduceCompilationEvent(
   let next: CompilationState = state;
 
   if (
-    (event.kind === "implementation" || event.kind === "compiled") &&
-    typeof event.implementation === "string"
+    event.kind === "llm-start" &&
+    typeof event.hash === "string" &&
+    event.snippet === state.source
   ) {
-    next = { ...next, implementation: event.implementation };
+    next = { ...next, session: streamingCompileSession(next.session, event.hash) };
+  }
+
+  if (
+    event.kind === "llm-complete" &&
+    typeof event.hash === "string" &&
+    typeof event.implementation === "string" &&
+    event.hash === next.session.streamHash
+  ) {
+    next = { ...next, session: draftCompileSession(next.session, event.implementation) };
+  }
+
+  if (isCompleteImplementationEvent(event)) {
+    next = { ...next, session: completeCompileSession(next.session, event.implementation) };
+  } else if (event.kind === "implementation" && typeof event.implementation === "string") {
+    next = { ...next, session: draftCompileSession(next.session, event.implementation) };
   }
 
   if (event.kind === "readiness" && Array.isArray(event.definitions)) {
@@ -1851,7 +1917,15 @@ function reduceCompilationEvent(
   }
 
   if (event.kind === "compiled") {
-    next = { ...next, status: "compiled", error: null };
+    const completedImplementation = typeof event.implementation === "string"
+      ? event.implementation
+      : next.session.lastImplementation;
+    next = {
+      ...next,
+      status: "compiled",
+      session: completeCompileSession(next.session, completedImplementation),
+      error: null,
+    };
   }
 
   return next;
@@ -2033,6 +2107,7 @@ function defaultSourceTabState(): SourceTabState {
           projectId: sample.id,
           title: sample.label,
           source: sample.code,
+          implementation: null,
         }]
       : [];
   });
@@ -2053,7 +2128,10 @@ function normalizeSourceTabState(state: SourceTabState): SourceTabState {
     : state.tabs[0]?.id ?? null;
 
   return {
-    tabs: state.tabs,
+    tabs: state.tabs.map((tab) => ({
+      ...tab,
+      implementation: tab.implementation ?? null,
+    })),
     activeTabId,
   };
 }
@@ -2097,7 +2175,12 @@ function isSourceTabState(value: unknown): value is SourceTabState {
       typeof tab.id === "string" &&
       typeof tab.projectId === "string" &&
       typeof tab.title === "string" &&
-      typeof tab.source === "string"
+      typeof tab.source === "string" &&
+      (
+        tab.implementation === undefined ||
+        tab.implementation === null ||
+        typeof tab.implementation === "string"
+      )
     ))
   );
 }
@@ -3774,6 +3857,12 @@ function renderRunTabs(): void {
     shell.remove();
   }
 
+  const implementationActive = activeToolTabId === implementationToolTabId;
+  implementationViewTab.classList.toggle("active", implementationActive);
+  implementationViewTab.setAttribute("aria-selected", String(implementationActive));
+  implementationViewPanel.classList.toggle("active", implementationActive);
+  renderImplementationView();
+
   for (const tab of runTabs) {
     const shell = document.createElement("div");
     shell.className = "source-tab-shell output-tab-shell";
@@ -3875,6 +3964,15 @@ function renderRunTab(tab: RunTab): void {
   panel.scrollTop = panel.scrollHeight;
 }
 
+function renderImplementationView(): void {
+  implementationViewPanel.textContent = latestImplementationSource.trim().length > 0
+    ? latestImplementationSource
+    : compilationPending
+    ? "Code is being generated..."
+    : "No implementation yet.";
+  implementationViewPanel.scrollTop = implementationViewPanel.scrollHeight;
+}
+
 function terminalDisplayText(tab: RunTab): string {
   if (tab.terminalText.length > 0) {
     return tab.terminalText;
@@ -3959,7 +4057,6 @@ async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
   }
 
   tab.implementation = result.implementation;
-  latestImplementationSource = result.implementation;
   rememberActiveCompilationImplementation(result.implementation, tab.source);
   renderSnippetPanel();
   appendTerminalChunks(tab, result.chunks);
@@ -4027,7 +4124,6 @@ async function pollRunTab(runTabId: string): Promise<void> {
   }
 
   currentTab.implementation = result.implementation;
-  latestImplementationSource = result.implementation;
   rememberActiveCompilationImplementation(result.implementation, currentTab.source);
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
@@ -4075,7 +4171,6 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
-  latestImplementationSource = result.implementation;
   rememberActiveCompilationImplementation(result.implementation, currentTab.source);
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
@@ -4091,7 +4186,6 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
 function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: string): void {
   tab.status = status;
   tab.implementation = implementation;
-  latestImplementationSource = implementation;
   rememberActiveCompilationImplementation(implementation, tab.source);
   renderSnippetPanel();
   markLastRunCompleted();
@@ -4136,7 +4230,7 @@ function closeRunTab(runTabId: string): void {
   runTabs = runTabs.filter((item) => item.id !== runTabId);
 
   if (activeToolTabId === runTabId) {
-    activeToolTabId = runTabs[index]?.id ?? runTabs[index - 1]?.id ?? null;
+    activeToolTabId = runTabs[index]?.id ?? runTabs[index - 1]?.id ?? implementationToolTabId;
   }
   renderRunTabs();
   setActiveTab(activeToolTabId);
@@ -4156,7 +4250,7 @@ function closeAllRunTabs(): void {
     }
   }
   runTabs = [];
-  activeToolTabId = null;
+  activeToolTabId = implementationToolTabId;
   renderRunTabs();
 }
 
@@ -4593,10 +4687,32 @@ type CompileWireEvent =
       snippet?: string;
       token?: string;
       implementation?: string;
+      completedSnippets?: number;
+      totalSnippets?: number;
       error?: string;
       definitions?: DefinitionReadiness[];
       diagnostics?: TypeCheckDiagnostic[];
     };
+
+function isCompleteImplementationEvent(event: CompileWireEvent): event is CompileWireEvent & {
+  implementation: string;
+  completedSnippets: number;
+  totalSnippets: number;
+} {
+  return (
+    event.kind === "implementation" &&
+    typeof event.implementation === "string" &&
+    typeof event.completedSnippets === "number" &&
+    typeof event.totalSnippets === "number" &&
+    event.completedSnippets >= event.totalSnippets
+  ) || (
+    event.kind === "compiled" &&
+    typeof event.implementation === "string" &&
+    typeof event.completedSnippets === "number" &&
+    typeof event.totalSnippets === "number" &&
+    event.completedSnippets >= event.totalSnippets
+  );
+}
 
 async function* compileViaDevApi(
   sheet: string,
@@ -4669,7 +4785,9 @@ async function* compileViaDevApi(
 }
 
 function setActiveTab(tab: ToolTabId): void {
-  activeToolTabId = tab && runTabById(tab) ? tab : null;
+  activeToolTabId = tab === implementationToolTabId || (tab && runTabById(tab))
+    ? tab
+    : implementationToolTabId;
   renderRunTabs();
 }
 
@@ -4757,7 +4875,13 @@ export async function loadSession(session: LoadableSession): Promise<void> {
 
     const active = activeSourceTab();
     editor.setValue(active?.source ?? session.editor.value);
-    latestImplementationSource = session.compilation.latestImplementationSource || editor.getValue();
+    latestImplementationSource = active?.implementation ??
+      session.compilation.latestImplementationSource ??
+      "";
+    if (active && latestImplementationSource.trim().length > 0) {
+      active.implementation = latestImplementationSource;
+    }
+    renderImplementationView();
     compileVersion = Math.max(compileVersion + 1, session.compilation.compileVersion);
     lastRunCompletedAtMs = typeof session.run.lastRunCompletedAtMs === "number"
       ? session.run.lastRunCompletedAtMs
@@ -4783,9 +4907,11 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       status: restoredRunStatus(tab.status),
       pollTimer: null,
     }));
-    activeToolTabId = runTabs.some((tab) => tab.id === session.run.activeToolTabId)
+    activeToolTabId = session.run.activeToolTabId === implementationToolTabId
+      ? implementationToolTabId
+      : runTabs.some((tab) => tab.id === session.run.activeToolTabId)
       ? session.run.activeToolTabId
-      : runTabs[0]?.id ?? null;
+      : implementationToolTabId;
 
     renderSourceTabs();
     renderRunTabs();
@@ -4798,9 +4924,10 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     if (active) {
       const request = compilationRequestForSheet(active.id);
       if (request) {
+        const restoredCompilationState = initialCompilationState(request, "compiled");
         rememberCompilationState({
-          ...initialCompilationState(request, "compiled"),
-          implementation: latestImplementationSource,
+          ...restoredCompilationState,
+          session: completeCompileSession(restoredCompilationState.session, latestImplementationSource),
           readiness: latestReadinessDefinitions,
           diagnostics: latestTypeCheckDiagnostics,
           snippetPreviews: cloneSnippetPreviewMap(snippetPreviewByHash),
@@ -5093,6 +5220,7 @@ function appSnapshot(): JsonObject {
         projectId: tab.projectId,
         title: tab.title,
         source: tab.source,
+        implementation: tab.implementation ?? null,
       })),
       compileVersion,
       latestImplementationSource,
