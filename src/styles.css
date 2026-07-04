@@ -1162,6 +1162,16 @@ h2 {
   white-space: pre-wrap;
 }
 
+.implementation-output {
+  overflow: hidden;
+  padding: 0;
+  white-space: normal;
+}
+
+.implementation-output .cursor {
+  display: none !important;
+}
+
 .terminal-output-text {
   white-space: pre-wrap;
 }

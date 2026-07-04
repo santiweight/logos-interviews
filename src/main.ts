@@ -456,7 +456,7 @@ app.innerHTML = `
               ${renderFeedbackControls("output")}
             </div>
             <div id="tool-panels" class="tool-panels">
-              <pre id="implementation-view-panel" class="output implementation-output tab-panel active" role="tabpanel" aria-labelledby="implementation-view-tab" aria-live="polite"></pre>
+              <div id="implementation-view-panel" class="output implementation-output tab-panel active" role="tabpanel" aria-labelledby="implementation-view-tab" aria-live="polite"></div>
               <pre id="run-placeholder" class="output run-placeholder tab-panel" aria-live="polite">Runs will appear here.</pre>
             </div>
           </section>
@@ -477,7 +477,7 @@ const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const implementationViewTab = requiredQuery<HTMLButtonElement>("#implementation-view-tab");
-const implementationViewPanel = requiredQuery<HTMLPreElement>("#implementation-view-panel");
+const implementationViewPanel = requiredQuery<HTMLDivElement>("#implementation-view-panel");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetPanelHeader = requiredQuery<HTMLElement>("#snippet-panel-header");
@@ -961,8 +961,43 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   padding: { top: 12, bottom: 12 },
 });
 
+const implementationViewEditor = monaco.editor.create(implementationViewPanel, {
+  value: implementationViewText(),
+  language: logosPythonLanguageId,
+  theme: "interview-light",
+  automaticLayout: true,
+  fontFamily:
+    '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  fontSize: 14,
+  lineHeight: 22,
+  minimap: { enabled: false },
+  overviewRulerLanes: 0,
+  scrollBeyondLastLine: false,
+  renderLineHighlight: "none",
+  tabSize: 2,
+  insertSpaces: true,
+  glyphMargin: true,
+  lineNumbers: "off",
+  lineNumbersMinChars: 0,
+  lineDecorationsWidth: 8,
+  folding: false,
+  readOnly: true,
+  domReadOnly: true,
+  matchBrackets: "never",
+  occurrencesHighlight: "off",
+  selectionHighlight: false,
+  bracketPairColorization: { enabled: false },
+  "semanticHighlighting.enabled": false,
+  guides: {
+    indentation: false,
+    highlightActiveIndentation: false,
+  },
+  padding: { top: 12, bottom: 12 },
+});
+
 attachBlockIndentGuideOverlay(editor);
 attachBlockIndentGuideOverlay(snippetPreviewEditor);
+attachBlockIndentGuideOverlay(implementationViewEditor);
 installEditorTypingAssist(editor);
 
 const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
@@ -1315,6 +1350,7 @@ function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}
     requestAnimationFrame(() => {
       editor.layout();
       snippetPreviewEditor.layout();
+      implementationViewEditor.layout();
       updateShellResizeHandles();
     });
   }
@@ -3965,12 +4001,19 @@ function renderRunTab(tab: RunTab): void {
 }
 
 function renderImplementationView(): void {
-  implementationViewPanel.textContent = latestImplementationSource.trim().length > 0
+  const text = implementationViewText();
+  if (implementationViewEditor.getValue() !== text) {
+    implementationViewEditor.setValue(text);
+  }
+  implementationViewEditor.setScrollTop(implementationViewEditor.getScrollHeight());
+}
+
+function implementationViewText(): string {
+  return latestImplementationSource.trim().length > 0
     ? latestImplementationSource
     : compilationPending
     ? "Code is being generated..."
     : "No implementation yet.";
-  implementationViewPanel.scrollTop = implementationViewPanel.scrollHeight;
 }
 
 function terminalDisplayText(tab: RunTab): string {

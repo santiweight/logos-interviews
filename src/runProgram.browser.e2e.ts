@@ -174,6 +174,32 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("renders the implementation view with highlighted code", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = "def foo():\n  print('hi')\n";
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Highlighted Implementation");
+
+      await expect.poll(async () => {
+        return (await page.locator("#implementation-view-panel .view-line").first().textContent())
+          ?.replaceAll("\u00a0", " ");
+      }).toContain("def foo");
+      await expect.poll(async () => {
+        return page.locator("#implementation-view-panel .view-line span[class*='mtk']").count();
+      }).toBeGreaterThan(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows a compilation status marker for selected runnable definitions", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
