@@ -2877,8 +2877,7 @@ function revealImplementationForSnippet(target: IncompleteSnippetTarget): void {
     return;
   }
 
-  implementationViewEditor.revealRangeInCenter(range, monaco.editor.ScrollType.Smooth);
-  implementationViewEditor.setSelection(range);
+  navigateImplementationRangeIfNeeded(range, monaco.editor.ScrollType.Smooth);
 }
 
 function revealImplementationForDefinition(target: ImplementationTarget): void {
@@ -2892,8 +2891,45 @@ function revealImplementationForDefinition(target: ImplementationTarget): void {
     return;
   }
 
-  implementationViewEditor.revealRangeInCenter(range, monaco.editor.ScrollType.Smooth);
+  navigateImplementationRangeIfNeeded(range, monaco.editor.ScrollType.Smooth);
+}
+
+function navigateImplementationRangeIfNeeded(range: monaco.Range, scrollType: monaco.editor.ScrollType): void {
+  if (implementationRangeHasFullyVisibleLine(range)) {
+    return;
+  }
+
+  implementationViewEditor.revealRangeInCenter(range, scrollType);
   implementationViewEditor.setSelection(range);
+}
+
+function implementationRangeHasFullyVisibleLine(range: monaco.Range): boolean {
+  const model = implementationViewEditor.getModel();
+  if (!model) {
+    return false;
+  }
+
+  const lineCount = model.getLineCount();
+  const startLineNumber = Math.max(1, Math.min(range.startLineNumber, lineCount));
+  const endLineNumber = Math.max(
+    startLineNumber,
+    Math.min(range.endColumn <= 1 && range.endLineNumber > startLineNumber
+      ? range.endLineNumber - 1
+      : range.endLineNumber, lineCount),
+  );
+  const viewportTop = implementationViewEditor.getScrollTop();
+  const viewportBottom = viewportTop + implementationViewEditor.getLayoutInfo().height;
+  const tolerance = 0.5;
+
+  for (let lineNumber = startLineNumber; lineNumber <= endLineNumber; lineNumber += 1) {
+    const lineTop = implementationViewEditor.getTopForLineNumber(lineNumber);
+    const lineBottom = implementationViewEditor.getBottomForLineNumber(lineNumber);
+    if (lineTop >= viewportTop - tolerance && lineBottom <= viewportBottom + tolerance) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function implementationRangeForDefinition(target: ImplementationTarget): monaco.Range | null {
@@ -4378,7 +4414,7 @@ function renderImplementationView(): void {
   }
   const selectedRange = updateImplementationSnippetDecorations();
   if (selectedRange !== null && activeToolTabId === implementationToolTabId) {
-    implementationViewEditor.revealRangeInCenter(selectedRange, monaco.editor.ScrollType.Immediate);
+    navigateImplementationRangeIfNeeded(selectedRange, monaco.editor.ScrollType.Immediate);
     return;
   }
 

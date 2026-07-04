@@ -200,6 +200,35 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("does not recenter the implementation view when the clicked implementation is already visible", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = Array.from({ length: 45 }, (_item, index) => {
+        const name = `item_${index + 1}`;
+        return `def ${name}():\n  return ${index + 1}`;
+      }).join("\n");
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Visible Implementation Navigation");
+
+      await page.locator("#editor .view-line").filter({ hasText: "def item_12" }).click();
+      await expect.poll(async () => visibleImplementationLines(page)).toContain("def item_12():");
+
+      const before = await visibleImplementationLines(page);
+      await page.locator("#editor .view-line").filter({ hasText: "def item_14" }).click();
+      await page.waitForTimeout(250);
+      await expect.poll(async () => visibleImplementationLines(page)).toEqual(before);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows a compilation status marker for selected runnable definitions", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
@@ -488,6 +517,12 @@ async function loadSource(page: Page, source: string, title: string, selection: 
       },
     });
   }, { source, title, selection });
+}
+
+async function visibleImplementationLines(page: Page): Promise<string[]> {
+  return page.$$eval("#implementation-view-panel .view-line", (lines) => {
+    return lines.map((line) => line.textContent?.replaceAll("\u00a0", " ") ?? "");
+  });
 }
 
 async function isTerminalInputFocused(page: Page): Promise<boolean> {
