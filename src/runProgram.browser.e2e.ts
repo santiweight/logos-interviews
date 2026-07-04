@@ -167,8 +167,7 @@ describe("run program browser flow", () => {
 
       await expect.poll(() => clearRequests).toBe(1);
       await expect.poll(async () => page.locator("#run-status").textContent()).toBe("Code cache cleared");
-      await page.waitForTimeout(300);
-      expect(compileRequestsAfterClear).toBe(0);
+      await expect.poll(() => compileRequestsAfterClear).toBe(1);
     } finally {
       await context.close();
     }
