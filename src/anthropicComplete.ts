@@ -49,7 +49,7 @@ function anthropicClient(apiKey: string | undefined): Anthropic {
 
 function messageParams(prompt: string, model: string | undefined) {
   return {
-    model: model ?? process.env.ANTHROPIC_CODEGEN_MODEL ?? process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-4-6",
+    model: model ?? process.env.ANTHROPIC_CODEGEN_MODEL ?? process.env.ANTHROPIC_E2E_MODEL ?? "claude-sonnet-5",
     max_tokens: 4096,
     messages: [{ role: "user" as const, content: prompt }],
   };

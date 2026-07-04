@@ -17,7 +17,7 @@ type ProviderSpec = {
 export function benchmarkProvidersFromEnv(): BenchmarkProvider[] {
   const specs = csvEnv("BENCH_MODELS");
   if (specs.length === 0) {
-    return [benchmarkProvider("anthropic:claude-sonnet-4-6")];
+    return [benchmarkProvider("anthropic:claude-sonnet-5")];
   }
 
   return specs.map(benchmarkProvider);
