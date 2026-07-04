@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
+import { resolve } from "node:path";
 import { createGlobalCodeCache } from "./src/codeCache";
 import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./src/anthropicComplete";
@@ -27,13 +28,28 @@ export default defineConfig(async ({ command }) => {
         },
       },
     },
-    plugins: [anthropicCompletionPlugin()],
+    plugins: [articleMarkdownHmrPlugin(), anthropicCompletionPlugin()],
     server: {
       host: devHost,
       ...(devPort === undefined ? {} : { port: devPort, strictPort: true }),
     },
   };
 });
+
+function articleMarkdownHmrPlugin() {
+  return {
+    name: "article-markdown-hmr",
+    configureServer(server) {
+      server.watcher.add(resolve(server.config.root, "public/articles/*.md"));
+      server.watcher.on("change", (filePath) => {
+        const normalized = filePath.replaceAll("\\", "/");
+        if (normalized.includes("/public/articles/") && normalized.endsWith(".md")) {
+          server.ws.send({ type: "full-reload", path: "*" });
+        }
+      });
+    },
+  };
+}
 
 function availablePort(host: string): Promise<number> {
   return new Promise((resolve, reject) => {

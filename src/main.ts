@@ -70,7 +70,7 @@ type AppPageId =
 type AppPage = {
   id: AppPageId;
   label: string;
-  stubTitle?: string;
+  articlePath?: string;
 };
 
 type LegacyAgentChatMessage = {
@@ -209,11 +209,23 @@ const seedImplementation = activeSourceTab()?.implementation ?? "";
 let appSettings = loadAppSettings();
 const appPages: AppPage[] = [
   { id: "editor", label: "Logos Playground" },
-  { id: "vision", label: "Logos: The Vision" },
-  { id: "alternatives", label: "Why not Claude/Codex etc?" },
-  { id: "spec-driven", label: "Why not Spec-Driven Coding?" },
-  { id: "technical", label: "Technical: Compiling Natural Language" },
-  { id: "roadmap", label: "Roadmap" },
+  { id: "vision", label: "Logos: The Vision", articlePath: "/articles/logos-the-vision.md" },
+  {
+    id: "alternatives",
+    label: "Why not Claude/Codex etc?",
+    articlePath: "/articles/why-not-claude-codex-etc.md",
+  },
+  {
+    id: "spec-driven",
+    label: "Why not Spec-Driven Coding?",
+    articlePath: "/articles/why-not-spec-driven-coding.md",
+  },
+  {
+    id: "technical",
+    label: "Technical: Compiling Natural Language",
+    articlePath: "/articles/technical-compiling-natural-language.md",
+  },
+  { id: "roadmap", label: "Roadmap", articlePath: "/articles/roadmap.md" },
 ];
 let activePageId: AppPageId = pageIdFromHash(window.location.hash) ?? "editor";
 
@@ -249,6 +261,7 @@ const shareIcon = `
 `;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
 const templateGroups = createTemplateGroups(sampleTemplateGroups);
+const articleHtmlByPageId = new Map<AppPageId, string>();
 
 function renderAppNav(): string {
   return appPages
@@ -260,14 +273,15 @@ function renderAppNav(): string {
     .join("");
 }
 
-function renderStubPages(): string {
+function renderArticlePages(): string {
   return appPages
     .filter((page) => page.id !== "editor")
     .map(
-      (page) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-labelledby="${page.id}-page-title"${page.id === activePageId ? "" : " hidden"}>
+      (page) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-label="${escapeHtml(page.label)}"${page.id === activePageId ? "" : " hidden"}>
         <div class="info-page-inner">
-          <p class="eyebrow">Coming soon</p>
-          <h1 id="${page.id}-page-title">${page.label}</h1>
+          <article class="article-content" data-article-content="${page.id}" data-article-path="${escapeHtml(page.articlePath ?? "")}">
+            <p class="article-loading">Loading...</p>
+          </article>
         </div>
       </section>`,
     )
@@ -462,7 +476,7 @@ app.innerHTML = `
           </section>
         </section>
       </section>
-      ${renderStubPages()}
+      ${renderArticlePages()}
     </main>
   </section>
 `;
@@ -1353,7 +1367,162 @@ function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}
       implementationViewEditor.layout();
       updateShellResizeHandles();
     });
+  } else {
+    void loadArticlePage(pageId);
   }
+}
+
+async function loadArticlePage(pageId: AppPageId): Promise<void> {
+  const page = appPages.find((item) => item.id === pageId);
+  if (!page?.articlePath) {
+    return;
+  }
+
+  const target = document.querySelector<HTMLElement>(`[data-article-content="${pageId}"]`);
+  if (!target) {
+    return;
+  }
+
+  const cachedHtml = articleHtmlByPageId.get(pageId);
+  if (cachedHtml) {
+    target.innerHTML = cachedHtml;
+    return;
+  }
+
+  target.innerHTML = `<p class="article-loading">Loading...</p>`;
+
+  try {
+    const response = await fetch(page.articlePath, { cache: "no-cache" });
+    if (!response.ok) {
+      throw new Error(`Could not load ${page.articlePath}`);
+    }
+
+    const markdown = await response.text();
+    const html = markdownToHtml(markdown);
+    articleHtmlByPageId.set(pageId, html);
+    target.innerHTML = html;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    target.innerHTML = `<p class="article-error">${escapeHtml(message)}</p>`;
+  }
+}
+
+function markdownToHtml(source: string): string {
+  const lines = stripFrontmatter(source).replaceAll("\r\n", "\n").split("\n");
+  const html: string[] = [];
+  const paragraph: string[] = [];
+  let listTag: "ul" | "ol" | null = null;
+  let codeLines: string[] | null = null;
+
+  const closeParagraph = () => {
+    if (paragraph.length === 0) {
+      return;
+    }
+
+    html.push(`<p>${inlineMarkdown(paragraph.join(" "))}</p>`);
+    paragraph.length = 0;
+  };
+
+  const closeList = () => {
+    if (!listTag) {
+      return;
+    }
+
+    html.push(`</${listTag}>`);
+    listTag = null;
+  };
+
+  const openList = (tag: "ul" | "ol") => {
+    closeParagraph();
+    if (listTag === tag) {
+      return;
+    }
+
+    closeList();
+    html.push(`<${tag}>`);
+    listTag = tag;
+  };
+
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      if (codeLines) {
+        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = null;
+      } else {
+        closeParagraph();
+        closeList();
+        codeLines = [];
+      }
+      continue;
+    }
+
+    if (codeLines) {
+      codeLines.push(line);
+      continue;
+    }
+
+    if (line.trim().length === 0) {
+      closeParagraph();
+      closeList();
+      continue;
+    }
+
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      closeParagraph();
+      closeList();
+      const level = heading[1].length;
+      html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+
+    const unordered = /^-\s+(.+)$/.exec(line);
+    if (unordered) {
+      openList("ul");
+      html.push(`<li>${inlineMarkdown(unordered[1])}</li>`);
+      continue;
+    }
+
+    const ordered = /^\d+\.\s+(.+)$/.exec(line);
+    if (ordered) {
+      openList("ol");
+      html.push(`<li>${inlineMarkdown(ordered[1])}</li>`);
+      continue;
+    }
+
+    paragraph.push(line.trim());
+  }
+
+  if (codeLines) {
+    html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+  closeParagraph();
+  closeList();
+
+  return html.join("\n");
+}
+
+function stripFrontmatter(source: string): string {
+  return source.replace(/^---\n[\s\S]*?\n---\n?/, "");
+}
+
+function inlineMarkdown(source: string): string {
+  return escapeHtml(source)
+    .replace(/\[([^\]]+)]\(([^)]+)\)/g, (_match, label: string, href: string) => {
+      return `<a href="${safeArticleHref(href)}">${label}</a>`;
+    })
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
+}
+
+function safeArticleHref(source: string): string {
+  const href = source.trim();
+  if (/^(?:https?:\/\/|\/|#)/.test(href)) {
+    return escapeHtml(href);
+  }
+
+  return "#";
 }
 
 function pageIdFromHash(hash: string): AppPageId | null {
