@@ -181,7 +181,7 @@ describe("run program browser flow", () => {
         targetKind: "function",
       });
 
-      await expect.poll(async () => page.locator("#snippet-title").textContent()).toBe("Compilation View: main");
+      await expect.poll(async () => page.locator("#snippet-title").textContent()).toBe("Implementation: main");
       await expect.poll(async () => {
         return page.locator("#snippet-status-indicator").getAttribute("data-state");
       }).toBe("complete");
