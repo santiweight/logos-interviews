@@ -1911,6 +1911,7 @@ async function clearCodeCache(): Promise<void> {
     invalidateAllCompilations();
     renderImplementationView();
     scheduleSaveSourceTabs();
+    scheduleCompilation(0);
     runStatus.textContent = "Code cache cleared";
     runStatus.dataset.state = "ok";
     sessionCapture.track("code_cache_clear_completed", {
