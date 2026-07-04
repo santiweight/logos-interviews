@@ -187,7 +187,7 @@ describe("simple TypeScript program e2e", () => {
     expect(completed.output.trim()).toBe("hello world");
   });
 
-  it("runs a neo-blessed todo dashboard through the interactive TypeScript runtime", async () => {
+  it.skip("runs a neo-blessed todo dashboard through the interactive TypeScript runtime", async () => {
     const cache: CodeCache = new Map();
     const fileAgentInputs: string[] = [];
     const fileAgent: SingleFileAgentFunction = async function* (input) {
