@@ -237,7 +237,7 @@ describe("run program browser flow", () => {
   return React.createElement(
     "main",
     { style: { minHeight: "100vh", display: "grid", placeItems: "center", fontFamily: "sans-serif" } },
-    React.createElement("button", { onClick: () => setMessage("clicked") }, message)
+    React.createElement(radix.Button, { onClick: () => setMessage("clicked"), "data-testid": "hello-button" }, message)
   );
 }`;
 
@@ -259,7 +259,7 @@ describe("run program browser flow", () => {
   return React.createElement(
     "main",
     { style: { minHeight: "100vh", display: "grid", placeItems: "center", fontFamily: "sans-serif" } },
-    React.createElement("button", { onClick: () => setMessage("clicked") }, message)
+    React.createElement(radix.Button, { onClick: () => setMessage("clicked"), "data-testid": "hello-button" }, message)
   );
 }`,
             status: { state: "exited", code: 0, signal: null },
@@ -276,9 +276,11 @@ describe("run program browser flow", () => {
       await runWidget.click();
 
       const frame = page.frameLocator(".react-app-run-frame").first();
-      await expect.poll(async () => frame.locator("button").textContent()).toBe("hello world");
-      await frame.locator("button").click();
-      await expect.poll(async () => frame.locator("button").textContent()).toBe("clicked");
+      const button = frame.getByTestId("hello-button");
+      await expect.poll(async () => button.textContent()).toBe("hello world");
+      await expect.poll(async () => button.getAttribute("class")).toContain("rt-Button");
+      await button.click();
+      await expect.poll(async () => button.textContent()).toBe("clicked");
       await expect.poll(async () => reactFrameMetrics(page)).toMatchObject({
         frameMatchesHost: true,
         hostHasHeight: true,

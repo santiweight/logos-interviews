@@ -236,7 +236,9 @@ function test(): void {
     expect(prompt).toContain("do not import React; React is provided by the ReactApp runtime");
     expect(prompt).toContain("ReactApp visual and CSS guidelines:");
     expect(prompt).toContain("Use a shadcn-inspired product UI style");
-    expect(prompt).toContain("Do not import shadcn/ui, Tailwind, CSS files, icon packages, or external fonts");
+    expect(prompt).toContain("Radix Themes is a runtime dependency provided to ReactApp code as the global object radix");
+    expect(prompt).toContain("Do not import @radix-ui/themes, shadcn/ui, Tailwind, CSS files, icon packages, or external fonts");
+    expect(prompt).toContain("Use React.createElement(radix.Button");
     expect(prompt).toContain("The app must remain usable at common iframe sizes");
     expect(prompt).toContain('import blessed from "neo-blessed"; do not use import * as blessed');
     expect(prompt).toContain("For neo-blessed modal text entry, avoid blessed.form");
