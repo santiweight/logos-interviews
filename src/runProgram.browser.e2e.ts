@@ -257,6 +257,36 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("keeps the output pane flush with the shell after resizing it wider", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+    });
+    try {
+      const page = await context.newPage();
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+
+      const handle = await page.locator("#code-run-resize-handle").boundingBox();
+      if (!handle) {
+        throw new Error("Resize handle did not render");
+      }
+
+      await page.mouse.move(handle.x + handle.width / 2, handle.y + 80);
+      await page.mouse.down();
+      await page.mouse.move(handle.x - 260, handle.y + 80, { steps: 8 });
+      await page.mouse.up();
+
+      await expect.poll(async () => outputPaneRightGap(page)).toBeLessThanOrEqual(1);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("does not recenter the implementation view when the clicked implementation is already visible", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
@@ -579,6 +609,18 @@ async function loadSource(page: Page, source: string, title: string, selection: 
 async function visibleImplementationLines(page: Page): Promise<string[]> {
   return page.$$eval("#implementation-view-panel .view-line", (lines) => {
     return lines.map((line) => line.textContent?.replaceAll("\u00a0", " ") ?? "");
+  });
+}
+
+async function outputPaneRightGap(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const shell = document.querySelector("#shell");
+    const outputPane = document.querySelector("#output-pane");
+    if (!(shell instanceof HTMLElement) || !(outputPane instanceof HTMLElement)) {
+      throw new Error("Output pane layout elements are unavailable");
+    }
+
+    return shell.getBoundingClientRect().right - outputPane.getBoundingClientRect().right;
   });
 }
 
