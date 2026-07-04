@@ -2825,8 +2825,7 @@ function updateSelectedDefinitionDecorations(): void {
 function sourceDefinitionHighlightRange(target: ImplementationTarget): monaco.Range | null {
   const line = editor.getModel()?.getLineContent(target.line) ?? "";
   const startColumn = (line.match(/^\s*/)?.[0].length ?? 0) + 1;
-  const trimmed = line.trimStart();
-  const highlightLength = sourceDefinitionHighlightLength(trimmed, target);
+  const highlightLength = firstLineLength(target.source.trimStart());
   if (highlightLength <= 0) {
     return null;
   }
@@ -2837,22 +2836,6 @@ function sourceDefinitionHighlightRange(target: ImplementationTarget): monaco.Ra
     target.line,
     startColumn + highlightLength,
   );
-}
-
-function sourceDefinitionHighlightLength(trimmedLine: string, target: ImplementationTarget): number {
-  if (target.kind === "class") {
-    return trimmedLine.match(/^class\s+[A-Za-z_][A-Za-z0-9_]*/)?.[0].length ?? 0;
-  }
-
-  if (target.kind === "field") {
-    return trimmedLine.length;
-  }
-
-  if (target.kind === "function" || target.kind === "method") {
-    return trimmedLine.match(/^(?:async\s+)?(?:def|fn|function)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)(?:\s*->\s*[^:]+)?/)?.[0].trimEnd().length ?? 0;
-  }
-
-  return 0;
 }
 
 function updateImplementationSnippetDecorations(): monaco.Range | null {
