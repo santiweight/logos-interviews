@@ -581,6 +581,13 @@ let runTabs: RunTab[] = [];
 const implementationToolTabId = "implementation-view";
 let activeToolTabId: ToolTabId = implementationToolTabId;
 let activeCompilationUnsubscribe: (() => void) | null = null;
+let draggedSourceTabId: string | null = null;
+
+type SourceTabDropSlot = {
+  insertIndex: number;
+  markerX: number;
+  isNoop: boolean;
+};
 
 type RunnableState = {
   name: Runnable;
@@ -1369,6 +1376,72 @@ sourceTabsEl.addEventListener("click", (event) => {
     activateSourceTab(tabButton.dataset.sourceTabId ?? "");
   }
 });
+sourceTabsEl.addEventListener("dragstart", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement) || target.closest("[data-close-tab-id]")) {
+    event.preventDefault();
+    return;
+  }
+
+  const shell = target.closest<HTMLElement>("[data-source-tab-shell-id]");
+  if (!shell || sourceTabs.length < 2) {
+    event.preventDefault();
+    return;
+  }
+
+  draggedSourceTabId = shell.dataset.sourceTabShellId ?? null;
+  if (!draggedSourceTabId || !event.dataTransfer) {
+    event.preventDefault();
+    return;
+  }
+
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", draggedSourceTabId);
+  event.dataTransfer.setDragImage(transparentDragImage(), 0, 0);
+  sourceTabsEl.classList.add("source-tabs-dragging");
+  shell.classList.add("source-tab-shell-dragging");
+});
+sourceTabsEl.addEventListener("dragover", (event) => {
+  if (!draggedSourceTabId) {
+    return;
+  }
+
+  const slot = sourceTabDropSlot(event.clientX);
+  if (!slot) {
+    return;
+  }
+
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  renderSourceTabDropSlot(slot);
+});
+sourceTabsEl.addEventListener("dragleave", (event) => {
+  const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+  if (!relatedTarget || !sourceTabsEl.contains(relatedTarget)) {
+    clearSourceTabDropMarker();
+  }
+});
+sourceTabsEl.addEventListener("drop", (event) => {
+  if (!draggedSourceTabId) {
+    return;
+  }
+
+  const slot = sourceTabDropSlot(event.clientX);
+  if (!slot) {
+    clearSourceTabDragState();
+    return;
+  }
+
+  event.preventDefault();
+  moveSourceTab(draggedSourceTabId, slot.insertIndex);
+  clearSourceTabDragState();
+});
+sourceTabsEl.addEventListener("dragend", () => {
+  clearSourceTabDragState();
+});
 window.addEventListener("hashchange", () => {
   setActivePage(pageIdFromHash(window.location.hash) ?? "editor");
 });
@@ -1697,6 +1770,7 @@ function pageIdFromValue(value: string | undefined): AppPageId | null {
 }
 
 renderSourceTabs();
+renderSourceTabSeparators(toolTabsList);
 setActivePage(activePageId);
 void loadArticleTitles();
 updateShellResizeHandles();
@@ -1705,10 +1779,14 @@ void bootWorkspace();
 
 const shellResizeObserver = new ResizeObserver(() => {
   updateShellResizeHandles();
+  renderSourceTabSeparators();
+  renderSourceTabSeparators(toolTabsList);
 });
 shellResizeObserver.observe(shell);
 shellResizeObserver.observe(codePane);
 shellResizeObserver.observe(outputPane);
+shellResizeObserver.observe(sourceTabsEl);
+shellResizeObserver.observe(toolTabsList);
 window.setInterval(() => {
   updateRunStaleness();
 }, 1000);
@@ -1975,6 +2053,178 @@ function activateSourceTab(tabId: string): void {
   renderSourceTabs();
   scheduleSaveSourceTabs();
   updateActiveProjectMenuItem();
+}
+
+function sourceTabDropSlot(clientX: number): SourceTabDropSlot | null {
+  if (!draggedSourceTabId) {
+    return null;
+  }
+
+  const draggedIndex = sourceTabs.findIndex((tab) => tab.id === draggedSourceTabId);
+  if (draggedIndex === -1) {
+    return null;
+  }
+
+  const shells = Array.from(sourceTabsEl.querySelectorAll<HTMLElement>("[data-source-tab-shell-id]"));
+  const remainingShells = shells.filter((shell) => shell.dataset.sourceTabShellId !== draggedSourceTabId);
+  if (remainingShells.length === 0) {
+    return null;
+  }
+
+  let insertIndex = remainingShells.length;
+  let nonDraggedTabsBefore = 0;
+
+  for (const shell of shells) {
+    const rect = shell.getBoundingClientRect();
+    if (clientX < rect.left + rect.width / 2) {
+      insertIndex = nonDraggedTabsBefore;
+      break;
+    }
+
+    if (shell.dataset.sourceTabShellId !== draggedSourceTabId) {
+      nonDraggedTabsBefore += 1;
+    }
+  }
+
+  return {
+    insertIndex,
+    markerX: sourceTabDropMarkerX(remainingShells, insertIndex),
+    isNoop: insertIndex === draggedIndex,
+  };
+}
+
+function sourceTabDropMarkerX(remainingShells: HTMLElement[], insertIndex: number): number {
+  const stripRect = sourceTabsEl.getBoundingClientRect();
+  const boundedIndex = Math.min(Math.max(insertIndex, 0), remainingShells.length);
+  const markerClientX = boundedIndex === remainingShells.length
+    ? remainingShells[remainingShells.length - 1].getBoundingClientRect().right
+    : remainingShells[boundedIndex].getBoundingClientRect().left;
+  return snapCssPixel(markerClientX - stripRect.left + sourceTabsEl.scrollLeft);
+}
+
+function snapCssPixel(value: number): number {
+  const ratio = window.devicePixelRatio || 1;
+  return Math.round(value * ratio) / ratio;
+}
+
+function devicePixelWidth(pixelCount: number): string {
+  const ratio = window.devicePixelRatio || 1;
+  return `${pixelCount / ratio}px`;
+}
+
+function renderSourceTabSeparators(tabList: HTMLElement = sourceTabsEl): void {
+  tabList.style.setProperty("--tab-hairline-width", devicePixelWidth(1));
+  tabList.closest<HTMLElement>(".source-tabs-bar")?.style.setProperty("--tab-hairline-width", devicePixelWidth(1));
+  tabList.querySelectorAll("[data-source-tab-separator]").forEach((separator) => {
+    separator.remove();
+  });
+
+  const shells = Array.from(tabList.querySelectorAll<HTMLElement>(".source-tab-shell"));
+  if (shells.length < 2) {
+    const onlyShell = shells[0];
+    if (onlyShell) {
+      const stripRect = tabList.getBoundingClientRect();
+      const fragment = document.createDocumentFragment();
+      fragment.append(sourceTabSeparatorAt(onlyShell.getBoundingClientRect().right, stripRect, tabList));
+      tabList.append(fragment);
+    }
+    return;
+  }
+
+  const stripRect = tabList.getBoundingClientRect();
+  const fragment = document.createDocumentFragment();
+
+  for (let index = 1; index < shells.length; index += 1) {
+    const shell = shells[index];
+    fragment.append(sourceTabSeparatorAt(shell.getBoundingClientRect().left, stripRect, tabList));
+  }
+
+  const lastShell = shells[shells.length - 1];
+  fragment.append(sourceTabSeparatorAt(lastShell.getBoundingClientRect().right, stripRect, tabList));
+
+  tabList.append(fragment);
+}
+
+function sourceTabSeparatorAt(clientX: number, stripRect: DOMRect, tabList: HTMLElement): HTMLSpanElement {
+  const separator = document.createElement("span");
+  separator.className = "source-tab-separator";
+  separator.dataset.sourceTabSeparator = "true";
+  separator.setAttribute("aria-hidden", "true");
+  separator.style.left = `${snapCssPixel(clientX - stripRect.left + tabList.scrollLeft)}px`;
+  separator.style.width = devicePixelWidth(1);
+  return separator;
+}
+
+function renderSourceTabDropSlot(slot: SourceTabDropSlot): void {
+  if (slot.isNoop) {
+    clearSourceTabDropMarker();
+    return;
+  }
+
+  sourceTabsEl.classList.add("source-tabs-drop-active");
+  sourceTabsEl.style.setProperty("--source-tab-drop-x", `${slot.markerX}px`);
+  sourceTabsEl.style.setProperty("--source-tab-drop-width", devicePixelWidth(2));
+  sourceTabsEl.style.setProperty("--source-tab-drop-offset", `-${devicePixelWidth(1)}`);
+}
+
+function clearSourceTabDropMarker(): void {
+  sourceTabsEl.classList.remove("source-tabs-drop-active");
+  sourceTabsEl.style.removeProperty("--source-tab-drop-x");
+  sourceTabsEl.style.removeProperty("--source-tab-drop-width");
+  sourceTabsEl.style.removeProperty("--source-tab-drop-offset");
+}
+
+function transparentDragImage(): HTMLElement {
+  const existing = document.querySelector<HTMLElement>("[data-transparent-drag-image]");
+  if (existing) {
+    return existing;
+  }
+
+  const image = document.createElement("div");
+  image.dataset.transparentDragImage = "true";
+  image.style.position = "fixed";
+  image.style.top = "-1px";
+  image.style.left = "-1px";
+  image.style.width = "1px";
+  image.style.height = "1px";
+  image.style.opacity = "0";
+  image.style.pointerEvents = "none";
+  document.body.append(image);
+  return image;
+}
+
+function moveSourceTab(draggedTabId: string, insertIndex: number): void {
+  const draggedIndex = sourceTabs.findIndex((tab) => tab.id === draggedTabId);
+  if (draggedIndex === -1) {
+    return;
+  }
+
+  syncActiveSourceTab();
+  const nextTabs = [...sourceTabs];
+  const [draggedTab] = nextTabs.splice(draggedIndex, 1);
+  const boundedInsertIndex = Math.min(Math.max(insertIndex, 0), nextTabs.length);
+  nextTabs.splice(boundedInsertIndex, 0, draggedTab);
+  if (sameStringList(nextTabs.map((tab) => tab.id), sourceTabs.map((tab) => tab.id))) {
+    return;
+  }
+
+  sourceTabs = nextTabs;
+  renderSourceTabs();
+  scheduleSaveSourceTabs();
+  sessionCapture.track("source_tab_moved", {
+    tabId: draggedTabId,
+    fromIndex: draggedIndex,
+    toIndex: boundedInsertIndex,
+  }, true);
+}
+
+function clearSourceTabDragState(): void {
+  draggedSourceTabId = null;
+  sourceTabsEl.classList.remove("source-tabs-dragging");
+  clearSourceTabDropMarker();
+  sourceTabsEl.querySelectorAll(".source-tab-shell-dragging").forEach((element) => {
+    element.classList.remove("source-tab-shell-dragging");
+  });
 }
 
 function closeSourceTab(tabId: string): void {
@@ -2371,7 +2621,12 @@ function renderSourceTabs(): void {
   sourceTabsEl.innerHTML = sourceTabs.map((tab) => {
     const selected = tab.id === activeSourceTabId;
     const compiling = getCompilationState(tab.id).status === "compiling";
-    return `<div class="source-tab-shell" role="presentation">
+    return `<div
+      class="source-tab-shell"
+      role="presentation"
+      draggable="true"
+      data-source-tab-shell-id="${escapeHtml(tab.id)}"
+    >
       <button
         class="source-tab${selected ? " active" : ""}${compiling ? " source-tab-compiling" : ""}"
         type="button"
@@ -2399,6 +2654,7 @@ function renderSourceTabs(): void {
       >&times;</button>
     </div>`;
   }).join("");
+  renderSourceTabSeparators();
 }
 
 function updateEditorAvailability(): void {
@@ -4449,6 +4705,7 @@ function renderRunTabs(): void {
     shell.append(button, close);
     toolTabsList.append(shell);
   }
+  renderSourceTabSeparators(toolTabsList);
 
   const activeIds = new Set(runTabs.map((tab) => tab.id));
   for (const panel of Array.from(toolPanels.querySelectorAll<HTMLElement>("[data-run-panel-id]"))) {
