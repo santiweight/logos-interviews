@@ -77,9 +77,11 @@ textarea:disabled {
   overflow: hidden;
   background-color: var(--canvas);
   padding: 0;
+  transition: grid-template-columns 160ms ease;
 }
 
 .app-sidebar {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -97,6 +99,37 @@ textarea:disabled {
   border-bottom: 1px solid var(--border);
   color: var(--accent);
   padding: 0 12px;
+}
+
+.sidebar-collapse-button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  margin-left: auto;
+  padding: 0;
+}
+
+.sidebar-collapse-button:hover {
+  background: var(--paper-pressed);
+  color: var(--accent);
+}
+
+.sidebar-toggle-icon {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  transition: transform 160ms ease;
 }
 
 .app-nav {
@@ -294,11 +327,63 @@ textarea:disabled {
 }
 
 .logos-wordmark {
-  display: block;
+  display: flex;
+  min-width: 0;
   font-size: 1.34rem;
   font-weight: 540;
   line-height: 1;
   letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.logos-name {
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+@media (min-width: 1081px) {
+  .app-frame.sidebar-collapsed {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  .app-frame.sidebar-collapsed .app-sidebar-brand {
+    justify-content: center;
+    padding: 0 6px;
+  }
+
+  .app-frame.sidebar-collapsed .logos-name,
+  .app-frame.sidebar-collapsed .app-nav-item span,
+  .app-frame.sidebar-collapsed .sidebar-menu-label {
+    display: none;
+  }
+
+  .app-frame.sidebar-collapsed .sidebar-collapse-button {
+    position: absolute;
+    top: 54px;
+    left: 50%;
+    width: 24px;
+    height: 24px;
+    flex-basis: 24px;
+    margin-left: 0;
+    transform: translateX(-50%);
+  }
+
+  .app-frame.sidebar-collapsed .sidebar-toggle-icon {
+    transform: rotate(180deg);
+  }
+
+  .app-frame.sidebar-collapsed .app-nav {
+    padding: 44px 6px 8px;
+  }
+
+  .app-frame.sidebar-collapsed .app-nav-item {
+    display: none;
+  }
+
+  .app-frame.sidebar-collapsed .sidebar-menu-trigger {
+    justify-content: center;
+    padding: 0;
+  }
 }
 
 .sample-menu,
@@ -1471,6 +1556,7 @@ h2 {
 .source-tab:focus-visible,
 .source-tab-close:focus-visible,
 .feedback-button:focus-visible,
+.sidebar-collapse-button:focus-visible,
 .code-run-resize-handle:focus-visible,
 .run-button:focus-visible,
 .secondary-button:focus-visible,
@@ -1601,6 +1687,10 @@ h2 {
 
   .app-sidebar-brand {
     flex-basis: 36px;
+  }
+
+  .sidebar-collapse-button {
+    display: none;
   }
 
   .app-nav {
