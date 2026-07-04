@@ -41,16 +41,12 @@ import {
   definitionReadiness,
   definitionReadinessFromImplementation,
   hashCompletionInput,
-  indentNaturalReplacement,
-  implementationBlockForTarget,
-  implementationForIncompleteSnippet,
   implementationMatchForIncompleteSnippet,
   implementationMatchForTarget,
   implementationTargetAtLine,
   parse,
   runnables,
   selectionContextAtPosition,
-  splitNaturalReplacement,
   type DefinitionReadiness,
   type IncompleteSnippet,
   type ImplementationTarget,
@@ -59,7 +55,7 @@ import {
   UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
 } from "./codeSheet";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
-import { snippetPopupTargetForClick } from "./snippetHitTest";
+import { snippetPopupTargetForClick, snippetTargetContainsPosition } from "./snippetHitTest";
 import {
   defaultProjectIds,
   samples,
@@ -546,22 +542,9 @@ app.innerHTML = `
             <div class="code-feedback-overlay">
               ${renderFeedbackControls("code", { includeShare: true })}
             </div>
-            <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview" aria-hidden="true" hidden>
-              <div
-                id="snippet-resize-handle"
-                class="snippet-resize-handle"
-                role="separator"
-                aria-orientation="horizontal"
-                aria-label="Resize incomplete implementation panel"
-                tabindex="0"
-              ></div>
-              <header id="snippet-panel-header" class="snippet-panel-header">
-                <span id="snippet-status-indicator" class="snippet-status-indicator" aria-hidden="true"></span>
-                <h2 id="snippet-title">Compilation View</h2>
-                ${renderFeedbackControls("compilation")}
-              </header>
-              <div id="snippet-preview" class="snippet-preview" aria-label="Compilation preview"></div>
-            </section>
+            <div id="editor-context-menu" class="editor-context-menu" hidden>
+              <button id="view-implementation-action" class="editor-context-menu-item" type="button">View implementation</button>
+            </div>
           </section>
 
           <div
@@ -617,12 +600,8 @@ const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const implementationViewTab = requiredQuery<HTMLButtonElement>("#implementation-view-tab");
 const implementationViewPanel = requiredQuery<HTMLDivElement>("#implementation-view-panel");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
-const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
-const snippetPanelHeader = requiredQuery<HTMLElement>("#snippet-panel-header");
-const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
-const snippetStatusIndicator = requiredQuery<HTMLSpanElement>("#snippet-status-indicator");
-const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
-const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
+const editorContextMenu = requiredQuery<HTMLDivElement>("#editor-context-menu");
+const viewImplementationAction = requiredQuery<HTMLButtonElement>("#view-implementation-action");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
@@ -661,10 +640,8 @@ let selectedSnippetHash: SnippetHash | null = null;
 let snippetGuideHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
 let selectedWholeFileImplementation = false;
-let snippetPopupPinned = false;
-let snippetPopupDragging = false;
-let snippetPopupHoveringPanel = false;
-let snippetPopupCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let contextMenuTarget: { kind: "snippet"; snippet: IncompleteSnippetTarget } | { kind: "implementation"; target: ImplementationTarget } | { kind: "whole-file"; lineNumber: number } | null = null;
+let naturalSnippetEditorMode: "python" | "natural" = "python";
 let latestImplementationSource = seedImplementation;
 let runTabs: RunTab[] = [];
 const implementationToolTabId = "implementation-view";
@@ -728,7 +705,6 @@ type SnippetPreviewState = {
   status: "stub" | "generating" | "cached" | "complete";
 };
 
-type SnippetPanelStatus = SnippetPreviewState["status"] | null;
 
 type SheetId = string;
 type SourceFingerprint = string;
@@ -1052,7 +1028,6 @@ monaco.editor.defineTheme("interview-light", {
 });
 
 installMonacoShortcutGuard(editorEl);
-installMonacoShortcutGuard(snippetPreview);
 installMonacoShortcutGuard(implementationViewPanel);
 
 const editor = monaco.editor.create(editorEl, {
@@ -1075,40 +1050,7 @@ const editor = monaco.editor.create(editorEl, {
   lineNumbersMinChars: 0,
   lineDecorationsWidth: 8,
   folding: false,
-  matchBrackets: "never",
-  occurrencesHighlight: "off",
-  selectionHighlight: false,
-  bracketPairColorization: { enabled: false },
-  "semanticHighlighting.enabled": false,
-  guides: {
-    indentation: false,
-    highlightActiveIndentation: false,
-  },
-  padding: { top: 12, bottom: 12 },
-});
-
-const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
-  value: "",
-  language: logosTypeScriptLanguageId,
-  theme: "interview-light",
-  automaticLayout: true,
-  fontFamily:
-    '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
-  fontSize: 14,
-  lineHeight: 22,
-  minimap: { enabled: false },
-  overviewRulerLanes: 0,
-  scrollBeyondLastLine: false,
-  renderLineHighlight: "none",
-  tabSize: 2,
-  insertSpaces: true,
-  glyphMargin: true,
-  lineNumbers: "off",
-  lineNumbersMinChars: 0,
-  lineDecorationsWidth: 8,
-  folding: false,
-  readOnly: true,
-  domReadOnly: true,
+  contextmenu: false,
   matchBrackets: "never",
   occurrencesHighlight: "off",
   selectionHighlight: false,
@@ -1156,7 +1098,6 @@ const implementationViewEditor = monaco.editor.create(implementationViewPanel, {
 });
 
 attachBlockIndentGuideOverlay(editor);
-attachBlockIndentGuideOverlay(snippetPreviewEditor);
 attachBlockIndentGuideOverlay(implementationViewEditor);
 installEditorTypingAssist(editor);
 
@@ -1179,35 +1120,35 @@ editor.onDidChangeModelContent(() => {
   scheduleEditorCapture();
 });
 
-editor.onMouseMove((event) => {
-  if (activeToolTabId === implementationToolTabId) {
-    hideSnippetPopup();
-    return;
-  }
-
-  if (snippetPopupPinned || snippetPopupHoveringPanel || snippetPopupDragging) {
-    return;
-  }
-
-  const position = event.target.position;
-  if (!position) {
-    hideSnippetPopup();
-    return;
-  }
-
-  const target = exactIncompleteSnippetForPosition(position.lineNumber, position.column);
-  if (!target || target.kind === "natural") {
-    hideSnippetPopup();
-    return;
-  }
-
-  showSnippetPopupForTarget(target, editorMouseClientPoint(event));
+editor.onDidChangeCursorPosition(() => {
+  updateNaturalSnippetEditorMode();
 });
 
-editor.onMouseLeave(() => {
-  if (!snippetPopupPinned) {
-    scheduleSnippetPopupClose();
+editorEl.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  const editorPosition = editor.getTargetAtClientPoint(event.clientX, event.clientY);
+  const lineNumber = editorPosition?.position?.lineNumber;
+  if (lineNumber === undefined) {
+    return;
   }
+
+  const column = editorPosition?.position?.column ?? 1;
+  const context = selectionContextAtPosition(editor.getValue(), lineNumber, column);
+
+  if (context.kind === "snippet") {
+    const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
+    if (incompleteSnippet) {
+      contextMenuTarget = { kind: "snippet", snippet: incompleteSnippet };
+    } else {
+      contextMenuTarget = { kind: "whole-file", lineNumber };
+    }
+  } else if (context.kind === "implementation") {
+    contextMenuTarget = { kind: "implementation", target: context.target };
+  } else {
+    contextMenuTarget = { kind: "whole-file", lineNumber };
+  }
+
+  showEditorContextMenu(event.clientX, event.clientY);
 });
 
 editor.onMouseDown((event) => {
@@ -1221,19 +1162,8 @@ editor.onMouseDown((event) => {
       const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
       if (incompleteSnippet) {
         selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
-        if (incompleteSnippet.kind === "natural") {
-          hideSnippetPopup();
-          if (activeToolTabId === implementationToolTabId) {
-            revealImplementationForSnippet(incompleteSnippet);
-          }
-          return;
-        }
         if (activeToolTabId === implementationToolTabId) {
-          hideSnippetPopup();
           revealImplementationForSnippet(incompleteSnippet);
-        } else {
-          snippetPopupPinned = true;
-          showSnippetPopupForTarget(incompleteSnippet, editorMouseClientPoint(event));
         }
         clearEditorSelectionAt(lineNumber, column);
         return;
@@ -1241,7 +1171,6 @@ editor.onMouseDown((event) => {
     }
 
     if (context.kind === "implementation") {
-      hideSnippetPopup();
       selectDefinitionImplementation(context.target);
       if (activeToolTabId === implementationToolTabId) {
         revealImplementationForDefinition(context.target);
@@ -1249,7 +1178,6 @@ editor.onMouseDown((event) => {
       return;
     }
 
-    hideSnippetPopup();
     selectWholeFileImplementation(lineNumber);
     return;
   }
@@ -1390,36 +1318,37 @@ codeRunResizeHandle.addEventListener("keydown", (event) => {
 });
 toolPanels.addEventListener("submit", (event) => {
   event.preventDefault();
-});
-snippetResizeHandle.addEventListener("pointerdown", (event) => {
-  beginSnippetPanelResize(event);
-});
-snippetResizeHandle.addEventListener("keydown", (event) => {
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) {
     return;
   }
 
-  event.preventDefault();
-  const currentHeight = snippetPanel.getBoundingClientRect().height;
-  setSnippetPanelHeight(currentHeight + (event.key === "ArrowUp" ? 24 : -24));
+  sendTerminalInput(form.dataset.runInputFormId ?? "");
 });
-snippetPanel.addEventListener("pointerenter", () => {
-  snippetPopupHoveringPanel = true;
-  clearSnippetPopupCloseTimer();
-});
-snippetPanel.addEventListener("pointerleave", () => {
-  snippetPopupHoveringPanel = false;
-  if (!snippetPopupPinned && !snippetPopupDragging) {
-    scheduleSnippetPopupClose();
+viewImplementationAction.addEventListener("click", () => {
+  hideEditorContextMenu();
+  if (!contextMenuTarget) {
+    return;
   }
-});
-snippetPanelHeader.addEventListener("pointerdown", (event) => {
-  beginSnippetPopupDrag(event);
+
+  if (contextMenuTarget.kind === "snippet") {
+    selectIncompleteSnippet(contextMenuTarget.snippet.hash, "context_menu");
+    setActiveTab(implementationToolTabId);
+    revealImplementationForSnippet(contextMenuTarget.snippet);
+  } else if (contextMenuTarget.kind === "implementation") {
+    selectDefinitionImplementation(contextMenuTarget.target);
+    setActiveTab(implementationToolTabId);
+    revealImplementationForDefinition(contextMenuTarget.target);
+  } else {
+    selectWholeFileImplementation(contextMenuTarget.lineNumber);
+    setActiveTab(implementationToolTabId);
+  }
+
+  contextMenuTarget = null;
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && snippetPopupPinned) {
-    snippetPopupPinned = false;
-    hideSnippetPopup();
+  if (event.key === "Escape" && !editorContextMenu.hidden) {
+    hideEditorContextMenu();
     event.preventDefault();
     return;
   }
@@ -1444,17 +1373,16 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("pointerdown", (event) => {
   closeMenusOnOutsidePointerDown(event);
 
-  if (!snippetPopupPinned) {
+  if (editorContextMenu.hidden) {
     return;
   }
 
   const target = event.target instanceof Node ? event.target : null;
-  if (target && (snippetPanel.contains(target) || editorEl.contains(target))) {
+  if (target && editorContextMenu.contains(target)) {
     return;
   }
 
-  snippetPopupPinned = false;
-  hideSnippetPopup();
+  hideEditorContextMenu();
 });
 scratchFileButton.addEventListener("click", () => {
   openScratchFile();
@@ -1603,7 +1531,6 @@ function setSidebarCollapsed(collapsed: boolean, options: { persist?: boolean } 
 
   requestAnimationFrame(() => {
     editor.layout();
-    snippetPreviewEditor.layout();
     implementationViewEditor.layout();
     updateShellResizeHandles();
   });
@@ -1630,7 +1557,6 @@ function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}
   if (pageId === "editor") {
     requestAnimationFrame(() => {
       editor.layout();
-      snippetPreviewEditor.layout();
       implementationViewEditor.layout();
       updateShellResizeHandles();
     });
@@ -1956,7 +1882,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   rememberActiveCompilationImplementation(result.implementation, source);
-  renderSnippetPanel();
   if (result.kind === "react") {
     currentTab.renderMode = "react";
     currentTab.reactRunId = result.runId;
@@ -2459,7 +2384,7 @@ function renderCompilationState(state: CompilationState): void {
   refreshIncompleteSnippets(active.source);
   updateTypeCheckMarkers(latestTypeCheckDiagnostics);
   updateReadinessDecorations(latestReadinessDefinitions);
-  renderSnippetPanel();
+
 }
 
 function clearVisibleCompilationState(): void {
@@ -2477,7 +2402,7 @@ function clearVisibleCompilationState(): void {
   updateReadinessDecorations([]);
   updateIncompleteSnippetDecorations();
   updateSelectedDefinitionDecorations();
-  renderSnippetPanel();
+
 }
 
 function rememberActiveCompilationImplementation(implementation: string, source: string): void {
@@ -3158,7 +3083,7 @@ function refreshIncompleteSnippets(source: string): void {
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
+  updateNaturalSnippetEditorMode();
 }
 
 function incompleteSnippetTargetsForSource(source: string): IncompleteSnippetTarget[] {
@@ -3183,7 +3108,7 @@ function incompleteSnippetTargetsForSource(source: string): IncompleteSnippetTar
   }
 }
 
-function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "auto"): void {
+function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "context_menu" | "auto"): void {
   if (!incompleteSnippetByHash.has(hash)) {
     return;
   }
@@ -3194,7 +3119,7 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
+
   sessionCapture.track("incomplete_snippet_selected", {
     hash,
     source,
@@ -3209,7 +3134,7 @@ function selectDefinitionImplementation(target: ImplementationTarget): void {
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
+
   sessionCapture.track("definition_implementation_selected", {
     kind: target.kind,
     name: target.name,
@@ -3224,7 +3149,7 @@ function selectWholeFileImplementation(lineNumber: number): void {
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
+
   sessionCapture.track("whole_file_implementation_selected", {
     line: lineNumber,
   }, true);
@@ -3476,69 +3401,19 @@ function implementationOffsetRangeToMonacoRange(
   );
 }
 
-function renderSnippetPanel(): void {
-  if (selectedDefinitionTarget !== null) {
-    const text =
-      directPreviewForDefinitionTarget(selectedDefinitionTarget) ??
-      implementationBlockForTarget(previewImplementationSource(), selectedDefinitionTarget) ??
-      implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
-      selectedDefinitionTarget.source;
-
-    setSnippetPanelTitle(
-      selectedDefinitionTarget.name,
-      definitionPanelStatus(selectedDefinitionTarget),
-    );
-    setSnippetPreviewSource(text);
-    return;
-  }
-
-  if (selectedWholeFileImplementation) {
-    setSnippetPanelTitle("Whole file", null);
-    setSnippetPreviewSource(previewImplementationSource());
-    return;
-  }
-
-  const target = selectedSnippetHash === null
-    ? null
-    : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
-
-  if (!target) {
-    setSnippetPanelTitle(null, null);
-    setSnippetPreviewSource("");
-    return;
-  }
-
-  const preview = snippetPreviewByHash.get(target.hash);
-  const inferredImplementation = preview?.implementation === undefined || preview.implementation === null
-    ? inferredImplementationForSnippet(target)
-    : null;
-  const text =
-    preview?.implementation ??
-    (preview?.streamed.length ? preview.streamed : null) ??
-    inferredImplementation ??
-    preview?.snippet ??
-    target.snippet;
-
-  setSnippetPanelTitle(target.label, snippetPanelStatus(preview));
-  setSnippetPreviewSource(text);
+function showEditorContextMenu(x: number, y: number): void {
+  const menuWidth = 180;
+  const menuHeight = 32;
+  const left = Math.min(x, window.innerWidth - menuWidth - 8);
+  const top = Math.min(y, window.innerHeight - menuHeight - 8);
+  editorContextMenu.style.left = `${Math.round(left)}px`;
+  editorContextMenu.style.top = `${Math.round(top)}px`;
+  editorContextMenu.hidden = false;
 }
 
-function showSnippetPopupForTarget(target: IncompleteSnippetTarget, point: { x: number; y: number }): void {
-  clearSnippetPopupCloseTimer();
-  selectedDefinitionTarget = null;
-  selectedWholeFileImplementation = false;
-  selectedSnippetHash = target.hash;
-  snippetGuideHash = target.hash;
-  updateSelectedDefinitionDecorations();
-  updateIncompleteSnippetDecorations();
-  renderSnippetPanel();
-  positionSnippetPopup(point);
-  snippetPanel.hidden = false;
-  snippetPanel.setAttribute("aria-hidden", "false");
-  snippetPanel.classList.add("snippet-panel-open");
-  requestAnimationFrame(() => {
-    snippetPreviewEditor.layout();
-  });
+function hideEditorContextMenu(): void {
+  editorContextMenu.hidden = true;
+  contextMenuTarget = null;
 }
 
 function clearEditorSelectionAt(lineNumber: number, column: number): void {
@@ -3547,252 +3422,6 @@ function clearEditorSelectionAt(lineNumber: number, column: number): void {
   });
 }
 
-function hideSnippetPopup(): void {
-  clearSnippetPopupCloseTimer();
-  snippetPopupHoveringPanel = false;
-  snippetPopupDragging = false;
-  snippetGuideHash = null;
-  updateIncompleteSnippetDecorations();
-  snippetPanel.classList.remove("snippet-panel-open");
-  snippetPanel.hidden = true;
-  snippetPanel.setAttribute("aria-hidden", "true");
-}
-
-function positionSnippetPopup(point: { x: number; y: number }): void {
-  const width = Math.min(520, window.innerWidth - 24);
-  const height = Math.min(360, window.innerHeight - 24);
-  const left = Math.min(Math.max(12, point.x + 14), window.innerWidth - width - 12);
-  const top = Math.min(Math.max(12, point.y + 14), window.innerHeight - height - 12);
-
-  snippetPanel.style.left = `${Math.round(left)}px`;
-  snippetPanel.style.top = `${Math.round(top)}px`;
-  snippetPanel.style.width = `${Math.round(width)}px`;
-  snippetPanel.style.height = `${Math.round(height)}px`;
-}
-
-function scheduleSnippetPopupClose(): void {
-  clearSnippetPopupCloseTimer();
-  snippetPopupCloseTimer = setTimeout(() => {
-    snippetPopupCloseTimer = null;
-    if (!snippetPopupPinned && !snippetPopupHoveringPanel && !snippetPopupDragging) {
-      hideSnippetPopup();
-    }
-  }, 120);
-}
-
-function clearSnippetPopupCloseTimer(): void {
-  if (snippetPopupCloseTimer !== null) {
-    clearTimeout(snippetPopupCloseTimer);
-    snippetPopupCloseTimer = null;
-  }
-}
-
-function beginSnippetPopupDrag(event: PointerEvent): void {
-  const target = event.target instanceof Element ? event.target : null;
-  if (target?.closest("button, select, input, textarea, a")) {
-    return;
-  }
-
-  event.preventDefault();
-  snippetPopupPinned = true;
-  snippetPopupDragging = true;
-  clearSnippetPopupCloseTimer();
-  snippetPanelHeader.setPointerCapture(event.pointerId);
-
-  const rect = snippetPanel.getBoundingClientRect();
-  const offsetX = event.clientX - rect.left;
-  const offsetY = event.clientY - rect.top;
-
-  const onPointerMove = (moveEvent: PointerEvent): void => {
-    moveSnippetPopupTo(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
-  };
-
-  const onPointerUp = (upEvent: PointerEvent): void => {
-    snippetPopupDragging = false;
-    snippetPanelHeader.releasePointerCapture(upEvent.pointerId);
-    snippetPanelHeader.removeEventListener("pointermove", onPointerMove);
-    snippetPanelHeader.removeEventListener("pointerup", onPointerUp);
-    snippetPanelHeader.removeEventListener("pointercancel", onPointerUp);
-  };
-
-  snippetPanelHeader.addEventListener("pointermove", onPointerMove);
-  snippetPanelHeader.addEventListener("pointerup", onPointerUp);
-  snippetPanelHeader.addEventListener("pointercancel", onPointerUp);
-}
-
-function moveSnippetPopupTo(left: number, top: number): void {
-  const rect = snippetPanel.getBoundingClientRect();
-  const nextLeft = Math.min(Math.max(12, left), window.innerWidth - rect.width - 12);
-  const nextTop = Math.min(Math.max(12, top), window.innerHeight - rect.height - 12);
-  snippetPanel.style.left = `${Math.round(nextLeft)}px`;
-  snippetPanel.style.top = `${Math.round(nextTop)}px`;
-}
-
-function editorMouseClientPoint(event: monaco.editor.IEditorMouseEvent): { x: number; y: number } {
-  return {
-    x: event.event.browserEvent.clientX,
-    y: event.event.browserEvent.clientY,
-  };
-}
-
-function directPreviewForDefinitionTarget(target: ImplementationTarget): string | null {
-  const snippet = Array.from(incompleteSnippetByHash.values()).find((candidate) => {
-    return candidate.kind === target.kind &&
-      candidate.label === target.name &&
-      candidate.startLine === target.line;
-  });
-
-  return snippet === undefined ? null : previewReplacementForSnippet(snippet);
-}
-
-function previewImplementationSource(): string {
-  const source = editor.getValue();
-  const lineStarts = sourceLineStartOffsets(source);
-  const imports: string[] = [];
-  const seenImports = new Set<string>();
-  const replacements = Array.from(incompleteSnippetByHash.values())
-    .map((target) => {
-      const replacement = previewReplacementForSnippet(target);
-      if (replacement === null) {
-        return null;
-      }
-
-      const start = editorPositionToOffset(lineStarts, target.startLine, target.startColumn);
-      const renderedReplacement = previewRenderedReplacement(source, start, target, replacement, imports, seenImports);
-
-      return {
-        start,
-        end: editorPositionToOffset(lineStarts, target.endLine, target.endColumn),
-        replacement: renderedReplacement,
-      };
-    })
-    .filter((item): item is { start: number; end: number; replacement: string } => item !== null)
-    .sort((left, right) => right.start - left.start);
-
-  if (replacements.length === 0) {
-    return latestImplementationSource;
-  }
-
-  let preview = source;
-  for (const replacement of replacements) {
-    preview = `${preview.slice(0, replacement.start)}${replacement.replacement}${preview.slice(replacement.end)}`;
-  }
-
-  if (imports.length > 0) {
-    preview = `${imports.join("\n")}\n\n${preview}`;
-  }
-
-  return preview;
-}
-
-function previewRenderedReplacement(
-  source: string,
-  start: number,
-  target: IncompleteSnippetTarget,
-  replacement: string,
-  imports: string[],
-  seenImports: Set<string>,
-): string {
-  if (target.kind !== "natural") {
-    return replacement;
-  }
-
-  const splitReplacement = splitNaturalReplacement(replacement);
-  for (const importLine of splitReplacement.imports) {
-    if (!seenImports.has(importLine)) {
-      seenImports.add(importLine);
-      imports.push(importLine);
-    }
-  }
-
-  return indentNaturalReplacement(splitReplacement.body, indentationBeforeOffset(source, start));
-}
-
-function indentationBeforeOffset(source: string, offset: number): string {
-  const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
-  return source.slice(lineStart, offset).match(/^\s*/)?.[0] ?? "";
-}
-
-function previewReplacementForSnippet(target: IncompleteSnippetTarget): string | null {
-  const preview = snippetPreviewByHash.get(target.hash);
-  if (!preview) {
-    return null;
-  }
-
-  return preview.implementation ??
-    (preview.streamed.length > 0 ? preview.streamed : null);
-}
-
-function inferredImplementationForSnippet(target: IncompleteSnippetTarget): string | null {
-  return implementationForIncompleteSnippet(
-    editor.getValue(),
-    previewImplementationSource(),
-    {
-      kind: target.kind,
-      line: target.startLine,
-      column: target.startColumn,
-      snippet: target.snippet,
-    },
-  );
-}
-
-function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPanelStatus {
-  if (preview?.status === "complete" || preview?.status === "cached") {
-    return preview.status;
-  }
-
-  if (preview?.status === "generating" || compilationPending) {
-    return "generating";
-  }
-
-  return null;
-}
-
-function definitionPanelStatus(target: ImplementationTarget): SnippetPanelStatus {
-  if (compilationPending) {
-    return "generating";
-  }
-
-  const matchingReadiness = latestReadinessDefinitions.filter((definition) => (
-    target.kind === "function"
-      ? definition.kind === "function" && definition.name === target.name
-      : target.kind === "method"
-      ? definition.kind === "method" && definition.name === `${target.className}.${target.name}`
-      : definition.kind === "method" && definition.name.startsWith(`${target.name}.`)
-  ));
-
-  if (matchingReadiness.length === 0) {
-    return null;
-  }
-
-  return matchingReadiness.every((definition) => definition.ready) ? "complete" : null;
-}
-
-function setSnippetPanelTitle(label: string | null, status: SnippetPanelStatus): void {
-  snippetTitle.textContent = label === null ? "Implementation" : `Implementation: ${label}`;
-  snippetTitle.title = snippetTitle.textContent;
-  snippetStatusIndicator.dataset.state = status ?? "hidden";
-  snippetStatusIndicator.title = snippetStatusTitle(status);
-}
-
-function snippetStatusTitle(status: SnippetPanelStatus): string {
-  switch (status) {
-    case "generating":
-      return "Compiling";
-    case "complete":
-    case "cached":
-      return "Ready";
-    case "stub":
-    case null:
-      return "";
-  }
-}
-
-function setSnippetPreviewSource(source: string): void {
-  if (snippetPreviewEditor.getValue() !== source) {
-    snippetPreviewEditor.setValue(source);
-  }
-}
 
 function attachBlockIndentGuideOverlay(targetEditor: monaco.editor.IStandaloneCodeEditor): void {
   const overlay = document.createElement("div");
@@ -4204,7 +3833,26 @@ function exactIncompleteSnippetForPosition(
   return snippetPopupTargetForClick(snippets, lineNumber, column, lineMaxColumn);
 }
 
+function updateNaturalSnippetEditorMode(): void {
+  const position = editor.getPosition();
+  const lineMaxColumn = position === null
+    ? undefined
+    : editor.getModel()?.getLineMaxColumn(position.lineNumber);
+  const inNaturalSnippet = position !== null && Array.from(incompleteSnippetByHash.values()).some((target) => {
+    return target.kind === "natural" &&
+      snippetTargetContainsPosition(target, position.lineNumber, position.column, lineMaxColumn);
+  });
+  const mode = inNaturalSnippet ? "natural" : "python";
 
+  if (mode === naturalSnippetEditorMode) {
+    return;
+  }
+
+  naturalSnippetEditorMode = mode;
+  editor.updateOptions({
+    matchBrackets: "never",
+  });
+}
 
 function implementationTargetForLine(
   lineNumber: number,
@@ -4270,11 +3918,6 @@ function sourceLineStartOffsets(source: string): number[] {
   }
 
   return starts;
-}
-
-function editorPositionToOffset(lineStarts: number[], line: number, column: number): number {
-  const lineStart = lineStarts[line - 1] ?? 0;
-  return lineStart + Math.max(0, column - 1);
 }
 
 function offsetToEditorPosition(lineStarts: number[], offset: number): { line: number; column: number } {
@@ -4360,34 +4003,6 @@ function setCodePaneBasis(width: number): void {
   shell.style.setProperty("--code-pane-grow", "0");
 }
 
-function beginSnippetPanelResize(event: PointerEvent): void {
-  event.preventDefault();
-  snippetResizeHandle.setPointerCapture(event.pointerId);
-
-  const startY = event.clientY;
-  const startHeight = snippetPanel.getBoundingClientRect().height;
-
-  const onPointerMove = (moveEvent: PointerEvent): void => {
-    setSnippetPanelHeight(startHeight + startY - moveEvent.clientY);
-  };
-  const onPointerUp = (): void => {
-    snippetResizeHandle.removeEventListener("pointermove", onPointerMove);
-    snippetResizeHandle.removeEventListener("pointerup", onPointerUp);
-    snippetResizeHandle.removeEventListener("pointercancel", onPointerUp);
-  };
-
-  snippetResizeHandle.addEventListener("pointermove", onPointerMove);
-  snippetResizeHandle.addEventListener("pointerup", onPointerUp);
-  snippetResizeHandle.addEventListener("pointercancel", onPointerUp);
-}
-
-function setSnippetPanelHeight(height: number): void {
-  const codePaneHeight = codePane.getBoundingClientRect().height;
-  const minHeight = 132;
-  const maxHeight = Math.max(minHeight, Math.floor(codePaneHeight * 0.72));
-  const nextHeight = Math.min(maxHeight, Math.max(minHeight, height));
-  snippetPanel.style.flexBasis = `${nextHeight}px`;
-}
 
 function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
   latestReadinessDefinitions = definitions;
@@ -4405,7 +4020,7 @@ function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
   readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
   updateRunnableDecorations(runnableStates);
   updateToolbarRunState(runnableStates);
-  renderSnippetPanel();
+
 }
 
 type ReadinessDecoration = {
@@ -5069,6 +4684,48 @@ function focusTerminalInput(runTabId: string): void {
   tab.terminal?.focus();
 }
 
+function cssEscape(value: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(value)
+    : value.replaceAll(/["\\]/g, "\\$&");
+}
+
+async function sendTerminalInput(runTabId: string): Promise<void> {
+  const tab = runTabById(runTabId);
+  if (!tab?.sessionId || tab.status?.state !== "running") {
+    return;
+  }
+
+  const inputEl = document.querySelector<HTMLInputElement>(
+    `[data-run-input-id="${cssEscape(runTabId)}"]`,
+  );
+  if (!inputEl) {
+    return;
+  }
+
+  const input = `${inputEl.value}\n`;
+  inputEl.value = "";
+  const canSend = await drainRunOutputBeforeInput(tab);
+  if (!canSend || !runTabById(runTabId)) {
+    return;
+  }
+
+  tab.terminalText += input;
+  renderRunTab(tab);
+  sessionCapture.track("run_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
+
+  try {
+    await sendInteractiveRunInputViaDevApi(tab.sessionId, input);
+  } catch (error) {
+    appendTerminalChunks(tab, [{
+      stream: "stderr",
+      text: `\n${error instanceof Error ? error.message : String(error)}\n`,
+    }]);
+    tab.status = { state: "exited", code: null, signal: null };
+    renderRunTab(tab);
+  }
+}
+
 async function sendRawTerminalInput(runTabId: string, input: string): Promise<void> {
   const tab = runTabById(runTabId);
   if (!tab?.sessionId || tab.status?.state !== "running") {
@@ -5087,6 +4744,28 @@ async function sendRawTerminalInput(runTabId: string, input: string): Promise<vo
     tab.status = { state: "exited", code: null, signal: null };
     renderRunTab(tab);
   }
+}
+
+async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
+  if (!tab.sessionId) {
+    return false;
+  }
+
+  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(() => null);
+  if (!result || !runTabById(tab.id)) {
+    return runTabById(tab.id) !== undefined;
+  }
+
+  tab.implementation = result.implementation;
+  rememberActiveCompilationImplementation(result.implementation, tab.source);
+
+  appendTerminalChunks(tab, result.chunks);
+  if (result.status.state === "running") {
+    return true;
+  }
+
+  finishInteractiveRun(tab, result.status, result.implementation);
+  return false;
 }
 
 function scheduleRunPoll(runTabId: string, delayMs: number): void {
@@ -5146,7 +4825,7 @@ async function pollRunTab(runTabId: string): Promise<void> {
 
   currentTab.implementation = result.implementation;
   rememberActiveCompilationImplementation(result.implementation, currentTab.source);
-  renderSnippetPanel();
+
   appendTerminalChunks(currentTab, result.chunks);
 
   if (result.status.state === "running") {
@@ -5192,7 +4871,6 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
   rememberActiveCompilationImplementation(result.implementation, currentTab.source);
-  renderSnippetPanel();
   if (result.kind === "react") {
     currentTab.renderMode = "react";
     currentTab.reactRunId = result.runId;
@@ -5217,7 +4895,7 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   tab.status = status;
   tab.implementation = implementation;
   rememberActiveCompilationImplementation(implementation, tab.source);
-  renderSnippetPanel();
+
   markLastRunCompleted();
   lastRunDefinitionHash = tab.sourceHash;
 
@@ -6025,7 +5703,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       setActiveCompilationSheet(null);
     }
     restoreLoadableSelection(session.compilation.selection);
-    renderSnippetPanel();
+  
 
     if (session.editor.cursor) {
       editor.setPosition(session.editor.cursor);
@@ -6363,7 +6041,7 @@ function appSnapshot(): JsonObject {
         : {
             hash: selectedSnippetHash,
             label: incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
-            preview: snippetPreviewEditor.getValue(),
+            preview: null,
           },
       activePageId,
     },

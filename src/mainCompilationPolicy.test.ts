@@ -37,12 +37,12 @@ describe("frontend compilation policy", () => {
     expect(source).not.toContain("implementationViewPanel.textContent");
   });
 
-  it("uses inferred splice matches when snippet previews have no direct implementation", async () => {
+  it("supports viewing implementations via right-click context menu", async () => {
     const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
 
-    expect(source).toContain("implementationForIncompleteSnippet");
-    expect(source).toContain("function inferredImplementationForSnippet");
-    expect(source).toContain("inferredImplementation ??");
+    expect(source).toContain('addEventListener("contextmenu"');
+    expect(source).toContain("function showEditorContextMenu");
+    expect(source).toContain("function hideEditorContextMenu");
   });
 
   it("reveals selected snippets inside the implementation view when it is active", async () => {
@@ -81,11 +81,11 @@ describe("frontend compilation policy", () => {
     expect(source).not.toContain("implementationViewEditor.focus()");
   });
 
-  it("does not show snippet hover popups while the implementation view is active", async () => {
+  it("does not use hover popups for implementation previews", async () => {
     const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
 
-    expect(source).toContain("editor.onMouseMove((event) => {");
-    expect(source).toContain("if (activeToolTabId === implementationToolTabId)");
-    expect(source).toContain("hideSnippetPopup();");
+    expect(source).not.toContain("showSnippetPopupForTarget");
+    expect(source).not.toContain("hideSnippetPopup");
+    expect(source).not.toContain("snippetPopupPinned");
   });
 });
