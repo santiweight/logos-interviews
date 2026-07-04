@@ -2233,6 +2233,28 @@ math.sqrt(5)`;
     );
   });
 
+  it("teaches interactive terminal snippets to use stdlib raw-key handling", async () => {
+    const calls: string[] = [];
+    const sheet = [
+      "def todo_cli():",
+      "  ```",
+      "  make TodoList into an interactive CLI app",
+      "  use arrows to move, n to create, x to delete, d to mark done, e to edit",
+      "  ```",
+    ].join("\n");
+
+    await completeSheet(new Map(), sheet, (prompt) => {
+      calls.push(prompt);
+      expect(prompt).toContain("For interactive terminal or CLI apps");
+      expect(prompt).toContain("termios, tty, select, sys, and ANSI escape sequences");
+      expect(prompt).toContain('"\\x1b[A" and "\\x1b[B"');
+      expect(prompt).toContain("Do not use curses, prompt_toolkit, textual, blessed, rich, colorama");
+      return 'print("todo")';
+    });
+
+    expect(calls).toHaveLength(1);
+  });
+
   it("strips logos annotations from runnable functions without snippets", async () => {
     const completed = await runCodeSheet(
       `@logos.debug.print()

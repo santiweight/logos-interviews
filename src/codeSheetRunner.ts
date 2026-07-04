@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import * as pty from "@lydell/node-pty";
+import type { IPty } from "@lydell/node-pty";
 import {
   cachedCompiledSheet,
   completeSheet,
@@ -151,47 +152,68 @@ function commitCache(target: CodeCache, source: CodeCache): void {
 }
 
 export class InteractivePythonRun {
-  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly child: IPty | null;
   private readonly chunks: RunChunk[] = [];
   private exitStatus: InteractiveRunStatus | null = null;
+  private stopSignal: NodeJS.Signals | null = null;
 
   constructor(source: string, command: string) {
-    this.child = spawn(command, ["-u", "-c", source], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    this.child.stdout.on("data", (chunk: Buffer) => {
-      this.chunks.push({ stream: "stdout", text: chunk.toString("utf8") });
-    });
-    this.child.stderr.on("data", (chunk: Buffer) => {
-      this.chunks.push({ stream: "stderr", text: chunk.toString("utf8") });
-    });
-    this.child.on("error", (error) => {
-      this.chunks.push({ stream: "stderr", text: error.message });
+    try {
+      this.child = pty.spawn(command, ["-u", "-c", source], {
+        name: "xterm-256color",
+        cols: 80,
+        rows: 24,
+        cwd: process.cwd(),
+        env: process.env,
+        encoding: "utf8",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.child = null;
+      this.chunks.push({ stream: "stderr", text: message });
       this.exitStatus = {
         state: "exited",
         code: null,
         signal: null,
-        error: error.message,
+        error: message,
       };
+      return;
+    }
+
+    this.child.onData((data) => {
+      this.chunks.push({ stream: "stdout", text: data });
     });
-    this.child.on("close", (code, signal) => {
+    this.child.onExit(({ exitCode }) => {
       this.exitStatus = {
         state: "exited",
-        code,
-        signal,
+        code: exitCode,
+        signal: this.stopSignal,
         error: this.exitStatus?.state === "exited" ? this.exitStatus.error : undefined,
       };
     });
   }
 
   writeInput(input: string): boolean {
-    if (this.exitStatus?.state === "exited" || this.child.stdin.destroyed) {
+    if (!this.child || this.exitStatus?.state === "exited") {
       return false;
     }
 
     try {
-      return this.child.stdin.write(input);
+      this.child.write(input);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  resize(cols: number, rows: number): boolean {
+    if (!this.child || this.exitStatus?.state === "exited") {
+      return false;
+    }
+
+    try {
+      this.child.resize(cols, rows);
+      return true;
     } catch {
       return false;
     }
@@ -206,10 +228,11 @@ export class InteractivePythonRun {
   }
 
   stop(): void {
-    if (this.exitStatus?.state === "exited") {
+    if (!this.child || this.exitStatus?.state === "exited") {
       return;
     }
 
+    this.stopSignal = "SIGTERM";
     this.child.kill("SIGTERM");
   }
 }

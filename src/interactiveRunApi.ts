@@ -149,6 +149,27 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     });
   }
 
+  async function handleResize(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "Method not allowed" });
+      return;
+    }
+
+    const { sessionId, cols, rows } = await readJson(req);
+    const entry = getSession(sessionId);
+    if (!entry || !isPositiveInteger(cols) || !isPositiveInteger(rows)) {
+      sendJson(res, 404, {
+        ok: false,
+        error: "Missing active run session or terminal size",
+      });
+      return;
+    }
+
+    const [, record] = entry;
+    const accepted = record.session.resize(cols, rows);
+    sendJson(res, 200, { ok: accepted });
+  }
+
   async function handleStop(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== "POST") {
       sendJson(res, 405, { ok: false, error: "Method not allowed" });
@@ -179,6 +200,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     handleStart,
     handleInput,
     handlePoll,
+    handleResize,
     handleStop,
   };
 }
@@ -201,6 +223,10 @@ function compilationMode(strategy: unknown): CompilationMode {
   }
 
   return "sequential";
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && typeof value === "number" && value > 0;
 }
 
 export type InteractiveRunWireStatus = InteractiveRunStatus;

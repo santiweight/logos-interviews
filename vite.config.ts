@@ -120,6 +120,15 @@ function anthropicCompletionPlugin() {
         }
       });
 
+      server.middlewares.use("/api/run/resize", async (req, res) => {
+        try {
+          await interactiveRunApi.handleResize(req, res);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 500, { ok: false, error: message });
+        }
+      });
+
       server.middlewares.use("/api/run/stop", async (req, res) => {
         try {
           await interactiveRunApi.handleStop(req, res);

@@ -1,6 +1,9 @@
+import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal, type IDisposable } from "@xterm/xterm";
 import {
   conf as pythonLanguageConfiguration,
   language as pythonLanguage,
@@ -26,7 +29,6 @@ import {
   type SnippetHash,
   UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
 } from "./codeSheet";
-import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import { snippetPopupTargetForClick, snippetTargetContainsPosition } from "./snippetHitTest";
 import {
@@ -603,6 +605,11 @@ type RunTab = {
   implementation: string;
   status: RunStatus | null;
   pollTimer: ReturnType<typeof setTimeout> | null;
+  terminal: Terminal | null;
+  fitAddon: FitAddon | null;
+  terminalDataDisposable: IDisposable | null;
+  terminalResizeObserver: ResizeObserver | null;
+  terminalSyncedText: string;
 };
 
 type IncompleteSnippetTarget = {
@@ -1272,15 +1279,6 @@ codeRunResizeHandle.addEventListener("keydown", (event) => {
   const currentWidth = codePane.getBoundingClientRect().width;
   setCodePaneWidth(currentWidth + (event.key === "ArrowLeft" ? -32 : 32));
 });
-toolPanels.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const form = event.target;
-  if (!(form instanceof HTMLFormElement)) {
-    return;
-  }
-
-  sendTerminalInput(form.dataset.runInputFormId ?? "");
-});
 snippetResizeHandle.addEventListener("pointerdown", (event) => {
   beginSnippetPanelResize(event);
 });
@@ -1737,6 +1735,7 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
+  fitRunTerminal(currentTab);
   appendTerminalChunks(currentTab, result.chunks);
 
   if (result.status.state === "running") {
@@ -4390,6 +4389,11 @@ function createRunTab(runnable: Runnable, source: string, sourceHash: string): R
     implementation: latestImplementationSource,
     status: { state: "running" },
     pollTimer: null,
+    terminal: null,
+    fitAddon: null,
+    terminalDataDisposable: null,
+    terminalResizeObserver: null,
+    terminalSyncedText: "",
   };
   runTabs = [...runTabs, tab];
   return tab;
@@ -4460,25 +4464,14 @@ function ensureRunPanel(tab: RunTab): void {
   panel.setAttribute("aria-labelledby", runTabButtonId(tab.id));
   panel.setAttribute("aria-live", "polite");
 
-  const output = document.createElement("span");
-  output.className = "terminal-output-text";
+  const output = document.createElement("div");
+  output.className = "terminal-output-text terminal-screen";
   output.dataset.runOutputId = tab.id;
+  output.setAttribute("aria-label", `terminal for ${tab.runnable}`);
 
-  const form = document.createElement("form");
-  form.className = "terminal-form";
-  form.dataset.runInputFormId = tab.id;
-
-  const input = document.createElement("input");
-  input.className = "terminal-input";
-  input.dataset.runInputId = tab.id;
-  input.type = "text";
-  input.autocomplete = "off";
-  input.spellcheck = false;
-  input.setAttribute("aria-label", `stdin for ${tab.runnable}`);
-
-  form.append(input);
-  panel.append(output, form);
+  panel.append(output);
   toolPanels.append(panel);
+  ensureTerminal(tab, output);
 }
 
 function renderRunTab(tab: RunTab): void {
@@ -4488,23 +4481,21 @@ function renderRunTab(tab: RunTab): void {
   }
 
   const output = panel.querySelector<HTMLElement>("[data-run-output-id]");
-  const form = panel.querySelector<HTMLFormElement>("[data-run-input-form-id]");
-  const input = panel.querySelector<HTMLInputElement>("[data-run-input-id]");
   const running = tab.status?.state === "running";
 
   panel.classList.toggle("active", activeToolTabId === tab.id);
   panel.classList.toggle("terminal-running", running);
   if (output) {
-    renderAnsiTerminalText(output, terminalDisplayText(tab));
+    ensureTerminal(tab, output);
+    syncTerminalDisplay(tab);
   }
-  if (form) {
-    form.hidden = !running;
-  }
-  if (input) {
-    input.disabled = !running;
+  if (tab.terminal) {
+    tab.terminal.options.disableStdin = !running;
   }
 
-  panel.scrollTop = panel.scrollHeight;
+  if (activeToolTabId === tab.id) {
+    requestAnimationFrame(() => fitRunTerminal(tab));
+  }
 }
 
 function renderImplementationView(): void {
@@ -4541,12 +4532,117 @@ function terminalDisplayText(tab: RunTab): string {
   return "";
 }
 
+function ensureTerminal(tab: RunTab, target: HTMLElement): void {
+  if (tab.terminal) {
+    return;
+  }
+
+  const terminal = new Terminal({
+    allowProposedApi: false,
+    convertEol: true,
+    cursorBlink: true,
+    disableStdin: tab.status?.state !== "running",
+    fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--terminal-font"),
+    fontSize: 13,
+    lineHeight: 1.18,
+    scrollback: 5000,
+    theme: {
+      background: "#fbfaf6",
+      foreground: "#07080a",
+      cursor: "#ec4e02",
+      selectionBackground: "#fee9dd",
+      black: "#07080a",
+      red: "#b3261e",
+      green: "#14843b",
+      yellow: "#9a6a00",
+      blue: "#2457c5",
+      magenta: "#8a3ffc",
+      cyan: "#007c89",
+      white: "#f1eee7",
+      brightBlack: "#5c5f66",
+      brightRed: "#d93025",
+      brightGreen: "#19b85a",
+      brightYellow: "#b7791f",
+      brightBlue: "#3467d6",
+      brightMagenta: "#a56eff",
+      brightCyan: "#0097a7",
+      brightWhite: "#fbfaf6",
+    },
+  });
+  const fitAddon = new FitAddon();
+  terminal.loadAddon(fitAddon);
+  terminal.open(target);
+
+  tab.terminal = terminal;
+  tab.fitAddon = fitAddon;
+  tab.terminalDataDisposable = terminal.onData((data) => {
+    void sendTerminalData(tab.id, data);
+  });
+  tab.terminalResizeObserver = new ResizeObserver(() => {
+    fitRunTerminal(tab);
+  });
+  tab.terminalResizeObserver.observe(target);
+
+  syncTerminalDisplay(tab);
+  requestAnimationFrame(() => fitRunTerminal(tab));
+}
+
+function fitRunTerminal(tab: RunTab): void {
+  if (!tab.terminal || !tab.fitAddon) {
+    return;
+  }
+
+  const dimensions = tab.fitAddon.proposeDimensions();
+  if (!dimensions) {
+    return;
+  }
+
+  tab.fitAddon.fit();
+  if (tab.sessionId && tab.status?.state === "running") {
+    void sendInteractiveRunResizeViaDevApi(tab.sessionId, dimensions.cols, dimensions.rows).catch(() => undefined);
+  }
+}
+
+function syncTerminalDisplay(tab: RunTab): void {
+  if (!tab.terminal) {
+    return;
+  }
+
+  const displayText = terminalDisplayText(tab);
+  if (tab.terminalSyncedText === displayText) {
+    return;
+  }
+
+  tab.terminal.reset();
+  if (displayText.length > 0) {
+    tab.terminal.write(displayText);
+  }
+  tab.terminalSyncedText = displayText;
+}
+
+function appendTerminalText(tab: RunTab, text: string): void {
+  if (text.length === 0) {
+    return;
+  }
+
+  const previousDisplay = terminalDisplayText(tab);
+  tab.terminalText += text;
+  const nextDisplay = terminalDisplayText(tab);
+  if (tab.terminal && tab.terminalSyncedText === previousDisplay) {
+    tab.terminal.write(text);
+    tab.terminalSyncedText = nextDisplay;
+    return;
+  }
+
+  syncTerminalDisplay(tab);
+}
+
 function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {
   if (chunks.length === 0) {
     return;
   }
 
-  tab.terminalText += chunks.map((chunk) => chunk.text).join("");
+  appendTerminalText(tab, chunks.map((chunk) => chunk.text).join(""));
   renderRunTab(tab);
 }
 
@@ -4556,38 +4652,15 @@ function focusTerminalInput(runTabId: string): void {
     return;
   }
 
-  const input = document.querySelector<HTMLInputElement>(
-    `[data-run-input-id="${cssEscape(runTabId)}"]`,
-  );
-  if (!input || input.disabled || input.hidden) {
-    return;
-  }
-
-  input.focus();
+  tab.terminal?.focus();
 }
 
-async function sendTerminalInput(runTabId: string): Promise<void> {
+async function sendTerminalData(runTabId: string, input: string): Promise<void> {
   const tab = runTabById(runTabId);
   if (!tab?.sessionId || tab.status?.state !== "running") {
     return;
   }
 
-  const inputEl = document.querySelector<HTMLInputElement>(
-    `[data-run-input-id="${cssEscape(runTabId)}"]`,
-  );
-  if (!inputEl) {
-    return;
-  }
-
-  const input = `${inputEl.value}\n`;
-  inputEl.value = "";
-  const canSend = await drainRunOutputBeforeInput(tab);
-  if (!canSend || !runTabById(runTabId)) {
-    return;
-  }
-
-  tab.terminalText += input;
-  renderRunTab(tab);
   sessionCapture.track("run_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
 
   try {
@@ -4600,28 +4673,6 @@ async function sendTerminalInput(runTabId: string): Promise<void> {
     tab.status = { state: "exited", code: null, signal: null };
     renderRunTab(tab);
   }
-}
-
-async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
-  if (!tab.sessionId) {
-    return false;
-  }
-
-  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(() => null);
-  if (!result || !runTabById(tab.id)) {
-    return runTabById(tab.id) !== undefined;
-  }
-
-  tab.implementation = result.implementation;
-  rememberActiveCompilationImplementation(result.implementation, tab.source);
-  renderSnippetPanel();
-  appendTerminalChunks(tab, result.chunks);
-  if (result.status.state === "running") {
-    return true;
-  }
-
-  finishInteractiveRun(tab, result.status, result.implementation);
-  return false;
 }
 
 function scheduleRunPoll(runTabId: string, delayMs: number): void {
@@ -4727,6 +4778,7 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
+  fitRunTerminal(currentTab);
   rememberActiveCompilationImplementation(result.implementation, currentTab.source);
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
@@ -4771,6 +4823,18 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   updateRunStaleness();
 }
 
+function disposeRunTabTerminal(tab: RunTab): void {
+  tab.terminalResizeObserver?.disconnect();
+  tab.terminalResizeObserver = null;
+  tab.terminalDataDisposable?.dispose();
+  tab.terminalDataDisposable = null;
+  tab.fitAddon?.dispose();
+  tab.fitAddon = null;
+  tab.terminal?.dispose();
+  tab.terminal = null;
+  tab.terminalSyncedText = "";
+}
+
 function closeRunTab(runTabId: string): void {
   const tab = runTabById(runTabId);
   if (!tab) {
@@ -4783,6 +4847,7 @@ function closeRunTab(runTabId: string): void {
   const sessionId = tab.sessionId;
   const running = tab.status?.state === "running";
   const index = runTabs.findIndex((item) => item.id === runTabId);
+  disposeRunTabTerminal(tab);
   runTabs = runTabs.filter((item) => item.id !== runTabId);
 
   if (activeToolTabId === runTabId) {
@@ -4801,6 +4866,7 @@ function closeAllRunTabs(): void {
     if (tab.pollTimer) {
       clearTimeout(tab.pollTimer);
     }
+    disposeRunTabTerminal(tab);
     if (tab.sessionId && tab.status?.state === "running") {
       void stopInteractiveRunViaDevApi(tab.sessionId).catch(() => undefined);
     }
@@ -4824,12 +4890,6 @@ function runPanelId(runTabId: string): string {
 
 function createRunTabId(runnable: Runnable): string {
   return `run-${runnable.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function cssEscape(value: string): string {
-  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
-    ? CSS.escape(value)
-    : value.replaceAll(/["\\]/g, "\\$&");
 }
 
 async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void> {
@@ -5128,6 +5188,19 @@ async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string
   }
 }
 
+async function sendInteractiveRunResizeViaDevApi(sessionId: string, cols: number, rows: number): Promise<void> {
+  const response = await fetch("/api/run/resize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, cols, rows }),
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string };
+
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(payload.error ?? "Terminal resize was not accepted");
+  }
+}
+
 async function pollInteractiveRunViaDevApi(
   sessionId: string,
 ): Promise<InteractiveRunPollResponse> {
@@ -5345,6 +5418,10 @@ function setActiveTab(tab: ToolTabId): void {
     ? tab
     : implementationToolTabId;
   renderRunTabs();
+  const activeRunTab = runTabById(activeToolTabId);
+  if (activeRunTab) {
+    requestAnimationFrame(() => fitRunTerminal(activeRunTab));
+  }
 }
 
 export function createLoadableSession(): LoadableSession {
@@ -5462,6 +5539,11 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       implementation: tab.implementation,
       status: restoredRunStatus(tab.status),
       pollTimer: null,
+      terminal: null,
+      fitAddon: null,
+      terminalDataDisposable: null,
+      terminalResizeObserver: null,
+      terminalSyncedText: "",
     }));
     activeToolTabId = session.run.activeToolTabId === implementationToolTabId
       ? implementationToolTabId

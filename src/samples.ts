@@ -140,6 +140,30 @@ export const sampleGroups: SampleGroup[] = [
   \`\`\``,
       },
       {
+        id: "todo-cli",
+        label: "Todo CLI",
+        code: `class Todo:
+  id: str
+  name: str
+  description: str
+  todo_date: date
+
+class TodoList:
+  todos: list[Todo]
+
+  def add_todo(self, todo: Todo) -> None
+  def delete_todo(self, todo_id: str) -> None
+  def set_date(self, todo_id: str, new_date: date) -> None
+  def mark_done(self, todo_id: str) -> None
+
+def todo_cli():
+  \`\`\`
+  make TodoList into an interactive CLI app
+
+  use a simple bloomberg style application with: - x -> delete - n -> create - d -> mark done - e -> edit
+  \`\`\``,
+      },
+      {
         id: "cart-promotions",
         label: "Cart promotions",
         code: `# Items are dicts with sku, category, quantity, and price_cents.
@@ -756,7 +780,7 @@ export const defaultProjectIds = [
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
     label: "Getting started",
-    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
+    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse", "todo-cli"],
   },
   {
     label: "Product workflows",
