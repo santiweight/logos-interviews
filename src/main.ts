@@ -951,6 +951,10 @@ monaco.editor.defineTheme("interview-light", {
   },
 });
 
+installMonacoShortcutGuard(editorEl);
+installMonacoShortcutGuard(snippetPreview);
+installMonacoShortcutGuard(implementationViewPanel);
+
 const editor = monaco.editor.create(editorEl, {
   value: seedCode,
   language: logosPythonLanguageId,
@@ -3953,6 +3957,36 @@ function installEditorTypingAssist(targetEditor: monaco.editor.IStandaloneCodeEd
     event.preventDefault();
     event.stopPropagation();
   });
+}
+
+function installMonacoShortcutGuard(target: HTMLElement): void {
+  target.addEventListener("keydown", (event) => {
+    if (shouldMonacoHandleKeydown(event)) {
+      return;
+    }
+
+    event.stopImmediatePropagation();
+  }, { capture: true });
+}
+
+function shouldMonacoHandleKeydown(event: KeyboardEvent): boolean {
+  if (!event.metaKey && !event.ctrlKey) {
+    return true;
+  }
+
+  if (event.ctrlKey && event.altKey && !event.metaKey) {
+    return true;
+  }
+
+  return isPrimaryModifierSlash(event);
+}
+
+function isPrimaryModifierSlash(event: KeyboardEvent): boolean {
+  return (
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    (event.key === "/" || event.code === "Slash")
+  );
 }
 
 function expandOpeningTripleBacktick(
