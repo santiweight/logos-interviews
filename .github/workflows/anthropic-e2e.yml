@@ -1,9 +1,10 @@
 name: Anthropic E2E
 
 on:
-  schedule:
-    # Weekdays at 9am, 1pm, and 5pm US/Eastern during daylight saving time.
-    - cron: "0 13,17,21 * * 1-5"
+  # Automated Anthropic evals are disabled for now to avoid API spend.
+  # schedule:
+  #   # Weekdays at 9am, 1pm, and 5pm US/Eastern during daylight saving time.
+  #   - cron: "0 13,17,21 * * 1-5"
   workflow_dispatch:
 
 concurrency:

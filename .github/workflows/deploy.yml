@@ -55,5 +55,6 @@ jobs:
       - name: Smoke dev deployment
         env:
           FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
-          SMOKE_ANTHROPIC_E2E: "true"
+          # Automated Anthropic evals are disabled for now to avoid API spend.
+          # SMOKE_ANTHROPIC_E2E: "true"
         run: ./scripts/smoke-deployment.sh "https://${FLY_APP_NAME}.fly.dev"
