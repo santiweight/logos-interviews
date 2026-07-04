@@ -28,7 +28,7 @@ import {
 } from "./codeSheet";
 import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
-import { snippetPopupTargetForClick, snippetTargetContainsPosition } from "./snippetHitTest";
+import { snippetPopupTargetForClick } from "./snippetHitTest";
 import {
   defaultProjectIds,
   samples,
@@ -575,7 +575,6 @@ let snippetPopupPinned = false;
 let snippetPopupDragging = false;
 let snippetPopupHoveringPanel = false;
 let snippetPopupCloseTimer: ReturnType<typeof setTimeout> | null = null;
-let naturalSnippetEditorMode: "python" | "natural" = "python";
 let latestImplementationSource = seedImplementation;
 let runTabs: RunTab[] = [];
 const implementationToolTabId = "implementation-view";
@@ -1079,10 +1078,6 @@ editor.onDidChangeModelContent(() => {
   scheduleEditorCapture();
 });
 
-editor.onDidChangeCursorPosition(() => {
-  updateNaturalSnippetEditorMode();
-});
-
 editor.onMouseMove((event) => {
   if (activeToolTabId === implementationToolTabId) {
     hideSnippetPopup();
@@ -1100,7 +1095,7 @@ editor.onMouseMove((event) => {
   }
 
   const target = exactIncompleteSnippetForPosition(position.lineNumber, position.column);
-  if (!target) {
+  if (!target || target.kind === "natural") {
     hideSnippetPopup();
     return;
   }
@@ -1125,6 +1120,13 @@ editor.onMouseDown((event) => {
       const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
       if (incompleteSnippet) {
         selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
+        if (incompleteSnippet.kind === "natural") {
+          hideSnippetPopup();
+          if (activeToolTabId === implementationToolTabId) {
+            revealImplementationForSnippet(incompleteSnippet);
+          }
+          return;
+        }
         if (activeToolTabId === implementationToolTabId) {
           hideSnippetPopup();
           revealImplementationForSnippet(incompleteSnippet);
@@ -3005,7 +3007,6 @@ function refreshIncompleteSnippets(source: string): void {
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  updateNaturalSnippetEditorMode();
   renderSnippetPanel();
 }
 
@@ -3098,16 +3099,14 @@ function refreshedDefinitionTarget(source: string): ImplementationTarget | null 
 
 function updateIncompleteSnippetDecorations(): void {
   const decorations = Array.from(incompleteSnippetByHash.values()).flatMap((target) => {
-    const decorationRanges = target.kind === "natural"
-      ? naturalSnippetTextRanges(target)
-      : [
-          new monaco.Range(
-            target.startLine,
-            target.startColumn,
-            target.endLine,
-            target.endColumn,
-          ),
-        ];
+    const decorationRanges = [
+      new monaco.Range(
+        target.startLine,
+        target.startColumn,
+        target.endLine,
+        target.endColumn,
+      ),
+    ];
 
     return decorationRanges.map((range) => ({
       range,
@@ -3128,56 +3127,13 @@ function updateIncompleteSnippetDecorations(): void {
 }
 
 function snippetInlineClassName(target: IncompleteSnippetTarget): string | undefined {
-  const classes = target.kind === "natural"
-    ? ["natural-snippet-inline", "natural-snippet-plain"]
-    : [];
+  const classes: string[] = [];
 
-  if (target.hash === snippetGuideHash) {
+  if (target.hash === snippetGuideHash || target.hash === selectedSnippetHash) {
     classes.push("snippet-source-inline-selected");
   }
 
   return classes.length === 0 ? undefined : classes.join(" ");
-}
-
-function naturalSnippetTextRanges(target: IncompleteSnippetTarget): monaco.Range[] {
-  const delimiterLength = target.snippet.startsWith("```") ? 3 : 1;
-  const bodyStartOffset = delimiterLength;
-  const bodyEndOffset = Math.max(bodyStartOffset, target.snippet.length - delimiterLength);
-  const body = target.snippet.slice(bodyStartOffset, bodyEndOffset);
-  const ranges: monaco.Range[] = [];
-  let lineStartOffset = bodyStartOffset;
-
-  for (const line of body.split("\n")) {
-    const leadingWhitespace = line.match(/^\s*/)?.[0].length ?? 0;
-    const trailingWhitespace = line.match(/\s*$/)?.[0].length ?? 0;
-    const startOffset = lineStartOffset + leadingWhitespace;
-    const endOffset = lineStartOffset + line.length - trailingWhitespace;
-
-    if (startOffset < endOffset) {
-      ranges.push(snippetOffsetRangeToEditorRange(target, startOffset, endOffset));
-    }
-
-    lineStartOffset += line.length + 1;
-  }
-
-  return ranges;
-}
-
-function snippetOffsetRangeToEditorRange(
-  target: IncompleteSnippetTarget,
-  startOffset: number,
-  endOffset: number,
-): monaco.Range {
-  const lineStarts = sourceLineStartOffsets(target.snippet);
-  const start = offsetToEditorPosition(lineStarts, startOffset);
-  const end = offsetToEditorPosition(lineStarts, endOffset);
-
-  return new monaco.Range(
-    target.startLine + start.line - 1,
-    start.line === 1 ? target.startColumn + start.column - 1 : start.column,
-    target.startLine + end.line - 1,
-    end.line === 1 ? target.startColumn + end.column - 1 : end.column,
-  );
 }
 
 function updateSelectedDefinitionDecorations(): void {
@@ -4185,27 +4141,6 @@ function exactIncompleteSnippetForPosition(
   const snippets = incompleteSnippetsByLine.get(lineNumber) ?? [];
   const lineMaxColumn = editor.getModel()?.getLineMaxColumn(lineNumber);
   return snippetPopupTargetForClick(snippets, lineNumber, column, lineMaxColumn);
-}
-
-function updateNaturalSnippetEditorMode(): void {
-  const position = editor.getPosition();
-  const lineMaxColumn = position === null
-    ? undefined
-    : editor.getModel()?.getLineMaxColumn(position.lineNumber);
-  const inNaturalSnippet = position !== null && Array.from(incompleteSnippetByHash.values()).some((target) => {
-    return target.kind === "natural" &&
-      snippetTargetContainsPosition(target, position.lineNumber, position.column, lineMaxColumn);
-  });
-  const mode = inNaturalSnippet ? "natural" : "python";
-
-  if (mode === naturalSnippetEditorMode) {
-    return;
-  }
-
-  naturalSnippetEditorMode = mode;
-  editor.updateOptions({
-    matchBrackets: "never",
-  });
 }
 
 function implementationTargetForLine(

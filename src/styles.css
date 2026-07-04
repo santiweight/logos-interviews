@@ -1500,25 +1500,6 @@ h2 {
   border-radius: 0 !important;
 }
 
-.monaco-editor .natural-snippet-inline {
-  border-radius: 0;
-  background-color: transparent !important;
-  cursor: pointer;
-}
-
-.monaco-editor .natural-snippet-inline.snippet-source-inline-selected {
-  background-color: #d8ecff !important;
-  border-radius: 0 !important;
-}
-
-.monaco-editor .natural-snippet-plain,
-.monaco-editor .natural-snippet-plain * {
-  color: #2676a8 !important;
-  font-style: normal !important;
-  font-weight: 400 !important;
-  text-decoration: none !important;
-}
-
 .monaco-editor .definition-implementation-line-selected {
   cursor: pointer;
   background-color: transparent !important;
