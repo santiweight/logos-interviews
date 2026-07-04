@@ -99,14 +99,6 @@ textarea:disabled {
   padding: 0 12px;
 }
 
-.app-sidebar-brand .lambda-mark {
-  font-size: 1.28rem;
-}
-
-.app-sidebar-brand .logos-wordmark {
-  color: var(--ink);
-}
-
 .app-nav {
   display: grid;
   flex: 1;

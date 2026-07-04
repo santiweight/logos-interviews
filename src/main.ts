@@ -234,7 +234,6 @@ const appPages: AppPage[] = [
 let activePageId: AppPageId = pageIdFromHash(window.location.hash) ?? "editor";
 
 const app = requiredQuery<HTMLDivElement>("#app");
-const lambdaMark = `<span class="lambda-mark" aria-hidden="true">λ</span>`;
 const plusIcon = `
   <svg class="plus-icon" viewBox="0 0 20 20" aria-hidden="true">
     <path d="M10 4.5v11M4.5 10h11" />
@@ -364,7 +363,6 @@ app.innerHTML = `
   <section class="app-frame" aria-label="Spreadsheet interview workspace">
     <aside class="app-sidebar" aria-label="Application pages">
       <div class="app-sidebar-brand">
-        ${lambdaMark}
         <span class="logos-wordmark">λogos</span>
       </div>
       <nav id="app-nav" class="app-nav" aria-label="Pages">
