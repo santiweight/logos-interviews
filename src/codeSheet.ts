@@ -2078,18 +2078,6 @@ function implementationTypeScriptFieldMatch(source: string, target: Implementati
   return { code: match.source, range: { start, end: start + match.source.length } };
 }
 
-function braceDelta(line: string): number {
-  let delta = 0;
-  for (const char of line) {
-    if (char === "{") {
-      delta += 1;
-    } else if (char === "}") {
-      delta -= 1;
-    }
-  }
-  return delta;
-}
-
 function implementationFieldMatch(source: string, target: ImplementationTarget): ImplementationSnippetMatch | null {
   const lineStarts = lineStartOffsets(source);
   const classDecl = discoverClassDecls(source.split("\n")).find((decl) => (
