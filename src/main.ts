@@ -73,7 +73,7 @@ type AppPageId =
 
 type AppPage = {
   id: AppPageId;
-  label: string;
+  title?: string;
   articlePath?: string;
 };
 
@@ -212,24 +212,12 @@ const seedCode = activeSourceTab()?.source ?? "";
 const seedImplementation = activeSourceTab()?.implementation ?? "";
 let appSettings = loadAppSettings();
 const appPages: AppPage[] = [
-  { id: "editor", label: "Logos Playground" },
-  { id: "vision", label: "Logos: The Vision", articlePath: "/articles/logos-the-vision.md" },
-  {
-    id: "alternatives",
-    label: "Why not Claude/Codex etc?",
-    articlePath: "/articles/why-not-claude-codex-etc.md",
-  },
-  {
-    id: "spec-driven",
-    label: "Why not Spec-Driven Coding?",
-    articlePath: "/articles/why-not-spec-driven-coding.md",
-  },
-  {
-    id: "technical",
-    label: "Technical: Compiling Natural Language",
-    articlePath: "/articles/technical-compiling-natural-language.md",
-  },
-  { id: "roadmap", label: "Roadmap", articlePath: "/articles/roadmap.md" },
+  { id: "editor", title: "Interactive Editor" },
+  { id: "vision", articlePath: "/articles/vision.md" },
+  { id: "alternatives", articlePath: "/articles/versus-coding-agents.md" },
+  { id: "spec-driven", articlePath: "/articles/spec-driven-coding.md" },
+  { id: "technical", articlePath: "/articles/compiling-natural-language.md" },
+  { id: "roadmap", articlePath: "/articles/roadmap.md" },
 ];
 let activePageId: AppPageId = pageIdFromHash(window.location.hash) ?? "editor";
 
@@ -265,13 +253,19 @@ const shareIcon = `
 `;
 const feedbackResetTimers = new WeakMap<HTMLElement, number>();
 const templateGroups = createTemplateGroups(sampleTemplateGroups);
-const articleHtmlByPageId = new Map<AppPageId, string>();
+type ParsedArticle = {
+  title: string | null;
+  html: string;
+};
+
+const articleByPageId = new Map<AppPageId, ParsedArticle>();
+const articleLoadByPageId = new Map<AppPageId, Promise<ParsedArticle>>();
 
 function renderAppNav(): string {
   return appPages
     .map(
       (page) => `<button class="app-nav-item" type="button" data-app-page="${page.id}" aria-current="${page.id === activePageId ? "page" : "false"}">
-        <span>${page.label}</span>
+        <span>${escapeHtml(pageDisplayTitle(page))}</span>
       </button>`,
     )
     .join("");
@@ -281,7 +275,7 @@ function renderArticlePages(): string {
   return appPages
     .filter((page) => page.id !== "editor")
     .map(
-      (page) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-label="${escapeHtml(page.label)}"${page.id === activePageId ? "" : " hidden"}>
+      (page) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-label="${escapeHtml(pageDisplayTitle(page))}"${page.id === activePageId ? "" : " hidden"}>
         <div class="info-page-inner">
           <article class="article-content" data-article-content="${page.id}" data-article-path="${escapeHtml(page.articlePath ?? "")}">
             <p class="article-loading">Loading...</p>
@@ -290,6 +284,44 @@ function renderArticlePages(): string {
       </section>`,
     )
     .join("");
+}
+
+function pageDisplayTitle(page: AppPage): string {
+  return page.title ??
+    articleByPageId.get(page.id)?.title ??
+    articlePathFallbackTitle(page.articlePath) ??
+    page.id;
+}
+
+function articlePathFallbackTitle(articlePath: string | undefined): string | null {
+  if (!articlePath) {
+    return null;
+  }
+
+  const filename = articlePath.split("/").at(-1)?.replace(/\.md$/i, "") ?? "";
+  if (!filename) {
+    return null;
+  }
+
+  return filename.split("-").map((part) => {
+    return part.length === 0 ? part : `${part[0].toUpperCase()}${part.slice(1)}`;
+  }).join(" ");
+}
+
+function refreshPageTitles(): void {
+  for (const page of appPages) {
+    const title = pageDisplayTitle(page);
+    const button = appNav.querySelector<HTMLButtonElement>(`[data-app-page="${page.id}"]`);
+    const label = button?.querySelector("span");
+    if (label) {
+      label.textContent = title;
+    }
+
+    const section = document.querySelector<HTMLElement>(`[data-page-id="${page.id}"]`);
+    if (section) {
+      section.setAttribute("aria-label", title);
+    }
+  }
 }
 
 function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
@@ -402,7 +434,7 @@ app.innerHTML = `
     </aside>
 
     <main id="page-host" class="page-host">
-      <section id="editor-page" class="app-page editor-page${activePageId === "editor" ? " active" : ""}" data-page-id="editor" aria-label="Logos Playground"${activePageId === "editor" ? "" : " hidden"}>
+      <section id="editor-page" class="app-page editor-page${activePageId === "editor" ? " active" : ""}" data-page-id="editor" aria-label="Interactive Editor"${activePageId === "editor" ? "" : " hidden"}>
         <section id="shell" class="shell">
           <section id="code-pane" class="code-pane" aria-label="Code editor panel">
             <div class="source-tabs-bar">
@@ -1401,32 +1433,79 @@ async function loadArticlePage(pageId: AppPageId): Promise<void> {
     return;
   }
 
-  const cachedHtml = articleHtmlByPageId.get(pageId);
-  if (cachedHtml) {
-    target.innerHTML = cachedHtml;
+  const cachedArticle = articleByPageId.get(pageId);
+  if (cachedArticle) {
+    target.innerHTML = cachedArticle.html;
     return;
   }
 
   target.innerHTML = `<p class="article-loading">Loading...</p>`;
 
   try {
-    const response = await fetch(page.articlePath, { cache: "no-cache" });
-    if (!response.ok) {
-      throw new Error(`Could not load ${page.articlePath}`);
-    }
-
-    const markdown = await response.text();
-    const html = markdownToHtml(markdown);
-    articleHtmlByPageId.set(pageId, html);
-    target.innerHTML = html;
+    const article = await loadArticle(page);
+    refreshPageTitles();
+    target.innerHTML = article.html;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     target.innerHTML = `<p class="article-error">${escapeHtml(message)}</p>`;
   }
 }
 
+async function loadArticle(page: AppPage): Promise<ParsedArticle> {
+  const cachedArticle = articleByPageId.get(page.id);
+  if (cachedArticle) {
+    return cachedArticle;
+  }
+
+  const cachedLoad = articleLoadByPageId.get(page.id);
+  if (cachedLoad) {
+    return cachedLoad;
+  }
+
+  const load = fetchArticle(page);
+  articleLoadByPageId.set(page.id, load);
+  try {
+    const article = await load;
+    articleByPageId.set(page.id, article);
+    return article;
+  } finally {
+    articleLoadByPageId.delete(page.id);
+  }
+}
+
+async function fetchArticle(page: AppPage): Promise<ParsedArticle> {
+  if (!page.articlePath) {
+    throw new Error(`Missing article path for ${page.id}`);
+  }
+
+  const response = await fetch(page.articlePath, { cache: "no-cache" });
+  if (!response.ok) {
+    throw new Error(`Could not load ${page.articlePath}`);
+  }
+
+  const markdown = await response.text();
+  const frontmatter = parseFrontmatter(markdown);
+  return {
+    title: frontmatter.attributes.get("title") ?? null,
+    html: markdownToHtml(markdown),
+  };
+}
+
+async function loadArticleTitles(): Promise<void> {
+  await Promise.all(appPages
+    .filter((page) => page.articlePath)
+    .map(async (page) => {
+      try {
+        await loadArticle(page);
+        refreshPageTitles();
+      } catch {
+        // The article view displays load errors when the user opens the page.
+      }
+    }));
+}
+
 function markdownToHtml(source: string): string {
-  const lines = stripFrontmatter(source).replaceAll("\r\n", "\n").split("\n");
+  const lines = parseFrontmatter(source).body.replaceAll("\r\n", "\n").split("\n");
   const html: string[] = [];
   const paragraph: string[] = [];
   let listTag: "ul" | "ol" | null = null;
@@ -1548,8 +1627,28 @@ function isClosingCodeFence(line: string, fence: MarkdownCodeFence): boolean {
   return [...trimmed].every((char) => char === fence.marker);
 }
 
-function stripFrontmatter(source: string): string {
-  return source.replace(/^---\n[\s\S]*?\n---\n?/, "");
+function parseFrontmatter(source: string): { attributes: Map<string, string>; body: string } {
+  const normalized = source.replaceAll("\r\n", "\n");
+  if (!normalized.startsWith("---\n")) {
+    return { attributes: new Map(), body: source };
+  }
+
+  const endIndex = normalized.indexOf("\n---", 4);
+  if (endIndex === -1) {
+    return { attributes: new Map(), body: source };
+  }
+
+  const rawAttributes = normalized.slice(4, endIndex).split("\n");
+  const bodyStart = normalized.startsWith("\n", endIndex + 4) ? endIndex + 5 : endIndex + 4;
+  const attributes = new Map<string, string>();
+  for (const line of rawAttributes) {
+    const match = /^([A-Za-z0-9_-]+):\s*(?:"([^"]*)"|'([^']*)'|(.+?))\s*$/.exec(line);
+    if (match) {
+      attributes.set(match[1], match[2] ?? match[3] ?? match[4] ?? "");
+    }
+  }
+
+  return { attributes, body: normalized.slice(bodyStart) };
 }
 
 function inlineMarkdown(source: string): string {
@@ -1581,6 +1680,7 @@ function pageIdFromValue(value: string | undefined): AppPageId | null {
 
 renderSourceTabs();
 setActivePage(activePageId);
+void loadArticleTitles();
 updateShellResizeHandles();
 setActiveCompilationSheet(activeSourceTabId);
 void bootWorkspace();

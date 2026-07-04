@@ -1,6 +1,5 @@
 ---
 title: "Programming Language Moats"
-status: "draft"
 ---
 
 # Abstract
