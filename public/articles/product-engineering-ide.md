@@ -1,6 +1,5 @@
 ---
 title: "Why Build a Programming Language + IDE in 2026?"
-status: "draft"
 ---
 
 # Why Build a Programming Language + IDE in 2026?

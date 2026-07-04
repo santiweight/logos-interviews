@@ -1,6 +1,5 @@
 ---
 title: "Vs. Coding Agents"
-status: "draft"
 ---
 
 # Don't Coding Agents Abstract Code Already?
