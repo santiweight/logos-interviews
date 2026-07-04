@@ -238,6 +238,8 @@ function contentType(filePath: string): string {
       return "text/javascript; charset=utf-8";
     case ".json":
       return "application/json";
+    case ".md":
+      return "text/markdown; charset=utf-8";
     case ".svg":
       return "image/svg+xml";
     case ".wasm":
