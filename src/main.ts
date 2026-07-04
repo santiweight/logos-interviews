@@ -24,6 +24,7 @@ import {
 } from "./codeSheet";
 import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
+import { snippetPopupTargetForClick, snippetTargetContainsPosition } from "./snippetHitTest";
 import {
   defaultProjectIds,
   samples,
@@ -205,7 +206,7 @@ let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
 let appSettings = loadAppSettings();
 const appPages: AppPage[] = [
-  { id: "editor", label: "Logos Editor" },
+  { id: "editor", label: "Logos Playground" },
   { id: "vision", label: "Logos: The Vision" },
   { id: "alternatives", label: "Why not Claude/Codex etc?" },
   { id: "spec-driven", label: "Why not Spec-Driven Coding?" },
@@ -381,7 +382,7 @@ app.innerHTML = `
     </aside>
 
     <main id="page-host" class="page-host">
-      <section id="editor-page" class="app-page editor-page${activePageId === "editor" ? " active" : ""}" data-page-id="editor" aria-label="Logos Editor"${activePageId === "editor" ? "" : " hidden"}>
+      <section id="editor-page" class="app-page editor-page${activePageId === "editor" ? " active" : ""}" data-page-id="editor" aria-label="Logos Playground"${activePageId === "editor" ? "" : " hidden"}>
         <section id="shell" class="shell">
           <section id="code-pane" class="code-pane" aria-label="Code editor panel">
             <div class="source-tabs-bar">
@@ -407,7 +408,7 @@ app.innerHTML = `
             <div class="code-feedback-overlay">
               ${renderFeedbackControls("code", { includeShare: true })}
             </div>
-            <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview">
+            <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview" aria-hidden="true" hidden>
               <div
                 id="snippet-resize-handle"
                 class="snippet-resize-handle"
@@ -416,7 +417,7 @@ app.innerHTML = `
                 aria-label="Resize incomplete implementation panel"
                 tabindex="0"
               ></div>
-              <header class="snippet-panel-header">
+              <header id="snippet-panel-header" class="snippet-panel-header">
                 <span id="snippet-status-indicator" class="snippet-status-indicator" aria-hidden="true"></span>
                 <h2 id="snippet-title">Compilation View</h2>
                 ${renderFeedbackControls("compilation")}
@@ -463,6 +464,7 @@ const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
+const snippetPanelHeader = requiredQuery<HTMLElement>("#snippet-panel-header");
 const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
 const snippetStatusIndicator = requiredQuery<HTMLSpanElement>("#snippet-status-indicator");
 const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
@@ -500,8 +502,13 @@ let incompleteSnippetsByLine = new Map<number, IncompleteSnippetTarget[]>();
 let incompleteSnippetByHash = new Map<SnippetHash, IncompleteSnippetTarget>();
 let snippetPreviewByHash = new Map<SnippetHash, SnippetPreviewState>();
 let selectedSnippetHash: SnippetHash | null = null;
+let snippetGuideHash: SnippetHash | null = null;
 let selectedDefinitionTarget: ImplementationTarget | null = null;
 let selectedWholeFileImplementation = false;
+let snippetPopupPinned = false;
+let snippetPopupDragging = false;
+let snippetPopupHoveringPanel = false;
+let snippetPopupCloseTimer: ReturnType<typeof setTimeout> | null = null;
 let naturalSnippetEditorMode: "python" | "natural" = "python";
 let latestImplementationSource = seedCode;
 let runTabs: RunTab[] = [];
@@ -857,7 +864,7 @@ monaco.editor.defineTheme("interview-light", {
   inherit: false,
   rules: [
     { token: "", foreground: "20242a" },
-    { token: "comment", foreground: "607fa0" },
+    { token: "comment", foreground: "6f7f68" },
     { token: "keyword", foreground: "7a5268", fontStyle: "normal" },
     { token: "identifier", foreground: "20242a" },
     { token: "number", foreground: "3f6f6a" },
@@ -873,7 +880,7 @@ monaco.editor.defineTheme("interview-light", {
     { token: "predefined", foreground: "4f677c" },
     { token: "naturalSnippet", foreground: "b74716" },
     { token: "naturalSnippet.delimiter", foreground: "9b4d2e" },
-    { token: "comment.logos-python", foreground: "607fa0" },
+    { token: "comment.logos-python", foreground: "6f7f68" },
     { token: "keyword.logos-python", foreground: "7a5268", fontStyle: "normal" },
     { token: "identifier.logos-python", foreground: "20242a" },
     { token: "number.logos-python", foreground: "3f6f6a" },
@@ -1008,6 +1015,32 @@ editor.onDidChangeCursorPosition(() => {
   updateNaturalSnippetEditorMode();
 });
 
+editor.onMouseMove((event) => {
+  if (snippetPopupPinned || snippetPopupHoveringPanel || snippetPopupDragging) {
+    return;
+  }
+
+  const position = event.target.position;
+  if (!position) {
+    hideSnippetPopup();
+    return;
+  }
+
+  const target = exactIncompleteSnippetForPosition(position.lineNumber, position.column);
+  if (!target) {
+    hideSnippetPopup();
+    return;
+  }
+
+  showSnippetPopupForTarget(target, editorMouseClientPoint(event));
+});
+
+editor.onMouseLeave(() => {
+  if (!snippetPopupPinned) {
+    scheduleSnippetPopupClose();
+  }
+});
+
 editor.onMouseDown((event) => {
   const lineNumber = event.target.position?.lineNumber;
 
@@ -1019,21 +1052,19 @@ editor.onMouseDown((event) => {
       const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
       if (incompleteSnippet) {
         selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
+        snippetPopupPinned = true;
+        showSnippetPopupForTarget(incompleteSnippet, editorMouseClientPoint(event));
         return;
       }
     }
 
     if (context.kind === "implementation") {
+      hideSnippetPopup();
       selectDefinitionImplementation(context.target);
       return;
     }
 
-    const nearbyNaturalSnippet = nearbyNaturalSnippetForLine(lineNumber);
-    if (nearbyNaturalSnippet) {
-      selectIncompleteSnippet(nearbyNaturalSnippet.hash, "editor_click");
-      return;
-    }
-
+    hideSnippetPopup();
     selectWholeFileImplementation(lineNumber);
     return;
   }
@@ -1182,7 +1213,27 @@ snippetResizeHandle.addEventListener("keydown", (event) => {
   const currentHeight = snippetPanel.getBoundingClientRect().height;
   setSnippetPanelHeight(currentHeight + (event.key === "ArrowUp" ? 24 : -24));
 });
+snippetPanel.addEventListener("pointerenter", () => {
+  snippetPopupHoveringPanel = true;
+  clearSnippetPopupCloseTimer();
+});
+snippetPanel.addEventListener("pointerleave", () => {
+  snippetPopupHoveringPanel = false;
+  if (!snippetPopupPinned && !snippetPopupDragging) {
+    scheduleSnippetPopupClose();
+  }
+});
+snippetPanelHeader.addEventListener("pointerdown", (event) => {
+  beginSnippetPopupDrag(event);
+});
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && snippetPopupPinned) {
+    snippetPopupPinned = false;
+    hideSnippetPopup();
+    event.preventDefault();
+    return;
+  }
+
   if (event.key !== "Escape" || (!sampleMenu.open && !workspaceMenu.open)) {
     return;
   }
@@ -1199,6 +1250,19 @@ document.addEventListener("keydown", (event) => {
   if (restoreFocus) {
     openMenu.querySelector<HTMLElement>("summary")?.focus();
   }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!snippetPopupPinned) {
+    return;
+  }
+
+  const target = event.target instanceof Node ? event.target : null;
+  if (target && (snippetPanel.contains(target) || editorEl.contains(target))) {
+    return;
+  }
+
+  snippetPopupPinned = false;
+  hideSnippetPopup();
 });
 scratchFileButton.addEventListener("click", () => {
   openScratchFile();
@@ -2313,30 +2377,28 @@ function refreshedDefinitionTarget(source: string): ImplementationTarget | null 
 }
 
 function updateIncompleteSnippetDecorations(): void {
-  const decorations = Array.from(incompleteSnippetByHash.values()).map((target) => {
-    const decorationRange = target.kind === "natural"
-      ? naturalSnippetBodyRange(target)
-      : new monaco.Range(
-        target.startLine,
-        target.startColumn,
-        target.endLine,
-        target.endColumn,
-      );
+  const decorations = Array.from(incompleteSnippetByHash.values()).flatMap((target) => {
+    const decorationRanges = target.kind === "natural"
+      ? naturalSnippetTextRanges(target)
+      : [
+          new monaco.Range(
+            target.startLine,
+            target.startColumn,
+            target.endLine,
+            target.endColumn,
+          ),
+        ];
 
-    return {
-      range: decorationRange,
+    return decorationRanges.map((range) => ({
+      range,
       options: {
         isWholeLine: false,
         stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         className: undefined,
         marginClassName: undefined,
-        inlineClassName: target.kind === "natural"
-          ? target.hash === selectedSnippetHash
-            ? "natural-snippet-inline natural-snippet-plain natural-snippet-inline-selected"
-            : "natural-snippet-inline natural-snippet-plain"
-          : undefined,
+        inlineClassName: snippetInlineClassName(target),
       },
-    };
+    }));
   });
 
   incompleteSnippetDecorations = editor.deltaDecorations(
@@ -2345,11 +2407,40 @@ function updateIncompleteSnippetDecorations(): void {
   );
 }
 
-function naturalSnippetBodyRange(target: IncompleteSnippetTarget): monaco.Range {
+function snippetInlineClassName(target: IncompleteSnippetTarget): string | undefined {
+  const classes = target.kind === "natural"
+    ? ["natural-snippet-inline", "natural-snippet-plain"]
+    : [];
+
+  if (target.hash === snippetGuideHash) {
+    classes.push("snippet-source-inline-selected");
+  }
+
+  return classes.length === 0 ? undefined : classes.join(" ");
+}
+
+function naturalSnippetTextRanges(target: IncompleteSnippetTarget): monaco.Range[] {
   const delimiterLength = target.snippet.startsWith("```") ? 3 : 1;
   const bodyStartOffset = delimiterLength;
   const bodyEndOffset = Math.max(bodyStartOffset, target.snippet.length - delimiterLength);
-  return snippetOffsetRangeToEditorRange(target, bodyStartOffset, bodyEndOffset);
+  const body = target.snippet.slice(bodyStartOffset, bodyEndOffset);
+  const ranges: monaco.Range[] = [];
+  let lineStartOffset = bodyStartOffset;
+
+  for (const line of body.split("\n")) {
+    const leadingWhitespace = line.match(/^\s*/)?.[0].length ?? 0;
+    const trailingWhitespace = line.match(/\s*$/)?.[0].length ?? 0;
+    const startOffset = lineStartOffset + leadingWhitespace;
+    const endOffset = lineStartOffset + line.length - trailingWhitespace;
+
+    if (startOffset < endOffset) {
+      ranges.push(snippetOffsetRangeToEditorRange(target, startOffset, endOffset));
+    }
+
+    lineStartOffset += line.length + 1;
+  }
+
+  return ranges;
 }
 
 function snippetOffsetRangeToEditorRange(
@@ -2429,6 +2520,112 @@ function renderSnippetPanel(): void {
 
   setSnippetPanelTitle(target.label, snippetPanelStatus(preview));
   setSnippetPreviewSource(text);
+}
+
+function showSnippetPopupForTarget(target: IncompleteSnippetTarget, point: { x: number; y: number }): void {
+  clearSnippetPopupCloseTimer();
+  selectedDefinitionTarget = null;
+  selectedWholeFileImplementation = false;
+  selectedSnippetHash = target.hash;
+  snippetGuideHash = target.hash;
+  updateSelectedDefinitionDecorations();
+  updateIncompleteSnippetDecorations();
+  renderSnippetPanel();
+  positionSnippetPopup(point);
+  snippetPanel.hidden = false;
+  snippetPanel.setAttribute("aria-hidden", "false");
+  snippetPanel.classList.add("snippet-panel-open");
+  requestAnimationFrame(() => {
+    snippetPreviewEditor.layout();
+  });
+}
+
+function hideSnippetPopup(): void {
+  clearSnippetPopupCloseTimer();
+  snippetPopupHoveringPanel = false;
+  snippetPopupDragging = false;
+  snippetGuideHash = null;
+  updateIncompleteSnippetDecorations();
+  snippetPanel.classList.remove("snippet-panel-open");
+  snippetPanel.hidden = true;
+  snippetPanel.setAttribute("aria-hidden", "true");
+}
+
+function positionSnippetPopup(point: { x: number; y: number }): void {
+  const width = Math.min(520, window.innerWidth - 24);
+  const height = Math.min(360, window.innerHeight - 24);
+  const left = Math.min(Math.max(12, point.x + 14), window.innerWidth - width - 12);
+  const top = Math.min(Math.max(12, point.y + 14), window.innerHeight - height - 12);
+
+  snippetPanel.style.left = `${Math.round(left)}px`;
+  snippetPanel.style.top = `${Math.round(top)}px`;
+  snippetPanel.style.width = `${Math.round(width)}px`;
+  snippetPanel.style.height = `${Math.round(height)}px`;
+}
+
+function scheduleSnippetPopupClose(): void {
+  clearSnippetPopupCloseTimer();
+  snippetPopupCloseTimer = setTimeout(() => {
+    snippetPopupCloseTimer = null;
+    if (!snippetPopupPinned && !snippetPopupHoveringPanel && !snippetPopupDragging) {
+      hideSnippetPopup();
+    }
+  }, 120);
+}
+
+function clearSnippetPopupCloseTimer(): void {
+  if (snippetPopupCloseTimer !== null) {
+    clearTimeout(snippetPopupCloseTimer);
+    snippetPopupCloseTimer = null;
+  }
+}
+
+function beginSnippetPopupDrag(event: PointerEvent): void {
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("button, select, input, textarea, a")) {
+    return;
+  }
+
+  event.preventDefault();
+  snippetPopupPinned = true;
+  snippetPopupDragging = true;
+  clearSnippetPopupCloseTimer();
+  snippetPanelHeader.setPointerCapture(event.pointerId);
+
+  const rect = snippetPanel.getBoundingClientRect();
+  const offsetX = event.clientX - rect.left;
+  const offsetY = event.clientY - rect.top;
+
+  const onPointerMove = (moveEvent: PointerEvent): void => {
+    moveSnippetPopupTo(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
+  };
+
+  const onPointerUp = (upEvent: PointerEvent): void => {
+    snippetPopupDragging = false;
+    snippetPanelHeader.releasePointerCapture(upEvent.pointerId);
+    snippetPanelHeader.removeEventListener("pointermove", onPointerMove);
+    snippetPanelHeader.removeEventListener("pointerup", onPointerUp);
+    snippetPanelHeader.removeEventListener("pointercancel", onPointerUp);
+  };
+
+  snippetPanelHeader.addEventListener("pointermove", onPointerMove);
+  snippetPanelHeader.addEventListener("pointerup", onPointerUp);
+  snippetPanelHeader.addEventListener("pointercancel", onPointerUp);
+}
+
+function moveSnippetPopupTo(left: number, top: number): void {
+  const rect = snippetPanel.getBoundingClientRect();
+  const nextLeft = Math.min(Math.max(12, left), window.innerWidth - rect.width - 12);
+  const nextTop = Math.min(Math.max(12, top), window.innerHeight - rect.height - 12);
+  snippetPanel.style.left = `${Math.round(nextLeft)}px`;
+  snippetPanel.style.top = `${Math.round(nextTop)}px`;
+}
+
+function editorMouseClientPoint(event: monaco.editor.IEditorMouseEvent): { x: number; y: number } {
+  return {
+    x: event.event.browserEvent.clientX,
+    y: event.event.browserEvent.clientY,
+  };
 }
 
 function directPreviewForDefinitionTarget(target: ImplementationTarget): string | null {
@@ -2550,7 +2747,7 @@ function definitionPanelStatus(target: ImplementationTarget): SnippetPanelStatus
 }
 
 function setSnippetPanelTitle(label: string | null, status: SnippetPanelStatus): void {
-  snippetTitle.textContent = label === null ? "Compilation View" : `Compilation View: ${label}`;
+  snippetTitle.textContent = label === null ? "Implementation" : `Implementation: ${label}`;
   snippetTitle.title = snippetTitle.textContent;
   snippetStatusIndicator.dataset.state = status ?? "hidden";
   snippetStatusIndicator.title = snippetStatusTitle(status);
@@ -3038,61 +3235,18 @@ function exactIncompleteSnippetForPosition(
   column: number,
 ): IncompleteSnippetTarget | null {
   const snippets = incompleteSnippetsByLine.get(lineNumber) ?? [];
-  return snippets.find((snippet) => targetContainsPosition(snippet, lineNumber, column)) ?? null;
-}
-
-function nearbyNaturalSnippetForLine(lineNumber: number): IncompleteSnippetTarget | null {
-  const maxContextLines = 2;
-  const definitionTarget = implementationTargetForLine(lineNumber);
-  let closest: { distance: number; target: IncompleteSnippetTarget } | null = null;
-
-  if (definitionTarget?.line === lineNumber) {
-    return null;
-  }
-
-  for (const target of incompleteSnippetByHash.values()) {
-    if (target.kind !== "natural") {
-      continue;
-    }
-
-    const distance = lineNumber < target.startLine
-      ? target.startLine - lineNumber
-      : lineNumber > target.endLine
-        ? lineNumber - target.endLine
-        : 0;
-
-    if (distance > maxContextLines) {
-      continue;
-    }
-
-    if (closest === null || distance < closest.distance) {
-      closest = { distance, target };
-    }
-  }
-
-  return closest?.target ?? null;
-}
-
-function targetContainsPosition(
-  target: IncompleteSnippetTarget,
-  lineNumber: number,
-  column: number,
-): boolean {
-  if (lineNumber < target.startLine || lineNumber > target.endLine) {
-    return false;
-  }
-
-  if (lineNumber === target.startLine && column < target.startColumn) {
-    return false;
-  }
-
-  return lineNumber !== target.endLine || column <= target.endColumn;
+  const lineMaxColumn = editor.getModel()?.getLineMaxColumn(lineNumber);
+  return snippetPopupTargetForClick(snippets, lineNumber, column, lineMaxColumn);
 }
 
 function updateNaturalSnippetEditorMode(): void {
   const position = editor.getPosition();
+  const lineMaxColumn = position === null
+    ? undefined
+    : editor.getModel()?.getLineMaxColumn(position.lineNumber);
   const inNaturalSnippet = position !== null && Array.from(incompleteSnippetByHash.values()).some((target) => {
-    return target.kind === "natural" && targetContainsPosition(target, position.lineNumber, position.column);
+    return target.kind === "natural" &&
+      snippetTargetContainsPosition(target, position.lineNumber, position.column, lineMaxColumn);
   });
   const mode = inNaturalSnippet ? "natural" : "python";
 

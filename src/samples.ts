@@ -401,33 +401,24 @@ def test():
       {
         id: "starter-arithmetic",
         label: "Intro to Logos",
-        code: `# Logos is a Programming Language that supports:
-#  - spec-level programming
-#  - natural language code
-#  - regular Python syntax
-
-# If an implementation is incomplete, Logos will define it for you.
+        code: `# Logos is a Natural Language Programming Language.
 #
-# Click \`add\` below to see its implementation.
-def add(x: int, y: int) -> int
-def mul(x: int, y: int) -> int
-
-# Click the run button to run \`main\`.
+# The following is valid code in Logos.
 #
-# Click \`main\` in the code view to see its implementation.
+# Click the green run button and see results on the right. 
+#
+# Try some edits:
+#   1. change the range to 50-100, or 100-200
+#   2. print the numbers in a formatted grid
+#   3. change the color scheme
+
 def main():
-  # Logos is compatible with regular Python
-  print("Regular Python: ", mul(add(1, 2), 3))
+  \`\`\`
+  Print all prime numbers from 1 to 50 in in a rainbow gradient
+  in a 3x3 grid.
 
-  # Or use natural langauge: Logos will compile the code for you.
-  \`print Logos: mul of (add one and two) and 3\`
-
-  # Or mix python syntax with natural language.
-  print("Mixed Logos:", mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
-
-  added = \`add 1 and 5\`
-  product = \`mul 3 and 4\`
-  \`output added + product\``,
+  The first number is red, the last is indigo
+  \`\`\``,
       },
       {
         id: "beyond-basics",
