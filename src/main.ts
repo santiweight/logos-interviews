@@ -174,6 +174,7 @@ const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
 const workspaceIdStorageKey = "logos-interviews-workspace-id";
 const appSettingsStorageKey = "logos-interviews-settings-v1";
+const sidebarCollapsedStorageKey = "logos-interviews-sidebar-collapsed";
 const experimentalCompilationStrategiesStorageKey = "logos.experimentalCompilationStrategies";
 const staleDefaultProjectIdSets = [
   [
@@ -211,6 +212,7 @@ let activeSourceTabId = initialSourceTabState.activeTabId;
 const seedCode = activeSourceTab()?.source ?? "";
 const seedImplementation = activeSourceTab()?.implementation ?? "";
 let appSettings = loadAppSettings();
+let sidebarCollapsed = loadSidebarCollapsed();
 const appPages: AppPage[] = [
   { id: "editor", title: "Interactive Editor" },
   { id: "vision", articlePath: "/articles/vision.md" },
@@ -232,6 +234,11 @@ const workspaceMenuIcon = `
     <path d="M5 7.5h10M5 12.5h10" />
     <circle cx="8" cy="7.5" r="1.4" />
     <circle cx="12" cy="12.5" r="1.4" />
+  </svg>
+`;
+const sidebarToggleIcon = `
+  <svg class="sidebar-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <path d="M12.5 5.5 8 10l4.5 4.5" />
   </svg>
 `;
 const thumbUpIcon = `
@@ -263,7 +270,7 @@ const articleLoadByPageId = new Map<AppPageId, Promise<ParsedArticle>>();
 function renderAppNav(): string {
   return appPages
     .map(
-      (page) => `<button class="app-nav-item" type="button" data-app-page="${page.id}" aria-current="${page.id === activePageId ? "page" : "false"}">
+      (page) => `<button class="app-nav-item" type="button" data-app-page="${page.id}" aria-current="${page.id === activePageId ? "page" : "false"}" aria-label="${escapeHtml(pageDisplayTitle(page))}" title="${escapeHtml(pageDisplayTitle(page))}">
         <span>${escapeHtml(pageDisplayTitle(page))}</span>
       </button>`,
     )
@@ -315,6 +322,8 @@ function refreshPageTitles(): void {
     if (label) {
       label.textContent = title;
     }
+    button?.setAttribute("title", title);
+    button?.setAttribute("aria-label", title);
 
     const section = document.querySelector<HTMLElement>(`[data-page-id="${page.id}"]`);
     if (section) {
@@ -392,10 +401,13 @@ function createTemplateGroups(groups: Array<{ label: string; sampleIds: string[]
 }
 
 app.innerHTML = `
-  <section class="app-frame" aria-label="Spreadsheet interview workspace">
+  <section class="app-frame${sidebarCollapsed ? " sidebar-collapsed" : ""}" aria-label="Spreadsheet interview workspace">
     <aside class="app-sidebar" aria-label="Application pages">
       <div class="app-sidebar-brand">
-        <span class="logos-wordmark">λogos</span>
+        <span class="logos-wordmark"><span class="logos-mark">λ</span><span class="logos-name">ogos</span></span>
+        <button id="sidebar-collapse-button" class="sidebar-collapse-button" type="button" aria-label="${sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}" aria-expanded="${sidebarCollapsed ? "false" : "true"}" title="${sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}">
+          ${sidebarToggleIcon}
+        </button>
       </div>
       <nav id="app-nav" class="app-nav" aria-label="Pages">
         ${renderAppNav()}
@@ -515,7 +527,9 @@ app.innerHTML = `
   </section>
 `;
 
+const appFrame = requiredQuery<HTMLElement>(".app-frame");
 const appNav = requiredQuery<HTMLElement>("#app-nav");
+const sidebarCollapseButton = requiredQuery<HTMLButtonElement>("#sidebar-collapse-button");
 const shell = requiredQuery<HTMLElement>("#shell");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const codePane = requiredQuery<HTMLElement>("#code-pane");
@@ -1271,6 +1285,10 @@ appNav.addEventListener("click", (event) => {
   setActivePage(pageId, { updateHash: true });
   sessionCapture.track("page_changed", { pageId }, true);
 });
+sidebarCollapseButton.addEventListener("click", () => {
+  setSidebarCollapsed(!sidebarCollapsed, { persist: true });
+  sessionCapture.track("sidebar_toggled", { collapsed: sidebarCollapsed }, true);
+});
 codeRunResizeHandle.addEventListener("pointerdown", (event) => {
   beginCodeRunResize(event);
 });
@@ -1487,6 +1505,27 @@ function closeMenusOnOutsidePointerDown(event: PointerEvent): void {
   }
 
   closeOpenMenus();
+}
+
+function setSidebarCollapsed(collapsed: boolean, options: { persist?: boolean } = {}): void {
+  sidebarCollapsed = collapsed;
+  appFrame.classList.toggle("sidebar-collapsed", collapsed);
+
+  const action = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  sidebarCollapseButton.setAttribute("aria-label", action);
+  sidebarCollapseButton.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  sidebarCollapseButton.title = action;
+
+  if (options.persist) {
+    saveSidebarCollapsed(collapsed);
+  }
+
+  requestAnimationFrame(() => {
+    editor.layout();
+    snippetPreviewEditor.layout();
+    implementationViewEditor.layout();
+    updateShellResizeHandles();
+  });
 }
 
 function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}): void {
@@ -5949,6 +5988,22 @@ function saveAppSettings(settings: AppSettings): void {
     window.localStorage.setItem(appSettingsStorageKey, JSON.stringify(settings));
   } catch (error) {
     console.error("Failed to save settings", error);
+  }
+}
+
+function loadSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(sidebarCollapsedStorageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function saveSidebarCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(sidebarCollapsedStorageKey, collapsed ? "true" : "false");
+  } catch (error) {
+    console.error("Failed to save sidebar state", error);
   }
 }
 
