@@ -2234,7 +2234,7 @@ function updateRunStaleness(source = editor.getValue()): void {
   const stale = lastRunDefinitionHash !== null && definitionHash(source) !== lastRunDefinitionHash;
 
   if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error" || runStatus.dataset.state === "stale")) {
-    runStatus.textContent = `Run is out of date · last run ${lastRunLabel}`;
+    runStatus.textContent = "Changes available: re-run";
     runStatus.dataset.state = "stale";
     return;
   }
@@ -3727,7 +3727,9 @@ function refreshLastRunStatus(): void {
   }
 
   lastRunLabel = lastRunAgeLabel();
-  lastRunStatusText = `${lastRunStatusPrefix} · last run ${lastRunLabel}`;
+  lastRunStatusText = lastRunStatusPrefix.startsWith("Ran ")
+    ? "Up to date"
+    : `${lastRunStatusPrefix} · last run ${lastRunLabel}`;
   runStatus.textContent = lastRunStatusText;
   runStatus.dataset.state = lastRunStatusState;
 }
