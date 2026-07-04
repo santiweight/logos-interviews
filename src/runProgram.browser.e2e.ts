@@ -382,6 +382,64 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("keeps Run Main disabled while Claude compilation is still in progress", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main(): void {
+  l\`print hello world\`
+}`;
+      const implementation = `function main(): void {
+  console.log("hello world");
+}`;
+      let compileRequests = 0;
+      let releaseCompile: () => void = () => undefined;
+      const compileCanFinish = new Promise<void>((resolve) => {
+        releaseCompile = resolve;
+      });
+
+      await page.route("**/api/compile", async (route) => {
+        compileRequests += 1;
+        await compileCanFinish;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: [
+            JSON.stringify({
+              kind: "compiled",
+              implementation,
+              completedSnippets: 1,
+              totalSnippets: 1,
+            }),
+            "",
+          ].join("\n"),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(page, source, implementation, "Compile Pending Hello World");
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Main" }).first();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+
+      await appendTrailingEditorSpace(page);
+      await expect.poll(() => compileRequests).toBeGreaterThan(0);
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("true");
+      await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Claude is still compiling this sheet.");
+
+      releaseCompile();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+      await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Run main");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("uses a restored TypeScript implementation to keep Run Main enabled", async () => {
     if (!browser) {
       throw new Error("Browser did not start");

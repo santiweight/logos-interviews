@@ -4569,10 +4569,11 @@ function runnableStatesFor(
 
   return runnables(source).map((runnable) => {
     const readiness = readinessByName.get(runnable.name);
+    const ready = !compilationPending && (readiness?.ready ?? true);
     return {
       name: runnable.name,
       line: runnable.line,
-      ready: readiness?.ready ?? true,
+      ready,
       blockingDependencies: readiness?.blockingDependencies ?? [],
       compiling: compilationPending,
     };
@@ -4640,7 +4641,7 @@ function createRunnableRunWidget(
   node.addEventListener("click", () => {
     if (!runnable.ready) {
       runStatus.textContent = runnable.compiling
-        ? "Dependencies still compiling"
+        ? "Claude is still compiling this sheet"
         : `${runnable.name} is blocked`;
       runStatus.dataset.state = "error";
       return;
@@ -4670,7 +4671,7 @@ function runnableDisplayName(name: string): string {
 
 function disabledRunnableHoverMessage(runnable: RunnableState): string {
   if (runnable.compiling) {
-    return "Dependencies still compiling.";
+    return "Claude is still compiling this sheet.";
   }
 
   if (runnable.blockingDependencies.length > 0) {
