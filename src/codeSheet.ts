@@ -845,6 +845,18 @@ export function implementationTargetAtLine(
       decl.line,
       decl.snippet,
     )),
+    ...discoverTypeScriptTypeBlocks(lines).map((decl) => implementationTargetFromBlock(
+      "class",
+      decl.name,
+      decl.line,
+      decl.snippet,
+    )),
+    ...discoverTypeScriptClassBlocks(lines).map((decl) => implementationTargetFromBlock(
+      "class",
+      decl.name,
+      decl.line,
+      decl.snippet,
+    )),
     ...discoverClassFieldBlocks(source).map((decl) => implementationTargetFromBlock(
       "field",
       decl.name,
@@ -852,7 +864,21 @@ export function implementationTargetAtLine(
       decl.source,
       decl.className,
     )),
+    ...discoverTypeScriptClassFieldBlocks(source).map((decl) => implementationTargetFromBlock(
+      "field",
+      decl.name,
+      decl.line,
+      decl.source,
+      decl.className,
+    )),
     ...discoverClassMethodBlocks(source).map((decl) => implementationTargetFromBlock(
+      "method",
+      decl.name,
+      decl.line,
+      decl.source,
+      decl.className,
+    )),
+    ...discoverTypeScriptClassMethodBlocks(source).map((decl) => implementationTargetFromBlock(
       "method",
       decl.name,
       decl.line,
@@ -924,7 +950,11 @@ export function implementationMatchForTarget(
 
   const lineStarts = lineStartOffsets(source);
   if (target.kind === "class") {
-    const match = discoverClassDecls(source.split("\n")).find((decl) => decl.name === target.name);
+    const match = [
+      ...discoverClassDecls(source.split("\n")),
+      ...discoverTypeScriptTypeBlocks(source.split("\n")),
+      ...discoverTypeScriptClassBlocks(source.split("\n")),
+    ].find((decl) => decl.name === target.name);
     if (!match) {
       return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
     }
@@ -934,7 +964,10 @@ export function implementationMatchForTarget(
   }
 
   if (target.kind === "method") {
-    const match = discoverClassMethodBlocks(source).find((decl) => (
+    const match = [
+      ...discoverClassMethodBlocks(source),
+      ...discoverTypeScriptClassMethodBlocks(source),
+    ].find((decl) => (
       decl.name === target.name &&
       (target.className === undefined || decl.className === target.className)
     ));
@@ -947,7 +980,7 @@ export function implementationMatchForTarget(
   }
 
   if (target.kind === "field") {
-    const match = implementationFieldMatch(source, target);
+    const match = implementationFieldMatch(source, target) ?? implementationTypeScriptFieldMatch(source, target);
     if (!match) {
       return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
     }
@@ -1826,6 +1859,165 @@ function discoverClassFieldBlocks(codeSheet: CodeSheet): FunctionDecl[] {
   }
 
   return declarations;
+}
+
+function discoverTypeScriptTypeBlocks(lines: string[]): ClassDecl[] {
+  const declarations: ClassDecl[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const start = lines[index].match(/^type\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (!start) {
+      continue;
+    }
+
+    let braceDepth = braceDelta(lines[index]);
+    let end = index + 1;
+    while (
+      end < lines.length &&
+      !(braceDepth <= 0 && lines[end - 1].trimEnd().endsWith(";"))
+    ) {
+      braceDepth += braceDelta(lines[end]);
+      end += 1;
+    }
+
+    declarations.push({
+      name: start[1],
+      line: index + 1,
+      snippet: trimTrailingBlankLines(lines.slice(index, end)).join("\n"),
+    });
+    index = Math.max(index, end - 1);
+  }
+
+  return declarations;
+}
+
+function discoverTypeScriptClassBlocks(lines: string[]): ClassDecl[] {
+  const declarations: ClassDecl[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const start = lines[index].match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)\b[^{]*\{/);
+    if (!start) {
+      continue;
+    }
+
+    let braceDepth = braceDelta(lines[index]);
+    let end = index + 1;
+    while (end < lines.length && braceDepth > 0) {
+      braceDepth += braceDelta(lines[end]);
+      end += 1;
+    }
+
+    declarations.push({
+      name: start[1],
+      line: index + 1,
+      snippet: trimTrailingBlankLines(lines.slice(index, end)).join("\n"),
+    });
+    index = Math.max(index, end - 1);
+  }
+
+  return declarations;
+}
+
+function discoverTypeScriptClassMethodBlocks(codeSheet: CodeSheet): FunctionDecl[] {
+  const lines = normalizeNewlines(codeSheet).split("\n");
+  const declarations: FunctionDecl[] = [];
+
+  for (const classDecl of discoverTypeScriptClassBlocks(lines)) {
+    const classLines = classDecl.snippet.split("\n");
+    for (let index = 1; index < classLines.length; index += 1) {
+      const method = parseTypeScriptMethodStartLine(classLines[index]);
+      if (!method) {
+        continue;
+      }
+
+      let end = index + 1;
+      if (method.hasBody) {
+        let braceDepth = braceDelta(classLines[index]);
+        while (end < classLines.length && braceDepth > 0) {
+          braceDepth += braceDelta(classLines[end]);
+          end += 1;
+        }
+      }
+
+      declarations.push({
+        name: method.name,
+        className: classDecl.name,
+        line: classDecl.line + index,
+        source: trimTrailingBlankLines(classLines.slice(index, end)).join("\n"),
+      });
+      index = Math.max(index, end - 1);
+    }
+  }
+
+  return declarations;
+}
+
+function discoverTypeScriptClassFieldBlocks(codeSheet: CodeSheet): FunctionDecl[] {
+  const lines = normalizeNewlines(codeSheet).split("\n");
+  const declarations: FunctionDecl[] = [];
+
+  for (const classDecl of discoverTypeScriptClassBlocks(lines)) {
+    const classLines = classDecl.snippet.split("\n");
+    for (let index = 1; index < classLines.length; index += 1) {
+      const field = parseTypeScriptClassFieldLine(classLines[index]);
+      if (!field) {
+        continue;
+      }
+
+      declarations.push({
+        name: field.name,
+        className: classDecl.name,
+        line: classDecl.line + index,
+        source: classLines[index].trimEnd(),
+      });
+    }
+  }
+
+  return declarations;
+}
+
+function parseTypeScriptMethodStartLine(line: string): { name: string; hasBody: boolean } | null {
+  const match = line.match(
+    /^\s*(?:(?:public|private|protected|static|async|readonly|override)\s+)*([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:<[^>{;]+>\s*)?\([^)]*\)\s*:\s*[^;{]+([;{])\s*$/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  return { name: match[1], hasBody: match[2] === "{" };
+}
+
+function parseTypeScriptClassFieldLine(line: string): { name: string } | null {
+  const match = line.match(
+    /^\s*(?:(?:public|private|protected|static|readonly|override)\s+)*([A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*[^;{(]+(?:=.*)?;?\s*$/,
+  );
+  return match ? { name: match[1] } : null;
+}
+
+function implementationTypeScriptFieldMatch(source: string, target: ImplementationTarget): ImplementationSnippetMatch | null {
+  const lineStarts = lineStartOffsets(source);
+  const match = discoverTypeScriptClassFieldBlocks(source).find((decl) => (
+    decl.name === target.name &&
+    (target.className === undefined || decl.className === target.className)
+  ));
+  if (!match) {
+    return null;
+  }
+
+  const start = lineStarts[match.line - 1] ?? 0;
+  return { code: match.source, range: { start, end: start + match.source.length } };
+}
+
+function braceDelta(line: string): number {
+  let delta = 0;
+  for (const char of line) {
+    if (char === "{") {
+      delta += 1;
+    } else if (char === "}") {
+      delta -= 1;
+    }
+  }
+  return delta;
 }
 
 function implementationFieldMatch(source: string, target: ImplementationTarget): ImplementationSnippetMatch | null {

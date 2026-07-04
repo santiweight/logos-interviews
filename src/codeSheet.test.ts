@@ -2812,6 +2812,86 @@ def main():
     ]);
   });
 
+  it("selects TypeScript type aliases and class methods from the Todo example", () => {
+    const source = `type Todo = {
+  description: string;
+  dueDate: Date;
+  done: boolean;
+};
+
+type TodoId = string;
+
+class TodoList {
+  todos: Map<TodoId, Todo>;
+
+  add(todo: Todo): TodoId;
+  delete(todoId: TodoId): void;
+  update(todoId: TodoId, todo: Todo): void;
+}`;
+    const implementation = `type Todo = {
+  description: string;
+  dueDate: Date;
+  done: boolean;
+};
+
+type TodoId = string;
+
+class TodoList {
+  todos: Map<TodoId, Todo> = new Map();
+
+  add(todo: Todo): TodoId {
+    const id = crypto.randomUUID();
+    this.todos.set(id, todo);
+    return id;
+  }
+
+  delete(todoId: TodoId): void {
+    this.todos.delete(todoId);
+  }
+
+  update(todoId: TodoId, todo: Todo): void {
+    this.todos.set(todoId, todo);
+  }
+}`;
+    const lineOf = (needle: string) => source.split("\n").findIndex((line) => line.includes(needle)) + 1;
+    const labelAt = (needle: string) => {
+      const context = selectionContextAtPosition(source, lineOf(needle), 3);
+      return context.kind === "implementation"
+        ? `${context.target.kind}:${context.target.className ? `${context.target.className}.` : ""}${context.target.name}`
+        : context.kind;
+    };
+
+    expect([
+      labelAt("type Todo ="),
+      labelAt("type TodoId ="),
+      labelAt("delete(todoId"),
+      labelAt("update(todoId"),
+    ]).toEqual([
+      "class:Todo",
+      "class:TodoId",
+      "method:TodoList.delete",
+      "method:TodoList.update",
+    ]);
+
+    const todoTarget = implementationTargetAtLine(source, lineOf("type Todo ="));
+    const todoIdTarget = implementationTargetAtLine(source, lineOf("type TodoId ="));
+    const deleteTarget = implementationTargetAtLine(source, lineOf("delete(todoId"));
+    const updateTarget = implementationTargetAtLine(source, lineOf("update(todoId"));
+
+    expect(implementationBlockForTarget(implementation, todoTarget!)).toBe(`type Todo = {
+  description: string;
+  dueDate: Date;
+  done: boolean;
+};`);
+    expect(implementationBlockForTarget(implementation, todoIdTarget!)).toBe("type TodoId = string;");
+    expect(implementationBlockForTarget(implementation, deleteTarget!)).toBe(`  delete(todoId: TodoId): void {
+    this.todos.delete(todoId);
+  }`);
+    expect(implementationBlockForTarget(implementation, updateTarget!)).toBe(`  update(todoId: TodoId, todo: Todo): void {
+    this.todos.set(todoId, todo);
+  }`);
+  });
+
   it("matches a MagicSquare field to the generated implementation that initializes it", () => {
     const source = `class MagicSquare:
   size: int
