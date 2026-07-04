@@ -2980,10 +2980,15 @@ function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidan
   }
 
   if (trimmed.startsWith("```")) {
+    const interactiveTerminalGuidance = interactiveTerminalPromptGuidance(trimmed);
     return {
-      cacheKey: "natural-fenced-statement-v4",
-      promptGuidance:
+      cacheKey: interactiveTerminalGuidance
+        ? "natural-fenced-interactive-terminal-v1"
+        : "natural-fenced-statement-v4",
+      promptGuidance: [
         "This is a triple-backtick natural-language block. Treat it as an imperative Python statement block and return one or more Python statements. If the user asks to print or show results, make the printed output useful to someone who cannot see the generated code: label sections and values, add blank lines around section breaks, and format grids/tables/puzzles as readable terminal layouts rather than raw lists or reprs.",
+        interactiveTerminalGuidance,
+      ].filter((line) => line.length > 0).join("\n"),
     };
   }
 
@@ -2992,6 +2997,24 @@ function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidan
     promptGuidance:
       "This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.",
   };
+}
+
+function interactiveTerminalPromptGuidance(snippet: string): string {
+  const lower = snippet.toLowerCase();
+  const asksForInteractiveTerminal =
+    /\b(interactive|cli|terminal|tui|keyboard|arrow|arrows|bloomberg)\b/.test(lower) &&
+    /\b(app|interface|client|ui|menu|screen|key|keys|create|delete|edit|done)\b/.test(lower);
+  if (!asksForInteractiveTerminal) {
+    return "";
+  }
+
+  return [
+    "For interactive terminal or CLI apps, implement a small terminal loop with Python standard-library modules only.",
+    "Prefer termios, tty, select, sys, and ANSI escape sequences for raw-key input, screen clearing, cursor movement, and simple highlighting.",
+    "Handle arrow keys by reading escape sequences such as \"\\x1b[A\" and \"\\x1b[B\"; handle single-key commands directly.",
+    "Keep terminal cleanup reliable with try/finally so raw mode is restored on exit or Ctrl-C.",
+    "Do not use curses, prompt_toolkit, textual, blessed, rich, colorama, or other third-party terminal UI packages.",
+  ].join("\n");
 }
 
 export function normalizeSnippet(

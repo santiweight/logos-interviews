@@ -1,11 +1,17 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentCompilationFramework } from "./agentCompilation";
 import { createGlobalCodeCache } from "./codeCache";
-import type { CodeCache, CompleteFunction } from "./codeSheet";
+import {
+  cacheImplementation,
+  hashWholeSheetCompletionInput,
+  parse,
+  type CodeCache,
+  type CompleteFunction,
+} from "./codeSheet";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 
@@ -44,6 +50,27 @@ def test_basic():
   print(added)
   print(product)
 `;
+
+const todoCliStubSheet = `class Todo:
+  id: str
+  name: str
+  description: str
+  todo_date: date
+
+class TodoList:
+  todos: list[Todo]
+
+  def add_todo(self, todo: Todo) -> None
+  def delete_todo(self, todo_id: str) -> None
+  def set_date(self, todo_id: str, new_date: date) -> None
+  def mark_done(self, todo_id: str) -> None
+
+def todo_cli():
+  \`\`\`
+  make TodoList into an interactive CLI app
+
+  use a simple bloomberg style application with: - x -> delete - n -> create - d -> mark done - e -> edit
+  \`\`\``;
 
 describe("interactive run API", () => {
   const servers: Array<ReturnType<typeof createServer>> = [];
@@ -171,7 +198,7 @@ describe("interactive run API", () => {
     expect(completed.map((run) => ({
       ok: run.ok,
       status: run.status,
-      output: run.output.trimEnd().split("\n"),
+      output: outputLines(run.output),
     }))).toEqual([
       {
         ok: true,
@@ -229,7 +256,7 @@ describe("interactive run API", () => {
     expect(completed.map((run) => ({
       ok: run.ok,
       status: run.status,
-      output: run.output.trimEnd().split("\n"),
+      output: outputLines(run.output),
     }))).toEqual([
       {
         ok: true,
@@ -310,7 +337,7 @@ describe("interactive run API", () => {
       expect({
         ok: completed.ok,
         status: completed.status,
-        output: completed.output.trimEnd().split("\n"),
+        output: outputLines(completed.output),
       }).toEqual({
         ok: true,
         status: { state: "exited", code: 0, signal: null },
@@ -396,6 +423,51 @@ describe("interactive run API", () => {
     expect(agentCalls).toBe(1);
     expect(completed.output.trim()).toBe("ok");
   });
+
+  it("runs a cached stdlib Todo CLI through the interactive backend with raw terminal input", async () => {
+    const cache: CodeCache = new Map();
+    const implementation = await readFile("examples/todo_cli_stdlib.py", "utf8");
+    await cacheImplementation(cache, hashWholeSheetCompletionInput(parse(todoCliStubSheet)), implementation);
+    const baseUrl = await listen(servers, cache, () => {
+      throw new Error("run should use the cached Todo CLI implementation");
+    });
+
+    const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheet: todoCliStubSheet,
+      runnable: "todo_cli",
+    });
+    let output = started.chunks.map((chunk) => chunk.text).join("");
+    if (!output.includes("TODOS <GO>")) {
+      output += await pollUntilOutputContains(baseUrl, started.sessionId, "TODOS <GO>");
+    }
+
+    expect(output).toContain("TODOS <GO>");
+    expect(output).toContain("Follow up with candidate");
+
+    await postJson<{ ok: true }>(baseUrl, "/api/run/input", {
+      sessionId: started.sessionId,
+      input: "\x1b[B",
+    });
+    output += await pollUntilOutputContains(baseUrl, started.sessionId, "Review prompt policy");
+
+    await postJson<{ ok: true }>(baseUrl, "/api/run/input", {
+      sessionId: started.sessionId,
+      input: "d",
+    });
+    output += await pollUntilOutputContains(baseUrl, started.sessionId, "DONE");
+
+    await postJson<{ ok: true }>(baseUrl, "/api/run/input", {
+      sessionId: started.sessionId,
+      input: "q",
+    });
+    const completed = await pollUntilExited(baseUrl, started.sessionId);
+    output += completed.output;
+
+    expect(output).toContain("Review prompt policy");
+    expect(output).toContain("DONE");
+    expect(output).toContain("Todo CLI closed.");
+    expect(completed.status).toEqual({ state: "exited", code: 0, signal: null });
+  });
 });
 
 type RunChunk = {
@@ -438,6 +510,11 @@ async function listen(
 
     if (req.url === "/api/run/poll") {
       await api.handlePoll(req, res);
+      return;
+    }
+
+    if (req.url === "/api/run/input") {
+      await api.handleInput(req, res);
       return;
     }
 
@@ -490,6 +567,29 @@ async function pollUntilExited(
   }
 
   throw new Error(`Timed out waiting for run to exit. Output: ${output}`);
+}
+
+async function pollUntilOutputContains(
+  baseUrl: string,
+  sessionId: string,
+  expected: string,
+): Promise<string> {
+  let output = "";
+
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const polled = await postJson<RunPollResponse>(baseUrl, "/api/run/poll", { sessionId });
+    output += polled.chunks.map((chunk) => chunk.text).join("");
+    if (output.includes(expected)) {
+      return output;
+    }
+    if (polled.status.state === "exited") {
+      throw new Error(`Run exited before output contained ${expected}. Output: ${output}`);
+    }
+
+    await delay(20);
+  }
+
+  throw new Error(`Timed out waiting for output containing ${expected}. Output: ${output}`);
 }
 
 async function postJson<T>(
@@ -583,6 +683,10 @@ function sendJson(
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(payload));
+}
+
+function outputLines(output: string): string[] {
+  return output.replaceAll("\r\n", "\n").replaceAll("\r", "").trimEnd().split("\n");
 }
 
 function delay(ms: number): Promise<void> {

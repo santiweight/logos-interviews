@@ -28,7 +28,7 @@ describe("product samples", () => {
   it("has runnable eval fixtures for every product sample", () => {
     const sampleIds = samples
       .map((sample) => sample.id)
-      .filter((id) => id !== "interactive-reverse");
+      .filter((id) => id !== "interactive-reverse" && id !== "todo-cli");
     const evalIds = sampleEvalCases.map((testCase) => testCase.sampleId);
 
     expect(new Set(evalIds)).toEqual(new Set(sampleIds));
@@ -51,6 +51,31 @@ describe("product samples", () => {
     expect(sample?.code).toBe(`def main():
   \`\`\`
   A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
+  \`\`\``);
+  });
+
+  it("keeps the Todo CLI sample as an interactive natural-language prompt", () => {
+    const sample = samples.find((item) => item.id === "todo-cli");
+
+    expect(sample?.code).toBe(`class Todo:
+  id: str
+  name: str
+  description: str
+  todo_date: date
+
+class TodoList:
+  todos: list[Todo]
+
+  def add_todo(self, todo: Todo) -> None
+  def delete_todo(self, todo_id: str) -> None
+  def set_date(self, todo_id: str, new_date: date) -> None
+  def mark_done(self, todo_id: str) -> None
+
+def todo_cli():
+  \`\`\`
+  make TodoList into an interactive CLI app
+
+  use a simple bloomberg style application with: - x -> delete - n -> create - d -> mark done - e -> edit
   \`\`\``);
   });
 

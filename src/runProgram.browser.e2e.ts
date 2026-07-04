@@ -119,8 +119,8 @@ describe("run program browser flow", () => {
       await page.locator(".runnable-run-widget").first().click();
       const startResponse = await startResponsePromise;
       await expect.poll(async () => {
-        return page.locator(".terminal-output-text").first().textContent();
-      }).toBe("hi\n");
+        return terminalOutputText(page);
+      }).toContain("hi");
 
       expect(startResponse.status()).toBe(200);
       expect(interactiveStartRequests).toHaveLength(1);
@@ -326,9 +326,8 @@ describe("run program browser flow", () => {
       });
 
       await expect.poll(async () => {
-        return page.locator(".terminal-output-text").first().textContent();
+        return terminalOutputText(page);
       }).toContain("Run was in progress when the session was captured and was not resumed.");
-      await expect.poll(async () => page.locator(".terminal-input").first().isDisabled()).toBe(true);
       expect(startRequests).toBe(0);
     } finally {
       await context.close();
@@ -344,6 +343,7 @@ describe("run program browser flow", () => {
     try {
       const page = await context.newPage();
       const inputs: unknown[] = [];
+      let bufferedInput = "";
       const pendingPollChunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
 
       await page.route("**/api/run/start", async (route) => {
@@ -376,8 +376,10 @@ describe("run program browser flow", () => {
       await page.route("**/api/run/input", async (route) => {
         const body = route.request().postDataJSON() as { input?: string };
         inputs.push(body);
-        if (body.input === "logos\n") {
+        bufferedInput += body.input ?? "";
+        if (bufferedInput === "logos\r") {
           pendingPollChunks.push({ stream: "stdout", text: "sogol\nEnter a word (or 'quit' to exit): " });
+          bufferedInput = "";
         }
         await route.fulfill({
           status: 200,
@@ -391,17 +393,15 @@ describe("run program browser flow", () => {
       await loadSource(page, reverseSource(), "Reverse CLI");
 
       await page.locator(".runnable-run-widget").first().click();
-      const terminalInput = page.locator(".terminal-input").first();
-      await expect.poll(async () => terminalInput.isEnabled()).toBe(true);
       expect(await isTerminalInputFocused(page)).toBe(false);
 
-      await terminalInput.click();
+      await page.locator(".terminal-output").first().click();
       expect(await isTerminalInputFocused(page)).toBe(true);
       await page.keyboard.type("logos");
       await page.keyboard.press("Enter");
 
-      await expect.poll(() => inputs).toEqual([{ sessionId: "reverse-session", input: "logos\n" }]);
-      await expect.poll(async () => page.locator(".terminal-output-text").first().textContent()).toContain("sogol");
+      await expect.poll(() => inputs.map((input) => (input as { input?: string }).input).join("")).toBe("logos\r");
+      await expect.poll(async () => terminalOutputText(page)).toContain("sogol");
     } finally {
       await context.close();
     }
@@ -412,10 +412,11 @@ describe("run program browser flow", () => {
       throw new Error("Browser did not start");
     }
 
-    const context = await browser.newContext();
-    try {
-      const page = await context.newPage();
-      let shouldExit = false;
+      const context = await browser.newContext();
+      try {
+        const page = await context.newPage();
+        let shouldExit = false;
+        let bufferedInput = "";
 
       await page.route("**/api/run/start", async (route) => {
         await route.fulfill({
@@ -446,7 +447,8 @@ describe("run program browser flow", () => {
       });
       await page.route("**/api/run/input", async (route) => {
         const body = route.request().postDataJSON() as { input?: string };
-        shouldExit = body.input === "quit\n";
+        bufferedInput += body.input ?? "";
+        shouldExit = bufferedInput === "quit\r";
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -459,7 +461,6 @@ describe("run program browser flow", () => {
       await loadSource(page, reverseSource(), "Reverse CLI");
 
       await page.locator(".runnable-run-widget").first().click();
-      await expect.poll(async () => page.locator(".terminal-input").first().isEnabled()).toBe(true);
       expect(await isTerminalInputFocused(page)).toBe(false);
 
       await page.locator(".terminal-output").first().click();
@@ -467,8 +468,69 @@ describe("run program browser flow", () => {
       await page.keyboard.type("quit");
       await page.keyboard.press("Enter");
 
-      await expect.poll(async () => page.locator(".terminal-input").first().isDisabled()).toBe(true);
-      await expect.poll(async () => page.locator(".terminal-output-text").first().textContent()).toContain("quit\n");
+      await expect.poll(async () => terminalOutputText(page)).toContain("quit");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("sends arrow keys as terminal escape sequences", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const inputs: string[] = [];
+
+      await page.route("**/api/run/start", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            sessionId: "arrow-session",
+            runnable: "main",
+            implementation: reverseSource(),
+            chunks: [{ stream: "stdout", text: "ready\n" }],
+            status: { state: "running" },
+          }),
+        });
+      });
+      await page.route("**/api/run/poll", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            runnable: "main",
+            implementation: reverseSource(),
+            chunks: [],
+            status: { state: "running" },
+          }),
+        });
+      });
+      await page.route("**/api/run/input", async (route) => {
+        const body = route.request().postDataJSON() as { input?: string };
+        inputs.push(body.input ?? "");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, reverseSource(), "Arrow CLI");
+
+      await page.locator(".runnable-run-widget").first().click();
+      await page.locator(".terminal-output").first().click();
+      await page.keyboard.press("ArrowUp");
+      await page.keyboard.press("ArrowDown");
+
+      await expect.poll(() => inputs.join("")).toBe("\x1b[A\x1b[B");
     } finally {
       await context.close();
     }
@@ -526,7 +588,11 @@ async function visibleImplementationLines(page: Page): Promise<string[]> {
 }
 
 async function isTerminalInputFocused(page: Page): Promise<boolean> {
-  return page.evaluate(() => document.activeElement?.classList.contains("terminal-input") === true);
+  return page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
+}
+
+async function terminalOutputText(page: Page): Promise<string> {
+  return await page.locator(".terminal-output-text").first().textContent() ?? "";
 }
 
 function reverseSource(): string {
