@@ -196,7 +196,7 @@ describe("run program browser flow", () => {
     }
   });
 
-  it("leaves browser command shortcuts alone while preserving editor comment toggling", async () => {
+  it("lets Monaco keep editor shortcuts while leaving browser location bar shortcuts alone", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
     }
@@ -218,6 +218,10 @@ describe("run program browser flow", () => {
 
       await page.keyboard.press(`${primaryModifier}+Slash`);
       await expect.poll(async () => editorSource(page)).toBe("# def main():\n  print('hi')\n");
+
+      await page.keyboard.press(`${primaryModifier}+A`);
+      await page.keyboard.type("selected");
+      await expect.poll(async () => editorSource(page)).toBe("selected");
 
       const commandL = await dispatchEditorKeydown(page, {
         key: "l",
