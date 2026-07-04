@@ -1,5 +1,6 @@
 import { typeCheck } from "./typeCheck";
 import type { TypeCheckDiagnostic } from "./typeCheck";
+import { reactAppDesignContext } from "./reactAppDesignContext";
 
 export type CodeSheet = string;
 export type Runnable = string;
@@ -216,6 +217,7 @@ export type LogosAnnotationContext = {
 
 const typeScriptCompletionRuntimePolicy = `Use TypeScript, Node.js built-ins, and approved dependencies already available to the runtime.
 ReactApp is a predefined Logos browser-app return type. For functions returning ReactApp, generate a React app that returns a React.ReactElement from the runnable; use React.createElement, hooks such as React.useState, and ordinary browser event handlers. Do not use JSX in generated .ts implementation files, do not return raw HTML strings, and do not import React; React is provided by the ReactApp runtime.
+${reactAppDesignContext}
 Approved terminal UI dependency: neo-blessed. Use it for persistent full-screen terminal apps with panes, tables, lists, keyboard navigation, and Bloomberg-like command surfaces.
 When using neo-blessed in generated TypeScript, import the CommonJS export as a default import: import blessed from "neo-blessed"; do not use import * as blessed from "neo-blessed".
 For neo-blessed modal text entry, avoid blessed.form, autoNext, inputOnFocus, and textbox.readInput-driven workflows. Those patterns can double-register key listeners and crash in neo-blessed with "done is not a function" when Enter, Tab, blur, and form focus interact.
