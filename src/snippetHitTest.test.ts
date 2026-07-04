@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { snippetPopupTargetForClick } from "./snippetHitTest";
+import { snippetPopupTargetForClick, snippetTargetContainsPosition } from "./snippetHitTest";
 
 describe("snippet popup hit testing", () => {
   const snippet = {
@@ -35,5 +35,9 @@ describe("snippet popup hit testing", () => {
     expect(snippetPopupTargetForClick([snippet], 12, 19, 20)).toBe(snippet);
     expect(snippetPopupTargetForClick([snippet], 12, 20, 20)).toBeNull();
     expect(snippetPopupTargetForClick([snippet], 12, 24, 20)).toBeNull();
+  });
+
+  it("contains the last character of an intermediate snippet line for highlighting", () => {
+    expect(snippetTargetContainsPosition(snippet, 12, 19, 20)).toBe(true);
   });
 });
