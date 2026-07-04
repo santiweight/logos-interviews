@@ -119,13 +119,376 @@ describe("run program browser flow", () => {
       await page.locator(".runnable-run-widget").first().click();
       const startResponse = await startResponsePromise;
       await expect.poll(async () => {
-        return page.locator(".terminal-output-text").first().textContent();
-      }).toBe("hi\n");
+        return xtermText(page);
+      }).toContain("hi");
 
       expect(startResponse.status()).toBe(200);
       expect(interactiveStartRequests).toHaveLength(1);
       expect(runOnceRequests).toEqual([]);
-      expect(await isTerminalInputFocused(page)).toBe(false);
+      expect(await isXtermFocused(page)).toBe(false);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("compiles and runs a simple TypeScript natural-snippet program in the UI", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main() {
+  l\`print hello world\`
+}`;
+      const implementation = `function main(): void {
+  console.log("hello world");
+}`;
+      let compileRequests = 0;
+      let runStartRequests = 0;
+
+      await page.route("**/api/compile", async (route) => {
+        expect(route.request().method()).toBe("POST");
+        const body = route.request().postDataJSON() as { sheet?: string };
+        if (body.sheet?.trim() === source) {
+          compileRequests += 1;
+        }
+        const responseImplementation = body.sheet?.trim() === source ? implementation : body.sheet ?? "";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: [
+            JSON.stringify({
+              kind: "implementation",
+              implementation: responseImplementation,
+              completedSnippets: 1,
+              totalSnippets: 1,
+            }),
+            JSON.stringify({
+              kind: "readiness",
+              definitions: [{ name: "main", ready: true, blockingDependencies: [] }],
+            }),
+            JSON.stringify({
+              kind: "compiled",
+              implementation: responseImplementation,
+              completedSnippets: 1,
+              totalSnippets: 1,
+            }),
+            "",
+          ].join("\n"),
+        });
+      });
+
+      await page.route("**/api/run/start", async (route) => {
+        runStartRequests += 1;
+        const body = route.request().postDataJSON() as { sheet?: string; runnable?: string };
+        expect(body.sheet?.trim()).toBe(source);
+        expect(body.runnable).toBe("main");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            sessionId: "hello-world-run-session",
+            runnable: "main",
+            implementation,
+            chunks: [{ stream: "stdout", text: "hello world\n" }],
+            status: { state: "exited", code: 0, signal: null },
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Hello World");
+      await appendTrailingEditorSpace(page);
+
+      await expect.poll(() => compileRequests).toBeGreaterThan(0);
+      await expect.poll(async () => {
+        return (await page.locator("#implementation-view-panel .view-line").first().textContent())
+          ?.replaceAll("\u00a0", " ");
+      }).toContain("function main");
+      await expect.poll(async () => page.locator("#run-status").textContent()).not.toContain("Code is being generated");
+
+      await page.locator(".runnable-run-widget").first().click();
+      await expect.poll(() => runStartRequests).toBe(1);
+      await expect.poll(async () => {
+        return xtermText(page);
+      }).toContain("hello world");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders a ReactApp runnable in an iframe run panel", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function hello_app(): ReactApp {
+  l\`render hello world\`
+}`;
+      const implementation = `function hello_app(): ReactApp {
+  const [message, setMessage] = React.useState("hello world");
+  return React.createElement(
+    "main",
+    { style: { minHeight: "100vh", display: "grid", placeItems: "center", fontFamily: "sans-serif" } },
+    React.createElement(radix.Button, { onClick: () => setMessage("clicked"), "data-testid": "hello-button" }, message)
+  );
+}`;
+
+      await page.route("**/api/run/start", async (route) => {
+        const body = route.request().postDataJSON() as { sheet?: string; runnable?: string };
+        expect(body.sheet?.trim()).toBe(source);
+        expect(body.runnable).toBe("hello_app");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            kind: "react",
+            runId: "hello-react-run",
+            runnable: "hello_app",
+            implementation,
+            appCode: `function hello_app() {
+  const [message, setMessage] = React.useState("hello world");
+  return React.createElement(
+    "main",
+    { style: { minHeight: "100vh", display: "grid", placeItems: "center", fontFamily: "sans-serif" } },
+    React.createElement(radix.Button, { onClick: () => setMessage("clicked"), "data-testid": "hello-button" }, message)
+  );
+}`,
+            status: { state: "exited", code: 0, signal: null },
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(page, source, implementation, "Hello ReactApp");
+
+      const runWidget = page.locator(".runnable-run-widget").first();
+      await expect.poll(async () => await runWidget.getAttribute("class")).not.toContain("runnable-run-widget-disabled");
+      await runWidget.click();
+
+      const frame = page.frameLocator(".react-app-run-frame").first();
+      const button = frame.getByTestId("hello-button");
+      await expect.poll(async () => button.textContent()).toBe("hello world");
+      await expect.poll(async () => button.getAttribute("class")).toContain("rt-Button");
+      await button.click();
+      await expect.poll(async () => button.textContent()).toBe("clicked");
+      await expect.poll(async () => reactFrameMetrics(page)).toMatchObject({
+        frameMatchesHost: true,
+        hostHasHeight: true,
+      });
+      await expect.poll(async () => page.locator(".terminal-xterm-host").first().isHidden()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("enables Run Main from the completed implementation even if readiness stayed stale", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main(): void {
+  l\`print hello world\`
+}`;
+      const implementation = `function main(): void {
+  function message(): string {
+    return "hello world";
+  }
+
+  console.log(message());
+}`;
+      let runStartRequests = 0;
+
+      await page.route("**/api/compile", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: [
+            JSON.stringify({
+              kind: "implementation",
+              implementation,
+              completedSnippets: 1,
+              totalSnippets: 1,
+            }),
+            JSON.stringify({
+              kind: "readiness",
+              definitions: [{
+                name: "main",
+                ready: false,
+                reason: "implementation",
+                dependencies: [],
+                blockingDependencies: [],
+              }],
+            }),
+            JSON.stringify({
+              kind: "compiled",
+              implementation,
+              completedSnippets: 1,
+              totalSnippets: 1,
+            }),
+            "",
+          ].join("\n"),
+        });
+      });
+
+      await page.route("**/api/run/start", async (route) => {
+        runStartRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            sessionId: "stale-readiness-run-session",
+            runnable: "main",
+            implementation,
+            chunks: [{ stream: "stdout", text: "hello world\n" }],
+            status: { state: "exited", code: 0, signal: null },
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Stale Readiness Hello World");
+      await appendTrailingEditorSpace(page);
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Main" }).first();
+      await expect.poll(async () => {
+        return (await page.locator("#implementation-view-panel .view-line").first().textContent())
+          ?.replaceAll("\u00a0", " ");
+      }).toContain("function main");
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+      await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Run main");
+
+      await runWidget.click();
+      await expect.poll(() => runStartRequests).toBe(1);
+      await expect.poll(async () => {
+        return xtermText(page);
+      }).toContain("hello world");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps Run Main disabled while Claude compilation is still in progress", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main(): void {
+  l\`print hello world\`
+}`;
+      const implementation = `function main(): void {
+  console.log("hello world");
+}`;
+      let compileRequests = 0;
+      let releaseCompile: () => void = () => undefined;
+      const compileCanFinish = new Promise<void>((resolve) => {
+        releaseCompile = resolve;
+      });
+
+      await page.route("**/api/compile", async (route) => {
+        compileRequests += 1;
+        await compileCanFinish;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: [
+            JSON.stringify({
+              kind: "compiled",
+              implementation,
+              completedSnippets: 1,
+              totalSnippets: 1,
+            }),
+            "",
+          ].join("\n"),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(page, source, implementation, "Compile Pending Hello World");
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Main" }).first();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+
+      await appendTrailingEditorSpace(page);
+      await expect.poll(() => compileRequests).toBeGreaterThan(0);
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("true");
+      await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Claude is still compiling this sheet.");
+
+      releaseCompile();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+      await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Run main");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("uses a restored TypeScript implementation to keep Run Main enabled", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main(): void {
+  l\`print hello world\`
+}`;
+      const implementation = `function main(): void {
+  console.log("hello world");
+}`;
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(page, source, implementation, "Restored Hello World");
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Main" }).first();
+      await expect.poll(async () => await runWidget.getAttribute("class")).not.toContain("runnable-run-widget-disabled");
+      await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Run main");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders blocked Run Main as disabled instead of green", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main(): void {
+  l\`print hello world\`
+}`;
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(page, source, "", "Blocked Hello World");
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Main" }).first();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("true");
+      await expect.poll(async () => await runWidget.getAttribute("class")).toContain("runnable-run-widget-disabled");
+      await expect.poll(async () => {
+        return runWidget.evaluate((node) => getComputedStyle(node).color);
+      }).not.toBe("rgb(25, 184, 90)");
     } finally {
       await context.close();
     }
@@ -203,7 +566,7 @@ describe("run program browser flow", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      const source = "def main():\n  print('hi')\n";
+      const source = "function main(): void {\n  console.log('hi');\n}\n";
 
       await page.goto(baseUrl);
       await waitForSessionHelpers(page);
@@ -216,7 +579,7 @@ describe("run program browser flow", () => {
         : { ctrlKey: true };
 
       await page.keyboard.press(`${primaryModifier}+Slash`);
-      await expect.poll(async () => editorSource(page)).toBe("# def main():\n  print('hi')\n");
+      await expect.poll(async () => editorSource(page)).toBe("// function main(): void {\n  console.log('hi');\n}\n");
 
       await page.keyboard.press(`${primaryModifier}+A`);
       await page.keyboard.type("selected");
@@ -416,9 +779,9 @@ describe("run program browser flow", () => {
       });
 
       await expect.poll(async () => {
-        return page.locator(".terminal-output-text").first().textContent();
+        return xtermText(page);
       }).toContain("Run was in progress when the session was captured and was not resumed.");
-      await expect.poll(async () => page.locator(".terminal-input").first().isDisabled()).toBe(true);
+      await expect.poll(async () => page.locator(".terminal-input").count()).toBe(0);
       expect(startRequests).toBe(0);
     } finally {
       await context.close();
@@ -433,7 +796,7 @@ describe("run program browser flow", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      const inputs: unknown[] = [];
+      const inputs: string[] = [];
       const pendingPollChunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
 
       await page.route("**/api/run/start", async (route) => {
@@ -465,8 +828,8 @@ describe("run program browser flow", () => {
       });
       await page.route("**/api/run/input", async (route) => {
         const body = route.request().postDataJSON() as { input?: string };
-        inputs.push(body);
-        if (body.input === "logos\n") {
+        inputs.push(body.input ?? "");
+        if (inputs.join("").includes("logos\r")) {
           pendingPollChunks.push({ stream: "stdout", text: "sogol\nEnter a word (or 'quit' to exit): " });
         }
         await route.fulfill({
@@ -481,17 +844,126 @@ describe("run program browser flow", () => {
       await loadSource(page, reverseSource(), "Reverse CLI");
 
       await page.locator(".runnable-run-widget").first().click();
-      const terminalInput = page.locator(".terminal-input").first();
-      await expect.poll(async () => terminalInput.isEnabled()).toBe(true);
-      expect(await isTerminalInputFocused(page)).toBe(false);
+      await expect.poll(async () => page.locator(".terminal-input").count()).toBe(0);
+      expect(await isXtermFocused(page)).toBe(false);
 
-      await terminalInput.click();
-      expect(await isTerminalInputFocused(page)).toBe(true);
+      await page.locator(".terminal-xterm-host").first().click();
+      expect(await isXtermFocused(page)).toBe(true);
+      await page.keyboard.press("Tab");
+      await expect.poll(() => inputs.filter((input) => input === "\t").length).toBe(1);
+      expect(await isXtermFocused(page)).toBe(true);
       await page.keyboard.type("logos");
       await page.keyboard.press("Enter");
 
-      await expect.poll(() => inputs).toEqual([{ sessionId: "reverse-session", input: "logos\n" }]);
-      await expect.poll(async () => page.locator(".terminal-output-text").first().textContent()).toContain("sogol");
+      await expect.poll(() => inputs.join("")).toContain("logos\r");
+      await expect.poll(async () => xtermText(page)).toContain("sogol");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("renders runs through xterm instead of the legacy textbox", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = `function main(): void {
+  l\`render a neo-blessed todo dashboard\`
+}`;
+      const implementation = `import blessed from "neo-blessed";
+
+function main(): void {
+  const screen = blessed.screen({ smartCSR: true, title: "Todo Dashboard" });
+  const box = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    width: "100%",
+    height: "100%",
+    content: "Todo Dashboard\\n[ ] Review leads",
+  });
+  void box;
+  screen.key(["q"], () => process.exit(0));
+  screen.render();
+}`;
+      const tuiFrame = "\x1b[?1049h\x1b[2J\x1b[HTodo Dashboard\r\n[ ] Review leads";
+      const inputs: string[] = [];
+      const resizes: Array<{ cols: number; rows: number }> = [];
+
+      await page.route("**/api/run/start", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            sessionId: "todo-tui-session",
+            runnable: "main",
+            implementation,
+            chunks: [{ stream: "stdout", text: tuiFrame }],
+            status: { state: "running" },
+          }),
+        });
+      });
+      await page.route("**/api/run/poll", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            runnable: "main",
+            implementation,
+            chunks: [],
+            status: { state: "running" },
+          }),
+        });
+      });
+      await page.route("**/api/run/input", async (route) => {
+        const body = route.request().postDataJSON() as { input?: string };
+        inputs.push(body.input ?? "");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true }),
+        });
+      });
+      await page.route("**/api/run/resize", async (route) => {
+        const body = route.request().postDataJSON() as { cols?: number; rows?: number };
+        if (typeof body.cols === "number" && typeof body.rows === "number") {
+          resizes.push({ cols: body.cols, rows: body.rows });
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(page, source, implementation, "Todo TUI");
+
+      await page.locator(".runnable-run-widget").first().click();
+
+      await expect.poll(async () => page.locator(".terminal-xterm-host .xterm-rows").first().textContent())
+        .toContain("Review leads");
+      await expect.poll(async () => page.locator(".terminal-output-text").count()).toBe(0);
+      await expect.poll(async () => page.locator(".terminal-input").count()).toBe(0);
+      await expect.poll(async () => page.locator(".terminal-xterm-host .xterm-rows").first().textContent())
+        .not.toContain("\x1b[");
+
+      await resizeOutputPaneDeterministically(page);
+      await expect.poll(async () => (await terminalPanelMetrics(page)).rightGap).toBeLessThan(2);
+      await expect.poll(() => {
+        const cols = resizes.map((resize) => resize.cols);
+        return Math.max(...cols) - Math.min(...cols);
+      }).toBeGreaterThan(5);
+
+      await page.locator(".terminal-xterm-host").first().click();
+      await page.keyboard.press("q");
+      await expect.poll(() => inputs).toContain("q");
     } finally {
       await context.close();
     }
@@ -506,6 +978,8 @@ describe("run program browser flow", () => {
     try {
       const page = await context.newPage();
       let shouldExit = false;
+      const inputs: string[] = [];
+      const pendingPollChunks: Array<{ stream: "stdout" | "stderr"; text: string }> = [];
 
       await page.route("**/api/run/start", async (route) => {
         await route.fulfill({
@@ -529,14 +1003,18 @@ describe("run program browser flow", () => {
             ok: true,
             runnable: "main",
             implementation: reverseSource(),
-            chunks: [],
+            chunks: pendingPollChunks.splice(0, pendingPollChunks.length),
             status: shouldExit ? { state: "exited", code: 0, signal: null } : { state: "running" },
           }),
         });
       });
       await page.route("**/api/run/input", async (route) => {
         const body = route.request().postDataJSON() as { input?: string };
-        shouldExit = body.input === "quit\n";
+        inputs.push(body.input ?? "");
+        shouldExit = inputs.join("").includes("quit\r");
+        if (shouldExit) {
+          pendingPollChunks.push({ stream: "stdout", text: "quit\r\n" });
+        }
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -549,16 +1027,16 @@ describe("run program browser flow", () => {
       await loadSource(page, reverseSource(), "Reverse CLI");
 
       await page.locator(".runnable-run-widget").first().click();
-      await expect.poll(async () => page.locator(".terminal-input").first().isEnabled()).toBe(true);
-      expect(await isTerminalInputFocused(page)).toBe(false);
+      await expect.poll(async () => page.locator(".terminal-input").count()).toBe(0);
+      expect(await isXtermFocused(page)).toBe(false);
 
       await page.locator(".terminal-output").first().click();
-      expect(await isTerminalInputFocused(page)).toBe(true);
+      expect(await isXtermFocused(page)).toBe(true);
       await page.keyboard.type("quit");
       await page.keyboard.press("Enter");
 
-      await expect.poll(async () => page.locator(".terminal-input").first().isDisabled()).toBe(true);
-      await expect.poll(async () => page.locator(".terminal-output-text").first().textContent()).toContain("quit\n");
+      await expect.poll(() => inputs.join("")).toContain("quit\r");
+      await expect.poll(async () => xtermText(page)).toContain("quit");
     } finally {
       await context.close();
     }
@@ -609,6 +1087,56 @@ async function loadSource(page: Page, source: string, title: string, selection: 
   }, { source, title, selection });
 }
 
+async function loadSourceWithImplementation(
+  page: Page,
+  source: string,
+  implementation: string,
+  title: string,
+): Promise<void> {
+  await page.evaluate(async ({ source, implementation, title }) => {
+    const logosWindow = window as LogosWindow;
+    const session = logosWindow.createLogosSessionBundle?.();
+    if (!session || !logosWindow.loadLogosSession) {
+      throw new Error("Logos session helpers are unavailable");
+    }
+
+    const activeSourceTabId = session.activeSourceTabId ?? session.sourceTabs[0]?.id ?? "browser-restored-run";
+    await logosWindow.loadLogosSession({
+      ...session,
+      sourceTabs: [{
+        id: activeSourceTabId,
+        projectId: title.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-"),
+        title,
+        source,
+        implementation,
+      }],
+      activeSourceTabId,
+      editor: {
+        ...session.editor,
+        value: source,
+        cursor: { lineNumber: 1, column: 1 },
+        scrollTop: 0,
+        scrollLeft: 0,
+      },
+      compilation: {
+        ...session.compilation,
+        latestImplementationSource: implementation,
+        selection: { kind: "none" },
+      },
+    });
+  }, { source, implementation, title });
+}
+
+async function appendTrailingEditorSpace(page: Page): Promise<void> {
+  const before = await page.evaluate(() => (window as LogosWindow).createLogosSessionBundle?.().editor.value ?? "");
+  await page.locator("#editor").click();
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+End" : "Control+End");
+  await page.keyboard.insertText(" ");
+  await expect.poll(async () => {
+    return page.evaluate(() => (window as LogosWindow).createLogosSessionBundle?.().editor.value);
+  }).toBe(`${before} `);
+}
+
 async function visibleImplementationLines(page: Page): Promise<string[]> {
   return page.$$eval("#implementation-view-panel .view-line", (lines) => {
     return lines.map((line) => line.textContent?.replaceAll("\u00a0", " ") ?? "");
@@ -627,8 +1155,71 @@ async function outputPaneRightGap(page: Page): Promise<number> {
   });
 }
 
-async function isTerminalInputFocused(page: Page): Promise<boolean> {
-  return page.evaluate(() => document.activeElement?.classList.contains("terminal-input") === true);
+async function xtermText(page: Page): Promise<string> {
+  return await page.locator(".terminal-xterm-host .xterm-rows").first().textContent() ?? "";
+}
+
+async function isXtermFocused(page: Page): Promise<boolean> {
+  return page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") === true);
+}
+
+async function terminalPanelMetrics(page: Page): Promise<{ panelWidth: number; hostWidth: number; rightGap: number }> {
+  return page.evaluate(() => {
+    const outputPane = document.querySelector("#output-pane");
+    const panel = document.querySelector(".terminal-output.tab-panel.active");
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!(outputPane instanceof HTMLElement) || !(panel instanceof HTMLElement) || !(host instanceof HTMLElement)) {
+      throw new Error("Terminal panel is unavailable");
+    }
+
+    const outputRect = outputPane.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    return {
+      panelWidth: panelRect.width,
+      hostWidth: hostRect.width,
+      rightGap: Math.abs(outputRect.right - panelRect.right),
+    };
+  });
+}
+
+async function resizeOutputPaneDeterministically(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const shell = document.querySelector("#shell");
+    if (!(shell instanceof HTMLElement)) {
+      throw new Error("Shell is unavailable");
+    }
+
+    shell.style.setProperty("--code-pane-basis", "900px");
+    shell.style.setProperty("--code-pane-grow", "0");
+  });
+  await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    const shell = document.querySelector("#shell");
+    if (!(shell instanceof HTMLElement)) {
+      throw new Error("Shell is unavailable");
+    }
+
+    shell.style.setProperty("--code-pane-basis", "500px");
+    shell.style.setProperty("--code-pane-grow", "0");
+  });
+}
+
+async function reactFrameMetrics(page: Page): Promise<{ frameMatchesHost: boolean; hostHasHeight: boolean }> {
+  return page.evaluate(() => {
+    const host = document.querySelector(".react-app-run-host");
+    const frame = document.querySelector(".react-app-run-frame");
+    if (!(host instanceof HTMLElement) || !(frame instanceof HTMLElement)) {
+      throw new Error("React app frame is unavailable");
+    }
+
+    const hostRect = host.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
+    return {
+      hostHasHeight: hostRect.height > 100,
+      frameMatchesHost: Math.abs(hostRect.width - frameRect.width) < 2 && Math.abs(hostRect.height - frameRect.height) < 2,
+    };
+  });
 }
 
 async function isDetailsOpen(page: Page, selector: string): Promise<boolean> {

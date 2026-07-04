@@ -18,8 +18,9 @@ smoke_output="logos deployment smoke ok ${smoke_id}"
 sheet="$(
   SMOKE_OUTPUT="$smoke_output" node <<'NODE'
 const output = process.env.SMOKE_OUTPUT;
-process.stdout.write(`def smoke_compile_run():
-  print(${JSON.stringify(output)})`);
+process.stdout.write(`function smoke_compile_run(): void {
+  console.log(${JSON.stringify(output)});
+}`);
 NODE
 )"
 
@@ -120,8 +121,9 @@ check_shared_session_loading() {
   shared_payload="$(
     SHARED_MARKER="$marker" node <<'NODE'
 const marker = process.env.SHARED_MARKER;
-const source = `def shared_session_smoke():
-  print(${JSON.stringify(marker)})`;
+const source = `function shared_session_smoke(): void {
+  console.log(${JSON.stringify(marker)});
+}`;
 process.stdout.write(JSON.stringify({
   loadableSession: {
     schemaVersion: 1,
@@ -292,10 +294,11 @@ if [[ "${SMOKE_ANTHROPIC_E2E:-false}" == "true" ]]; then
     LLM_FUNCTION="$llm_function" LLM_RUNNABLE="$llm_runnable" node <<'NODE'
 const fn = process.env.LLM_FUNCTION;
 const runnable = process.env.LLM_RUNNABLE;
-process.stdout.write(`def ${fn}(x: int, y: int) -> int
+process.stdout.write(`function ${fn}(x: number, y: number): number
 
-def ${runnable}():
-  print(${fn}(1, 2))`);
+function ${runnable}(): void {
+  console.log(${fn}(1, 2));
+}`);
 NODE
   )"
   llm_payload="$(json_payload_for "$llm_sheet" "$llm_runnable")"

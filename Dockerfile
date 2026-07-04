@@ -1,7 +1,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates python3 \
+    && apt-get install -y --no-install-recommends ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -18,7 +18,7 @@ RUN mkdir -p "$PNPM_HOME" \
 COPY --chown=node:node . .
 
 RUN pnpm build
-RUN mkdir -p logs && chown -R node:node logs
+RUN mkdir -p logs .logos-runs && chown -R node:node logs .logos-runs
 
 ENV NODE_ENV=production
 ENV PORT=8080

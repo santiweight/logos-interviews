@@ -1,0 +1,24 @@
+export const reactAppDesignContext = `ReactApp visual and CSS guidelines:
+- Use a shadcn-inspired product UI style: restrained, crisp, neutral surfaces, clear hierarchy, quiet borders, modest shadows, and useful controls. Do not generate marketing pages unless the worksheet explicitly asks for one.
+- Radix Themes is a runtime dependency provided to ReactApp code as the global object radix. Prefer radix components for common UI: radix.Theme, radix.Button, radix.Card, radix.Flex, radix.Box, radix.Text, radix.Heading, radix.Badge, radix.TextField, radix.Checkbox, radix.Dialog, radix.Popover, radix.Tabs, radix.Table, radix.Separator, and radix.ScrollArea.
+- Do not import @radix-ui/themes, shadcn/ui, Tailwind, CSS files, icon packages, or external fonts from generated ReactApp code. The Logos runtime already provides React and radix, injects Radix Themes CSS into the iframe, and wraps the app in a radix.Theme.
+- Use React.createElement(radix.Button, { ... }, "Save") and React.createElement(radix.Card, { ... }, ...). For namespaced Radix APIs, use React.createElement(radix.TextField.Root, { ... }) or React.createElement(radix.Dialog.Root, { ... }).
+- Use inline styles or local style objects for app-specific layout and product-specific details around Radix components.
+- Prefer this palette unless the worksheet asks for another brand: page #f8fafc, surface #ffffff, elevated surface #f9fafb, text #0f172a, muted text #64748b, border #e2e8f0, strong border #cbd5e1, accent #2563eb, accent-hover #1d4ed8, success #16a34a, warning #f59e0b, danger #dc2626.
+- Use an 8px radius for cards, inputs, buttons, popovers, and list containers. Use 999px radius only for pills, circular icon buttons, status dots, and avatars.
+- Build real app screens, not feature descriptions. The first viewport should show the usable interface: lists, forms, tables, boards, dashboards, editors, calendars, controls, or the requested interactive object.
+- Use a stable app shell: a full-height root with boxSizing: "border-box", padding that adapts through CSS clamp(), and an inner container with width: "min(100%, 960px)" or an appropriate max width for the app.
+- Avoid viewport-width font scaling. Use fixed, readable font sizes: 12-14px for metadata, 14-16px for controls/body, 18-24px for section titles, 28-36px only for app-level headings.
+- Keep letterSpacing at 0 unless rendering tiny uppercase labels, where 0.04em is acceptable.
+- Use dense but calm spacing: 4/8/12/16/20/24/32px increments. Avoid giant empty hero-like spacing in operational tools.
+- Prefer lists and tables for repeated operational data. Rows should be 44-64px tall, align controls consistently, and have hover/selected/focus states.
+- Buttons should look like buttons: primary actions use accent background and white text; secondary actions use white or #f8fafc with a border; destructive actions use danger sparingly.
+- Inputs and date pickers should be visually grounded: white surface, 1px border, 8px radius, 10-12px horizontal padding, explicit focus outline or border color.
+- Popovers and modals should be positioned so they fit inside the iframe viewport. Prefer fixed overlays with inset: 0 for modal backdrops, or anchored popovers that clamp with maxWidth/maxHeight and overflow: "auto".
+- For date pickers, keep the panel compact, include month navigation, seven-column weekday headers, visible selected date, and click-away dismissal.
+- For todo/task apps, a Things/shadcn blend works well: centered list surface, circular status controls, muted due-date pills, line-through completed text, and no oversized decorative chrome.
+- For dashboards, use full-width unframed sections or simple cards for individual modules. Do not put cards inside cards.
+- Text must not overlap. Give fixed-format widgets stable dimensions using width/height/minHeight/gridTemplateColumns/aspectRatio where useful.
+- Generated ReactApp components should include useful accessibility labels or title attributes on icon-only controls and should expose data-testid attributes on important interactive elements when tests or workflows are likely.
+- Avoid emoji as primary UI structure. A small emoji in a heading is acceptable only when it fits the app's tone; do not rely on emoji for controls when a styled shape or text label is clearer.
+- The app must remain usable at common iframe sizes. Prefer flexWrap, minWidth: 0, maxWidth: "100%", overflow: "auto", and CSS grid with minmax(0, 1fr) where resizing could otherwise clip content.`;

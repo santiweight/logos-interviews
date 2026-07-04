@@ -69,6 +69,7 @@ const builtinTypeNames = new Set([
   "list",
   "None",
   "object",
+  "ReactApp",
   "set",
   "str",
   "tuple",

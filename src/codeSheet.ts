@@ -1,5 +1,6 @@
 import { typeCheck } from "./typeCheck";
 import type { TypeCheckDiagnostic } from "./typeCheck";
+import { reactAppDesignContext } from "./reactAppDesignContext";
 
 export type CodeSheet = string;
 export type Runnable = string;
@@ -214,16 +215,25 @@ export type LogosAnnotationContext = {
   promptGuidance: string;
 };
 
-const pythonCompletionRuntimePolicy = `Use only Python's standard library and code already present in the sheet; do not import third-party packages.
-For colored terminal output, use raw ANSI SGR escape sequences such as "\\033[32m" for green and "\\033[0m" to reset. Do not use colorama, rich, blessed, termcolor, or other terminal-color packages.`;
+const typeScriptCompletionRuntimePolicy = `Use TypeScript, Node.js built-ins, and approved dependencies already available to the runtime.
+ReactApp is a predefined Logos browser-app return type. For functions returning ReactApp, generate a React app that returns a React.ReactElement from the runnable; use React.createElement, hooks such as React.useState, and ordinary browser event handlers. Do not use JSX in generated .ts implementation files, do not return raw HTML strings, and do not import React; React is provided by the ReactApp runtime.
+${reactAppDesignContext}
+Approved terminal UI dependency: neo-blessed. Use it for persistent full-screen terminal apps with panes, tables, lists, keyboard navigation, and Bloomberg-like command surfaces.
+When using neo-blessed in generated TypeScript, import the CommonJS export as a default import: import blessed from "neo-blessed"; do not use import * as blessed from "neo-blessed".
+For neo-blessed modal text entry, avoid blessed.form, autoNext, inputOnFocus, and textbox.readInput-driven workflows. Those patterns can double-register key listeners and crash in neo-blessed with "done is not a function" when Enter, Tab, blur, and form focus interact.
+Instead, build modal editors from blessed.box/text elements and keep editable field values in plain strings. Track modalOpen, activeField, and field values yourself; handle characters, backspace, tab, shift-tab, enter, and escape from one screen.on("keypress", ...) handler while modalOpen is true. Have all global screen.key shortcuts return early while modalOpen is true.
+Render the focused field by updating box content, cursor hints, and border colors; do not use blessed.textbox for generated modal forms unless there is a very strong reason.
+For simple CLI output, use console.log and ANSI escape sequences directly. For interactive key handling without neo-blessed, use Node readline/key events.`;
 
-const pythonPrintingPolicy = `When generating visible output, prefer self-explanatory printing over raw value dumps:
-- Prefer labels and prefixes such as print("Total:", total) over print(total) when the value is not obvious from the output alone.
+const wholeSheetCompilationPolicyVersion = "whole-sheet-typescript-reactapp-v1";
+
+const typeScriptPrintingPolicy = `When generating visible output, prefer self-explanatory printing over raw value dumps:
+- Prefer labels and prefixes such as console.log("Total:", total) over console.log(total) when the value is not obvious from the output alone.
 - For multi-section output, print a clear section header, then a blank line before that section's content, and print a blank line between sections.
-- For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing Python lists or object reprs.
+- For grids, boards, tables, puzzles, or ASCII art, render an aligned or bordered text layout instead of printing raw arrays or object dumps.
 - For tables, include column headers and row labels when they help the user understand the data; keep enough spacing between columns for values and formulas to scan cleanly.
 - Use ANSI colors sparingly to clarify terminal drawings, status, or validation, while keeping the output readable without color.
-- Do not assume helper methods such as pretty(), render(), or __str__ exist unless the sheet declares them or you implement them inside the requested class.`;
+- Do not assume helper methods such as pretty(), render(), or toString() exist unless the sheet declares them or you implement them inside the requested class.`;
 
 export type ClassDecl = {
   name: string;
@@ -252,7 +262,7 @@ export function parse(codeSheet: CodeSheet): ParsedSheet {
     sumTypes,
     typeAliases: parseTypeAliasDeclarations(typeDeclarations),
     classDecls,
-    topLevelComments: lines.filter((line) => line.startsWith("#")),
+    topLevelComments: lines.filter((line) => line.startsWith("#") || line.startsWith("//")),
   };
 }
 
@@ -832,6 +842,33 @@ export function definitionReadiness(
   });
 }
 
+export function definitionReadinessFromImplementation(
+  sourceParsed: ParsedSheet,
+  implementation: CodeSheet,
+): DefinitionReadiness[] {
+  const sourceDefinitions = definitionReadiness(sourceParsed, new Map());
+  const implementationReadiness = new Map(
+    definitionReadiness(parse(implementation), new Map()).map((definition) => [definition.name, definition]),
+  );
+
+  return sourceDefinitions.map((definition) => {
+    const implemented = implementationReadiness.get(definition.name);
+    if (!implemented) {
+      return definition;
+    }
+
+    return {
+      name: definition.name,
+      line: definition.line,
+      kind: definition.kind,
+      ready: implemented.ready,
+      ...(implemented.reason === undefined ? {} : { reason: implemented.reason }),
+      dependencies: implemented.dependencies,
+      blockingDependencies: implemented.blockingDependencies,
+    };
+  });
+}
+
 export function implementationTargetAtLine(
   codeSheet: CodeSheet,
   lineNumber: number,
@@ -1314,6 +1351,9 @@ export function hashWholeSheetCompletionInput(parsed: ParsedSheet): SnippetHash 
   return hashText(
     "sheet",
     [
+      "--- policy version ---",
+      wholeSheetCompilationPolicyVersion,
+      "",
       "--- code sheet ---",
       parsed.source.trim(),
       "",
@@ -1770,20 +1810,9 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
       continue;
     }
 
-    let end = index + 1;
-    while (end < lines.length) {
-      const candidate = lines[end];
-      if (candidate.trim().length === 0) {
-        end += 1;
-        continue;
-      }
-
-      if (!/^\s+/.test(candidate)) {
-        break;
-      }
-
-      end += 1;
-    }
+    const end = header.keyword === "function" && lines[index].includes("{")
+      ? bracedBlockEndLine(lines, index)
+      : indentedBlockEndLine(lines, index);
 
     declarations.push({
       name: header.name,
@@ -1793,6 +1822,59 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
   }
 
   return declarations;
+}
+
+function indentedBlockEndLine(lines: string[], startIndex: number): number {
+  let end = startIndex + 1;
+  while (end < lines.length) {
+    const candidate = lines[end];
+    if (candidate.trim().length === 0) {
+      end += 1;
+      continue;
+    }
+
+    if (!/^\s+/.test(candidate)) {
+      break;
+    }
+
+    end += 1;
+  }
+  return end;
+}
+
+function bracedBlockEndLine(lines: string[], startIndex: number): number {
+  let depth = 0;
+  for (let index = startIndex; index < lines.length; index += 1) {
+    depth += braceDelta(lines[index]);
+    if (index > startIndex && depth <= 0) {
+      return index + 1;
+    }
+  }
+  return startIndex + 1;
+}
+
+function braceDelta(line: string): number {
+  let delta = 0;
+  let quote: "\"" | "'" | "`" | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote !== null) {
+      if (char === "\\" && quote !== "`") {
+        index += 1;
+      } else if (char === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (char === "\"" || char === "'" || char === "`") {
+      quote = char;
+    } else if (char === "{") {
+      delta += 1;
+    } else if (char === "}") {
+      delta -= 1;
+    }
+  }
+  return delta;
 }
 
 function discoverClassMethodBlocks(codeSheet: CodeSheet): FunctionDecl[] {
@@ -1807,21 +1889,9 @@ function discoverClassMethodBlocks(codeSheet: CodeSheet): FunctionDecl[] {
         continue;
       }
 
-      const headerIndent = indentWidth(classLines[index]);
-      let end = index + 1;
-      while (end < classLines.length) {
-        const candidate = classLines[end];
-        if (candidate.trim().length === 0) {
-          end += 1;
-          continue;
-        }
-
-        if (indentWidth(candidate) <= headerIndent) {
-          break;
-        }
-
-        end += 1;
-      }
+      const end = classLines[index].includes("{")
+        ? bracedBlockEndLine(classLines, index)
+        : indentedBlockEndLine(classLines, index);
 
       declarations.push({
         name: header.name,
@@ -2008,18 +2078,6 @@ function implementationTypeScriptFieldMatch(source: string, target: Implementati
   return { code: match.source, range: { start, end: start + match.source.length } };
 }
 
-function braceDelta(line: string): number {
-  let delta = 0;
-  for (const char of line) {
-    if (char === "{") {
-      delta += 1;
-    } else if (char === "}") {
-      delta -= 1;
-    }
-  }
-  return delta;
-}
-
 function implementationFieldMatch(source: string, target: ImplementationTarget): ImplementationSnippetMatch | null {
   const lineStarts = lineStartOffsets(source);
   const classDecl = discoverClassDecls(source.split("\n")).find((decl) => (
@@ -2195,6 +2253,10 @@ function stripTypeComment(source: string): string {
     if (char === "#" && quote === null) {
       return source.slice(0, index);
     }
+
+    if (char === "/" && source[index + 1] === "/" && quote === null) {
+      return source.slice(0, index);
+    }
   }
 
   return source;
@@ -2209,20 +2271,9 @@ function discoverClassDecls(lines: string[]): ClassDecl[] {
       continue;
     }
 
-    let end = index + 1;
-    while (end < lines.length) {
-      const candidate = lines[end];
-      if (candidate.trim().length === 0) {
-        end += 1;
-        continue;
-      }
-
-      if (!/^\s+/.test(candidate)) {
-        break;
-      }
-
-      end += 1;
-    }
+    const end = lines[index].includes("{")
+      ? bracedBlockEndLine(lines, index)
+      : indentedBlockEndLine(lines, index);
 
     classDecls.push({
       name: className,
@@ -2592,6 +2643,9 @@ function lowerFunctionKeyword(line: string): string {
   if (!header) {
     return line;
   }
+  if (header.keyword === "function") {
+    return line;
+  }
 
   const normalizedParams = normalizeDefinitionLiterals(header.params);
   const returnType = header.returnType === undefined ? "" : ` -> ${header.returnType}`;
@@ -2603,6 +2657,11 @@ function discoverableClassName(line: string): string | null {
   const normalClass = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\([^)]*\))?\s*:\s*$/);
   if (normalClass) {
     return normalClass[1];
+  }
+
+  const typeScriptClass = line.match(/^class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+extends\s+[A-Za-z_][A-Za-z0-9_.]*)?\s*\{\s*$/);
+  if (typeScriptClass) {
+    return typeScriptClass[1];
   }
 
   const dataclass = parseDataclassShorthand(line);
@@ -2618,13 +2677,17 @@ function isCompletableClassHeader(line: string): boolean {
     return true;
   }
 
+  if (/^class\s+[A-Za-z_][A-Za-z0-9_]*(?:\s+extends\s+[A-Za-z_][A-Za-z0-9_.]*)?\s*\{\s*$/.test(line)) {
+    return true;
+  }
+
   const dataclass = parseDataclassShorthand(line);
   return dataclass?.indent === "";
 }
 
 function parseFunctionHeader(line: string): FunctionHeader | null {
   const match = line.match(
-    /^(\s*)(async\s+)?(?:(def|fn|function)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:->\s*([^:=]+))?\s*(:?)\s*$/,
+    /^(\s*)(async\s+)?(?:(def|fn|function)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*(?:(?:->|:)\s*([^;{:=]+))?\s*([:{;]?)\s*$/,
   );
   if (!match) {
     return null;
@@ -2633,7 +2696,7 @@ function parseFunctionHeader(line: string): FunctionHeader | null {
   const keyword = match[3] as FunctionHeader["keyword"] | undefined;
   const name = match[4];
   const returnType = match[6]?.trim();
-  const hasColon = match[7] === ":";
+  const hasColon = match[7] === ":" || match[7] === "{";
   const isBare = keyword === undefined;
   if (isBare && !hasColon && returnType === undefined) {
     return null;
@@ -2696,64 +2759,47 @@ function discoverNaturalSnippets(source: string): IncompleteSnippet[] {
   let index = 0;
 
   while (index < source.length) {
-    const start = source.indexOf("`", index);
-    if (start < 0) {
+    const tagStart = source.indexOf("l`", index);
+    if (tagStart < 0) {
       break;
     }
 
-    if (isInPythonLineComment(source, start)) {
-      const lineEnd = source.indexOf("\n", start);
+    if (!isLogosNaturalTag(source, tagStart) || isInLineComment(source, tagStart)) {
+      index = tagStart + 2;
+      continue;
+    }
+
+    const start = tagStart + 1;
+    const end = source.indexOf("`", start + 1);
+    if (end < 0) {
+      const lineEnd = source.indexOf("\n", tagStart);
       index = lineEnd < 0 ? source.length : lineEnd + 1;
       continue;
     }
 
-    if (source.startsWith("```", start)) {
-      const end = source.indexOf("```", start + 3);
-      if (end < 0) {
-        break;
-      }
-
-      const inner = source.slice(start + 3, end).trim();
-      if (inner.length > 0) {
-        const line = lineForOffset(lineStarts, start);
-        const lineStart = lineStarts[line - 1] ?? 0;
-        const annotationContexts = logosAnnotationContextsForNaturalSnippet(source, line);
-        snippets.push(snippetWithRange({
-          kind: "natural",
-          line,
-          column: start - lineStart + 1,
-          snippet: source.slice(start, end + 3),
-          ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
-        }, { start, end: end + 3 }));
-      }
-
-      index = end + 3;
-      continue;
-    }
-
-    const end = source.indexOf("`", start + 1);
-    if (end < 0) {
-      break;
-    }
-
     const inner = source.slice(start + 1, end).trim();
     if (inner.length > 0) {
-      const line = lineForOffset(lineStarts, start);
+      const line = lineForOffset(lineStarts, tagStart);
       const lineStart = lineStarts[line - 1] ?? 0;
       const annotationContexts = logosAnnotationContextsForNaturalSnippet(source, line);
       snippets.push(snippetWithRange({
         kind: "natural",
         line,
-        column: start - lineStart + 1,
-        snippet: source.slice(start, end + 1),
+        column: tagStart - lineStart + 1,
+        snippet: source.slice(tagStart, end + 1),
         ...(annotationContexts.length === 0 ? {} : { annotationContexts }),
-      }, { start, end: end + 1 }));
+      }, { start: tagStart, end: end + 1 }));
     }
 
     index = end + 1;
   }
 
   return snippets;
+}
+
+function isLogosNaturalTag(source: string, offset: number): boolean {
+  const previous = source[offset - 1];
+  return previous === undefined || !/[A-Za-z0-9_$]/.test(previous);
 }
 
 function logosAnnotationContextsForNaturalSnippet(
@@ -2830,7 +2876,7 @@ function logosAnnotationContextForLine(
   };
 }
 
-function isInPythonLineComment(source: string, offset: number): boolean {
+function isInLineComment(source: string, offset: number): boolean {
   const lineStart = source.lastIndexOf("\n", offset - 1) + 1;
   let quote: "'" | "\"" | null = null;
 
@@ -2850,7 +2896,7 @@ function isInPythonLineComment(source: string, offset: number): boolean {
       continue;
     }
 
-    if (char === "#") {
+    if (char === "#" || (char === "/" && source[index + 1] === "/")) {
       return true;
     }
 
@@ -3022,26 +3068,26 @@ export function buildCompletionPrompt(
     const naturalPolicy = naturalSnippetPolicy(snippet)?.promptGuidance ?? "";
     return `You are an expert software engineer building programs.
 
-You are tasked with assisting on the following Python code sheet:
+You are tasked with assisting on the following TypeScript code sheet:
 
 ${sheet}
 
-Your job is to replace this natural-language Python fragment with valid Python code:
+Your job is to replace this natural-language TypeScript fragment with valid TypeScript code:
 
 ${snippet}
 
 Return only the replacement code for the fragment, without backticks or fences.
 ${naturalPolicy}${annotationBlock}
-If imports are needed, include normal Python import/from lines before the replacement; those imports will be added to the file top.
-${pythonCompletionRuntimePolicy}
-${pythonPrintingPolicy}
+If imports are needed, include normal TypeScript import lines before the replacement; those imports will be added to the file top.
+${typeScriptCompletionRuntimePolicy}
+${typeScriptPrintingPolicy}
 Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, or constructors already present in the sheet.
-Use normal Python and preserve the intended public behavior shown in the runnable/test functions.`;
+Use normal TypeScript and preserve the intended public behavior shown in the runnable/test functions.`;
   }
 
   return `You are an expert software engineer building programs.
 
-You are tasked with assisting on the following Python code sheet:
+You are tasked with assisting on the following TypeScript code sheet:
 
 ${sheet}
 
@@ -3050,18 +3096,18 @@ Your job is to finish the implementation of:
 ${snippet}
 
 Return only implementations for declarations that appear in the requested snippet, plus any standard-library imports required by those declarations.
-Use only Python built-ins and standard-library modules; do not import third-party packages.
+Use TypeScript, Node.js built-ins, and approved dependencies already available to the runtime.
 Do not add sibling top-level definitions that are not already in the requested snippet. If another class, result type, helper, or function is referenced elsewhere in the sheet, use it as an existing dependency and do not define it here.
 For a requested class, return only that class definition and its members. For a requested function, return only that function definition. Helper code must be nested inside the requested declaration rather than added as a sibling definition.
 Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
 Do not assign local variables or loop variables with the same names as top-level helpers, classes, or constructors already present in the sheet.
-Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code. If a class has no declared __init__, support no-argument construction.
-When completing a class with no declared __init__, make no-argument construction produce a valid default object for the runnable/test code; any extra __init__ parameters must be optional.
+Do not call a class constructor with arguments unless the sheet declares that constructor signature or shows that call shape in runnable/test code. If a class has no declared constructor, support no-argument construction.
+When completing a class with no declared constructor, make no-argument construction produce a valid default object for the runnable/test code; any extra constructor parameters must be optional.
 When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
-${pythonCompletionRuntimePolicy}
-${pythonPrintingPolicy}
-Use normal Python. Prefer dataclasses and match statements for sum types.
-${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
+${typeScriptCompletionRuntimePolicy}
+${typeScriptPrintingPolicy}
+Use normal TypeScript. Prefer discriminated unions for sum types.
+${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid TypeScript signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
 }
 
@@ -3073,55 +3119,65 @@ export function buildWholeSheetCompletionPrompt(
     const annotationGuidance = annotationPromptGuidance(snippet.annotationContexts ?? []);
     return [
       `Fragment ${index + 1} (${snippet.kind}, line ${snippet.line}):`,
-      "```python",
+      "```typescript",
       snippet.snippet,
       "```",
       annotationGuidance,
     ].filter((part) => part.length > 0).join("\n");
   }).join("\n\n");
 
-  return `You are an expert software engineer building Python programs.
+  return `You are an expert software engineer building TypeScript CLI programs.
 
-Your job is to compile this Logos worksheet into one complete executable Python code sheet.
+Your job is to compile this Logos worksheet into one complete executable TypeScript code sheet.
 
 Input worksheet:
-\`\`\`python
+\`\`\`typescript
 ${parsed.source}
 \`\`\`
 
 Current partially compiled implementation:
-\`\`\`python
+\`\`\`typescript
 ${currentImplementation}
 \`\`\`
 
 Incomplete fragments to replace:
 ${snippetGuidance.length === 0 ? "None." : snippetGuidance}
 
-Return the entire revised Python code sheet, not a patch. Return only Python code, without Markdown fences, JSON, prose, comments about your work, or explanations.
+Return the entire revised TypeScript code sheet, not a patch. Return only TypeScript code, without Markdown fences, JSON, prose, comments about your work, or explanations.
 
 Rules:
-- Replace every incomplete function, incomplete class method, incomplete class, and natural-language Logos fragment with executable Python.
+- Replace every incomplete function, incomplete class method, incomplete class, and natural-language Logos fragment with executable TypeScript.
+- The current worksheet is the sole source of truth. The goal is the right final implementation, not preserving old code or making a minimal edit.
+- Remove obsolete functions, classes, helpers, imports, UI elements, stories, workflows, runnables, and behavior that are no longer implied by the current worksheet.
+- Do not keep previous behavior merely because it still compiles. Keep existing code only when it directly implements a declaration, behavior, or dependency still present in the current worksheet.
 - Preserve all runnable/test functions and the public behavior they imply.
-- Keep existing completed code unless changing it is necessary to make the sheet compile and run.
-- Use only Python built-ins and standard-library modules.
+- Use TypeScript, Node.js built-ins, and approved dependencies already available to the runtime.
+- Do not add top-level script calls such as main(), await main(), or void main(); the Logos runner invokes the selected runnable.
 - Do not add sibling top-level declarations that are unrelated to the worksheet.
 - Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
 - Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, constructors, or types already present in the sheet.
-- Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code.
-- If a class has no declared __init__, support no-argument construction.
+- Do not call a class constructor with arguments unless the sheet declares that constructor signature or shows that call shape in runnable/test code.
+- If a class has no declared constructor, support no-argument construction.
 - When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
-${pythonCompletionRuntimePolicy}
-${pythonPrintingPolicy}`;
+${typeScriptCompletionRuntimePolicy}
+${typeScriptPrintingPolicy}`;
 }
 
 function normalizeWholeSheetCompletion(source: string): CodeSheet {
   const normalized = normalizeFencedCompletion(source);
   const toolResult = parseWholeSheetToolResult(normalized);
-  return stripPythonMainBlock(toolResult ?? normalized)
+  return stripTopLevelMainCall(stripLegacyPythonMainBlock(toolResult ?? normalized))
     .split("\n")
     .filter((line) => !/^```/.test(line.trim()))
     .join("\n")
     .trim();
+}
+
+function stripTopLevelMainCall(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !/^\s*(?:(?:void|await)\s+)?main\(\);?\s*$/.test(line))
+    .join("\n");
 }
 
 function parseWholeSheetToolResult(source: string): string | null {
@@ -3144,11 +3200,11 @@ function parseWholeSheetToolResult(source: string): string | null {
 
 function normalizeFencedCompletion(source: string): string {
   const trimmed = source.trim();
-  const fenced = trimmed.match(/^```(?:python)?\s*\n([\s\S]*?)\n```$/)?.[1];
+  const fenced = trimmed.match(/^```(?:typescript|ts|python)?\s*\n([\s\S]*?)\n```$/)?.[1];
   return (fenced ?? source).replaceAll("\r\n", "\n").trim();
 }
 
-function stripPythonMainBlock(source: string): string {
+function stripLegacyPythonMainBlock(source: string): string {
   const lines = source.replaceAll("\r\n", "\n").split("\n");
   const mainIndex = lines.findIndex((line) => /^if\s+__name__\s*==\s*["']__main__["']\s*:/.test(line.trim()));
   return (mainIndex < 0 ? lines : lines.slice(0, mainIndex)).join("\n").trimEnd();
@@ -3167,22 +3223,14 @@ function annotationPromptGuidance(contexts: LogosAnnotationContext[]): string {
 
 function naturalSnippetPolicy(snippet: string): { cacheKey: string; promptGuidance: string } | null {
   const trimmed = snippet.trim();
-  if (!trimmed.startsWith("`")) {
+  if (!trimmed.startsWith("l`")) {
     return null;
   }
 
-  if (trimmed.startsWith("```")) {
-    return {
-      cacheKey: "natural-fenced-statement-v4",
-      promptGuidance:
-        "This is a triple-backtick natural-language block. Treat it as an imperative Python statement block and return one or more Python statements. If the user asks to print or show results, make the printed output useful to someone who cannot see the generated code: label sections and values, add blank lines around section breaks, and format grids/tables/puzzles as readable terminal layouts rather than raw lists or reprs.",
-    };
-  }
-
   return {
-    cacheKey: "natural-single-expression-default-v3",
+    cacheKey: "natural-logos-tag-v1",
     promptGuidance:
-      "This is a single-backtick natural-language fragment. Return a Python expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, raising, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with print(...). Do not wrap expression results in print unless the fragment explicitly asks for visible output.",
+      "This is an l`...` Logos natural-language fragment in a TypeScript worksheet. Return a TypeScript expression by default, especially for calculation/value requests such as calculate, sum, count, or find. Return statements only when the fragment explicitly asks for an imperative side effect such as printing, assignment, mutation, throwing, sleeping, looping, rendering, displaying, or showing output. For render/display/show requests that produce a string, make the result visible with console.log(...). Do not wrap expression results in console.log unless the fragment explicitly asks for visible output.",
   };
 }
 
@@ -3193,14 +3241,14 @@ export function normalizeSnippet(
   contextSheet = "",
 ): string {
   const trimmed = source.trim();
-  const fence = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/);
+  const fence = trimmed.match(/```(?:typescript|ts|python)?\s*\n([\s\S]*?)```/);
   const unfenced = fence?.[1] ?? trimmed;
   const lines = dedentLines(unfenced.replaceAll("\r\n", "\n").split("\n"));
   const duplicateDefinitions = existingDefinitionsToDrop(contextSheet, requestedSnippet);
   const requestedDefinitions = requestedDefinitionNames(requestedSnippet);
 
   if (kind === "natural") {
-    return extractNaturalPythonLines(lines).join("\n").trim();
+    return extractNaturalTypeScriptLines(lines).join("\n").trim();
   }
 
   if (kind === "class") {
@@ -3228,7 +3276,7 @@ export function normalizeSnippet(
   });
   if (definitionIndex < 0) {
     const fallbackIndex = lines.findIndex((line) => {
-      return /^(class\s+|def\s+|async\s+def\s+|@|import\s+|from\s+)/.test(line.trimStart());
+      return /^(class\s+|function\s+|async\s+function\s+|type\s+|interface\s+|const\s+|let\s+|import\s+)/.test(line.trimStart());
     });
     return fallbackIndex < 0
       ? unfenced.trimEnd()
@@ -3248,24 +3296,24 @@ export function normalizeSnippet(
   );
 }
 
-function extractNaturalPythonLines(lines: string[]): string[] {
+function extractNaturalTypeScriptLines(lines: string[]): string[] {
   const trimmedOuter = trimOuterBlankLines(lines);
   const firstSignificant = trimmedOuter.findIndex((line) => line.trim().length > 0);
-  if (firstSignificant < 0 || isLikelyPythonNaturalLine(trimmedOuter[firstSignificant].trim())) {
+  if (firstSignificant < 0 || isLikelyTypeScriptNaturalLine(trimmedOuter[firstSignificant].trim())) {
     return trimmedOuter;
   }
 
-  const firstPythonLine = trimmedOuter.findIndex((line, index) => {
-    return index > firstSignificant && isLikelyPythonNaturalLine(line.trim());
+  const firstTypeScriptLine = trimmedOuter.findIndex((line, index) => {
+    return index > firstSignificant && isLikelyTypeScriptNaturalLine(line.trim());
   });
 
-  return firstPythonLine < 0 ? trimmedOuter : trimmedOuter.slice(firstPythonLine);
+  return firstTypeScriptLine < 0 ? trimmedOuter : trimmedOuter.slice(firstTypeScriptLine);
 }
 
-function isLikelyPythonNaturalLine(line: string): boolean {
+function isLikelyTypeScriptNaturalLine(line: string): boolean {
   return (
-    /^(?:import|from|def|class|for|if|elif|else\b|while|try\b|except|finally\b|with|return|raise|print|pass|break|continue|assert|yield)\b/.test(line) ||
-    /^[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]]+\])?\s*(?:=|\+=|-=|\*=|\/=|\/\/=)/.test(line) ||
+    /^(?:import|export|function|async\s+function|class|type|interface|const|let|var|for|if|else\b|while|try\b|catch|finally\b|return|throw|console\.log|break|continue|yield)\b/.test(line) ||
+    /^[A-Za-z_][A-Za-z0-9_.]*(?:\[[^\]]+\])?\s*(?:=|\+=|-=|\*=|\/=)/.test(line) ||
     /^[A-Za-z_][A-Za-z0-9_.]*\s*\(/.test(line) ||
     /^[\[{('"0-9-]/.test(line)
   );
@@ -3308,7 +3356,7 @@ function firstTopLevelCodeIndex(lines: string[], fallback: number): number {
   const firstCodeIndex = lines.findIndex((line) => {
     const trimmed = line.trimStart();
     return (
-      /^(import\s+|from\s+|@|def\s+|async\s+def\s+|class\s+)/.test(trimmed) ||
+      /^(import\s+|export\s+|from\s+|@|def\s+|async\s+def\s+|function\s+|async\s+function\s+|class\s+|type\s+|interface\s+)/.test(trimmed) ||
       /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed)
     );
   });
@@ -3402,6 +3450,10 @@ function pruneTopLevelDefinitions(
 }
 
 function topLevelDefinitionBlockEnd(lines: string[], start: number): number {
+  if (lines[start].includes("{")) {
+    return bracedBlockEndLine(lines, start);
+  }
+
   let end = start + 1;
   while (end < lines.length) {
     const line = lines[end];
@@ -3419,7 +3471,7 @@ function topLevelDefinitionName(line: string): string | null {
     return null;
   }
 
-  return line.match(/^(?:async\s+def|def|class)\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ?? null;
+  return line.match(/^(?:async\s+def|def|async\s+function|function|class)\s+([A-Za-z_][A-Za-z0-9_]*)/)?.[1] ?? null;
 }
 
 function referencesName(source: string, name: string): boolean {
@@ -3432,8 +3484,9 @@ function escapeRegExp(source: string): string {
 
 function isTopLevelDefinitionLine(trimmed: string): boolean {
   return (
-    /^(@|def\s+|async\s+def\s+|class\s+|import\s+|from\s+)/.test(trimmed) ||
+    /^(@|def\s+|async\s+def\s+|function\s+|async\s+function\s+|class\s+|type\s+|interface\s+|import\s+|export\s+|from\s+)/.test(trimmed) ||
     trimmed.startsWith("#") ||
+    trimmed.startsWith("//") ||
     /^[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[^=]+)?\s*=/.test(trimmed) ||
     /^[\]}),]+$/.test(trimmed)
   );

@@ -9,13 +9,13 @@ import {
   type Runnable,
 } from "../../codeSheet";
 import {
-  buildPythonProgram,
+  buildTypeScriptProgram,
   collectCompletionResult,
   completedStrategySheet,
   normalizeFencedCode,
   normalizeLineEndings,
   replaceSnippet,
-  runPython,
+  runTypeScript,
   runResult,
   type RunResult,
   type StrategyRunOptions,
@@ -58,9 +58,9 @@ export async function compileAndRunAgentically(
   const cachedSource = await cachedImplementation(cache, cacheKey);
   if (cachedSource !== undefined) {
     const completed = completedStrategySheet(codeSheet, cachedSource, cacheKey, true);
-    const executed = await runPython(
-      buildPythonProgram(completed.source, runnable),
-      options.python ?? "python3",
+    const executed = await runTypeScript(
+      buildTypeScriptProgram(completed.source, runnable),
+      options.tsx,
       options.onStdoutLine,
     );
     return runResult(executed, completed);
@@ -86,9 +86,9 @@ export async function compileAndRunAgentically(
     const action = parseAgenticAction(raw);
     currentSource = applyAgenticAction(currentSource, action);
 
-    const executed = await runPython(
-      buildPythonProgram(currentSource, runnable),
-      options.python ?? "python3",
+    const executed = await runTypeScript(
+      buildTypeScriptProgram(currentSource, runnable),
+      options.tsx,
     );
     observations.push({
       iteration,
@@ -104,9 +104,9 @@ export async function compileAndRunAgentically(
   }
 
   const completed = completedStrategySheet(codeSheet, currentSource, cacheKey, false);
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
+  const executed = await runTypeScript(
+    buildTypeScriptProgram(completed.source, runnable),
+    options.tsx,
     options.onStdoutLine,
   );
   if (executed.ok) {
@@ -124,34 +124,34 @@ function buildAgenticFilePrompt(options: {
   iteration: number;
   maxIterations: number;
 }): string {
-  return `Your job is to compile this worksheet into one complete Python file.
+  return `Your job is to compile this worksheet into one complete TypeScript file.
 
-You are a stateful coding agent editing a single Python source file. Use the tool protocol below instead of returning prose.
+You are a stateful coding agent editing a single TypeScript source file. Use the tool protocol below instead of returning prose.
 
 Tool protocol:
 - Return exactly one JSON object.
 - Prefer small edits: {"tool":"replace_snippets","replacements":[{"snippet":"<exact current snippet>","replacement":"<complete replacement code>"}]}
-- To replace the whole file: {"tool":"replace_file","source":"<complete Python source without a __main__ block>"}
-- To finish with the current or supplied file: {"tool":"finish"} or {"tool":"finish","source":"<complete Python source without a __main__ block>"}
+- To replace the whole file: {"tool":"replace_file","source":"<complete TypeScript source without a top-level main call>"}
+- To finish with the current or supplied file: {"tool":"finish"} or {"tool":"finish","source":"<complete TypeScript source without a top-level main call>"}
 
 Rules:
 - Preserve the public behavior required by the runnable/test function.
-- Use only the Python standard library.
+- Use only the Node.js standard library.
 - Keep declarations top-level unless nesting is explicitly required.
-- If the worksheet declares a class without __init__, no-argument construction must produce a valid default object.
+- If the worksheet declares a class without a constructor, no-argument construction must produce a valid default object.
 - Prefer concise code. Avoid comments, docstrings, and copied worksheet prose unless they are needed for behavior.
-- Do not include an if __name__ == "__main__" block; the runner adds it.
+- Do not include an top-level main() call; the runner adds it.
 
 Runnable to satisfy: ${options.runnable}
 Iteration: ${options.iteration} of ${options.maxIterations}
 
 Worksheet:
-\`\`\`python
+\`\`\`typescript
 ${options.codeSheet}
 \`\`\`
 
 Current file:
-\`\`\`python
+\`\`\`typescript
 ${options.currentSource}
 \`\`\`
 
@@ -255,9 +255,8 @@ function applyAgenticAction(source: string, action: AgenticAction): string {
 
 function normalizeAgenticSource(source: string): string {
   const trimmed = source.trim();
-  const fenced = trimmed.match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1] ?? trimmed;
+  const fenced = trimmed.match(/```(?:typescript|ts|python)?\s*\n([\s\S]*?)```/)?.[1] ?? trimmed;
   const lines = normalizeLineEndings(fenced).split("\n");
-  const withoutFuture = lines.filter((line) => line.trim() !== "from __future__ import annotations");
-  const mainIndex = withoutFuture.findIndex((line) => /^if\s+__name__\s*==\s*["']__main__["']\s*:/.test(line.trim()));
-  return trimOuterBlankLines(mainIndex < 0 ? withoutFuture : withoutFuture.slice(0, mainIndex)).join("\n").trimEnd();
+  const withoutTopLevelMain = lines.filter((line) => !/^\s*(?:void\s+)?main\(\);\s*$/.test(line));
+  return trimOuterBlankLines(withoutTopLevelMain).join("\n").trimEnd();
 }
