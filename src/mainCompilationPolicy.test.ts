@@ -62,7 +62,7 @@ describe("frontend compilation policy", () => {
     const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
 
     expect(source).toContain("function sourceDefinitionHighlightRange");
-    expect(source).toContain("function sourceDefinitionHighlightLength");
+    expect(source).toContain("firstLineLength(target.source.trimStart())");
     expect(source).toContain('inlineClassName: "snippet-source-inline-selected"');
     expect(source).not.toContain('className: "definition-implementation-line-selected"');
   });
