@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import ts from "typescript";
 import type {
   ContentBlockParam,
   MessageParam,
@@ -142,6 +143,10 @@ export async function* runClaudeSingleFileAgent(
     if (toolUses.length === 0) {
       const fallback = extractTypeScriptSource(text);
       if (fallback !== null) {
+        const syntaxErrors = singleFileAgentTypeScriptSyntaxErrors(fallback);
+        if (syntaxErrors.length > 0) {
+          throw new Error(`Claude returned invalid TypeScript: ${syntaxErrors.join("; ")}`);
+        }
         currentCode = fallback;
         yield { kind: "file", source: currentCode };
         yield { kind: "done", source: currentCode };
@@ -159,6 +164,23 @@ export async function* runClaudeSingleFileAgent(
         currentCode = result.source;
         if (result.changed) {
           yield { kind: "file", source: currentCode };
+        }
+
+        if (result.done) {
+          const syntaxErrors = singleFileAgentTypeScriptSyntaxErrors(currentCode);
+          if (syntaxErrors.length > 0) {
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolUse.id,
+              is_error: true,
+              content: [
+                "Cannot finish because the current implementation is not syntactically valid TypeScript.",
+                "Fix the current file with focused replace_range or replace_text edits, then call finish again.",
+                ...syntaxErrors.map((error) => `- ${error}`),
+              ].join("\n"),
+            });
+            continue;
+          }
         }
 
         toolResults.push({
@@ -234,6 +256,31 @@ ${input.diffFromPrevious ?? ""}
 \`\`\`typescript
 ${input.currentCode}
 \`\`\``;
+}
+
+export function singleFileAgentTypeScriptSyntaxErrors(source: CodeSheet): string[] {
+  const transpiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      jsx: ts.JsxEmit.React,
+      esModuleInterop: true,
+    },
+    reportDiagnostics: true,
+  });
+
+  return (transpiled.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+    .map((diagnostic) => {
+      const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
+      if (!diagnostic.file || diagnostic.start === undefined) {
+        return message;
+      }
+
+      const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+      return `${position.line + 1}:${position.character + 1} ${message}`;
+    });
 }
 
 function anthropicClient(apiKey: string | undefined): Anthropic {
