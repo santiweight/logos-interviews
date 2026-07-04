@@ -174,6 +174,63 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("closes the add-file menu when clicking back into the editor", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+
+      await page.getByLabel("Add file").click();
+      await expect.poll(async () => isDetailsOpen(page, "#sample-menu")).toBe(true);
+
+      await page.locator("#editor").click({ position: { x: 24, y: 24 } });
+      await expect.poll(async () => isDetailsOpen(page, "#sample-menu")).toBe(false);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("leaves browser command shortcuts alone while preserving editor comment toggling", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const source = "def main():\n  print('hi')\n";
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, source, "Shortcut Handling");
+      await page.locator("#editor .view-line").first().click();
+
+      const primaryModifier = process.platform === "darwin" ? "Meta" : "Control";
+      const primaryModifierKey = process.platform === "darwin"
+        ? { metaKey: true }
+        : { ctrlKey: true };
+
+      await page.keyboard.press(`${primaryModifier}+Slash`);
+      await expect.poll(async () => editorSource(page)).toBe("# def main():\n  print('hi')\n");
+
+      const commandL = await dispatchEditorKeydown(page, {
+        key: "l",
+        code: "KeyL",
+        keyCode: 76,
+        ...primaryModifierKey,
+      });
+      expect(commandL).toEqual({ dispatched: true, defaultPrevented: false });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders the implementation view with highlighted code", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
@@ -195,6 +252,36 @@ describe("run program browser flow", () => {
       await expect.poll(async () => {
         return page.locator("#implementation-view-panel .view-line span[class*='mtk']").count();
       }).toBeGreaterThan(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps the output pane flush with the shell after resizing it wider", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+    });
+    try {
+      const page = await context.newPage();
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+
+      const handle = await page.locator("#code-run-resize-handle").boundingBox();
+      if (!handle) {
+        throw new Error("Resize handle did not render");
+      }
+
+      await page.mouse.move(handle.x + handle.width / 2, handle.y + 80);
+      await page.mouse.down();
+      await page.mouse.move(handle.x - 260, handle.y + 80, { steps: 8 });
+      await page.mouse.up();
+
+      await expect.poll(async () => outputPaneRightGap(page)).toBeLessThanOrEqual(1);
     } finally {
       await context.close();
     }
@@ -525,8 +612,71 @@ async function visibleImplementationLines(page: Page): Promise<string[]> {
   });
 }
 
+async function outputPaneRightGap(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const shell = document.querySelector("#shell");
+    const outputPane = document.querySelector("#output-pane");
+    if (!(shell instanceof HTMLElement) || !(outputPane instanceof HTMLElement)) {
+      throw new Error("Output pane layout elements are unavailable");
+    }
+
+    return shell.getBoundingClientRect().right - outputPane.getBoundingClientRect().right;
+  });
+}
+
 async function isTerminalInputFocused(page: Page): Promise<boolean> {
   return page.evaluate(() => document.activeElement?.classList.contains("terminal-input") === true);
+}
+
+async function isDetailsOpen(page: Page, selector: string): Promise<boolean> {
+  return page.$eval(selector, (element) => element instanceof HTMLDetailsElement && element.open);
+}
+
+async function editorSource(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const logosWindow = window as LogosWindow;
+    return logosWindow.createLogosSessionBundle?.().editor.value ?? "";
+  });
+}
+
+async function dispatchEditorKeydown(
+  page: Page,
+  init: {
+    key: string;
+    code: string;
+    keyCode: number;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    altKey?: boolean;
+    shiftKey?: boolean;
+  },
+): Promise<{ dispatched: boolean; defaultPrevented: boolean }> {
+  return page.evaluate((init) => {
+    const activeElement = document.activeElement;
+    const target = activeElement instanceof HTMLElement && document.querySelector("#editor")?.contains(activeElement)
+      ? activeElement
+      : document.querySelector<HTMLElement>("#editor .native-edit-context, #editor textarea");
+    if (!target) {
+      throw new Error("Monaco edit target is unavailable");
+    }
+
+    target.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: init.key,
+      code: init.code,
+      ctrlKey: init.ctrlKey ?? false,
+      metaKey: init.metaKey ?? false,
+      altKey: init.altKey ?? false,
+      shiftKey: init.shiftKey ?? false,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(event, "keyCode", { get: () => init.keyCode });
+    Object.defineProperty(event, "which", { get: () => init.keyCode });
+
+    const dispatched = target.dispatchEvent(event);
+    return { dispatched, defaultPrevented: event.defaultPrevented };
+  }, init);
 }
 
 function reverseSource(): string {
