@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentCompilationFramework } from "./agentCompilation";
-import { singleFileAgentTools } from "./claudeSingleFileAgent";
+import { buildSingleFileAgentPrompt, singleFileAgentTools } from "./claudeSingleFileAgent";
 import type { CodeCache, CompilationEvent } from "./codeSheet";
 import type { SingleFileAgentFunction, SingleFileAgentInput } from "./claudeSingleFileAgent";
 
@@ -134,6 +134,28 @@ def test():
       nextSheet: sheet,
       previousSheet: undefined,
     });
+  });
+
+  it("gives the single-file agent the same compiler context as the old whole-sheet compiler", () => {
+    const prompt = buildSingleFileAgentPrompt({
+      nextSheet: `@logos.debug.print()
+def add(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))`,
+      currentCode: `def add(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))`,
+    });
+
+    expect(prompt).toContain("Legacy compiler context:");
+    expect(prompt).toContain("same context used by the non-tool whole-sheet compiler");
+    expect(prompt).toContain("Replace every incomplete function, incomplete class method, incomplete class");
+    expect(prompt).toContain("Use only Python built-ins and standard-library modules");
+    expect(prompt).toContain("When generating visible output, prefer self-explanatory printing");
+    expect(prompt).toContain("when generating code, make sure to add thoughtful and reasonable print statements");
+    expect(prompt).toContain("do not answer with raw code; apply the equivalent change with replace_file");
   });
 });
 

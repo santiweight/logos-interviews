@@ -8,12 +8,16 @@ import {
   hashCompletionInput,
   hashSnippet,
   implementationBlockForTarget,
+  implementationForIncompleteSnippet,
+  implementationMatchForIncompleteSnippet,
+  implementationMatchForTarget,
   implementationTargetAtLine,
   lower,
   parse,
   renderImplementation,
   runnables,
   selectionContextAtPosition,
+  UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
   type CodeCache,
   type CompilationEvent,
 } from "./codeSheet";
@@ -2555,7 +2559,8 @@ def test():
 
 def main():
   print(Counter().next())`;
-    const classTarget = implementationTargetAtLine(source, 2);
+    const classTarget = implementationTargetAtLine(source, 1);
+    const methodTarget = implementationTargetAtLine(source, 2);
     const functionTarget = implementationTargetAtLine(source, 5);
 
     expect(classTarget).toEqual({
@@ -2565,6 +2570,15 @@ def main():
       endLine: 3,
       source: `class Counter:
   def next(self) -> int:
+    return 1`,
+    });
+    expect(methodTarget).toEqual({
+      kind: "method",
+      name: "next",
+      className: "Counter",
+      line: 2,
+      endLine: 3,
+      source: `  def next(self) -> int:
     return 1`,
     });
     expect(functionTarget).toEqual({
@@ -2668,10 +2682,266 @@ def main():
   print(Counter().next())`;
     const target = implementationTargetAtLine(source, 2);
 
+    expect(target).toEqual({
+      kind: "method",
+      name: "next",
+      className: "Counter",
+      line: 2,
+      endLine: 2,
+      source: "  def next(self) -> int",
+    });
+    expect(implementationBlockForTarget(implementation, target!)).toBe(`  def next(self) -> int:
+    return 1`);
+  });
+
+  it("extracts the generated implementation for a clicked class header", () => {
+    const source = `class Counter:
+  def next(self) -> int
+
+def main():
+  print(Counter().next())`;
+    const implementation = `class Counter:
+  def next(self) -> int:
+    return 1
+
+def main():
+  print(Counter().next())`;
+    const target = implementationTargetAtLine(source, 1);
+
     expect(target?.kind).toBe("class");
     expect(implementationBlockForTarget(implementation, target!)).toBe(`class Counter:
   def next(self) -> int:
     return 1`);
+  });
+
+  it("returns the exact implementation range for a clicked class method", () => {
+    const source = `class MagicSquare:
+  size: int
+
+  def gen() -> MagicSquare
+  def pretty() -> str`;
+    const implementation = `class MagicSquare:
+  size: int
+
+  def gen(self) -> MagicSquare:
+    return self
+
+  def pretty(self) -> str:
+    return "square"`;
+    const target = implementationTargetAtLine(source, 5);
+    const match = implementationMatchForTarget(implementation, target!);
+
+    expect(target).toMatchObject({ kind: "method", name: "pretty", className: "MagicSquare" });
+    expect(match?.code).toBe(`  def pretty(self) -> str:
+    return "square"`);
+    expect(match?.range).not.toBeNull();
+    expect(implementation.slice(match!.range!.start, match!.range!.end)).toBe(`  def pretty(self) -> str:
+    return "square"`);
+  });
+
+  it("matches individual MagicSquare methods from incomplete class signatures", () => {
+    const source = `class MagicSquare:
+  size: int
+
+  def gen(self) -> MagicSquare
+  def grid(self) -> [[int]]
+
+  def pretty(self) -> str`;
+    const implementation = `class MagicSquare:
+    """A magic square."""
+
+    def __init__(self, size: int):
+        self.size = size
+        self._grid = None
+
+    def gen(self) -> "MagicSquare":
+        """Generate the magic square and store it internally, returning self."""
+        n = self.size
+        self._grid = [[1 for _ in range(n)] for _ in range(n)]
+        return self
+
+    def grid(self) -> list:
+        """Return the magic square as a 2-D list of ints."""
+        if self._grid is None:
+            self.gen()
+        return self._grid
+
+    def pretty(self) -> str:
+        """
+        Return a formatted string of the grid with row sums on the right
+        and column sums along the bottom.
+        """
+        g = self.grid()
+        return "\\n".join(" ".join(str(value) for value in row) for row in g)`;
+
+    const genTarget = implementationTargetAtLine(source, 4);
+    const gridTarget = implementationTargetAtLine(source, 5);
+    const prettyTarget = implementationTargetAtLine(source, 7);
+    const genMatch = implementationMatchForTarget(implementation, genTarget!);
+    const gridMatch = implementationMatchForTarget(implementation, gridTarget!);
+    const prettyMatch = implementationMatchForTarget(implementation, prettyTarget!);
+
+    expect(genTarget).toMatchObject({ kind: "method", name: "gen", className: "MagicSquare" });
+    expect(gridTarget).toMatchObject({ kind: "method", name: "grid", className: "MagicSquare" });
+    expect(prettyTarget).toMatchObject({ kind: "method", name: "pretty", className: "MagicSquare" });
+    expect(genMatch?.code).toContain(`def gen(self) -> "MagicSquare":`);
+    expect(gridMatch?.code).toContain("def grid(self) -> list:");
+    expect(prettyMatch?.code).toContain("def pretty(self) -> str:");
+    expect(prettyMatch?.code).not.toContain("def grid");
+    expect(implementation.slice(prettyMatch!.range!.start, prettyMatch!.range!.end)).toBe(prettyMatch?.code);
+  });
+
+  it("selects MagicSquare methods inside an incomplete class instead of the enclosing class snippet", () => {
+    const source = `class MagicSquare:
+  size: int
+
+  def gen(self) -> MagicSquare
+  def grid(self) -> [[int]]
+
+  def pretty(self) -> str`;
+
+    expect([4, 5, 7].map((line) => {
+      const context = selectionContextAtPosition(source, line, 5);
+      return context.kind === "implementation"
+        ? `${context.target.kind}:${context.target.className}.${context.target.name}`
+        : context.kind;
+    })).toEqual([
+      "method:MagicSquare.gen",
+      "method:MagicSquare.grid",
+      "method:MagicSquare.pretty",
+    ]);
+  });
+
+  it("matches a MagicSquare field to the generated implementation that initializes it", () => {
+    const source = `class MagicSquare:
+  size: int
+
+  def gen(self) -> MagicSquare
+  def grid(self) -> [[int]]
+
+  def pretty(self) -> str`;
+    const implementation = `class MagicSquare:
+    """A magic square."""
+
+    def __init__(self, size: int):
+        self.size = size
+        self._grid = None
+
+    def gen(self) -> "MagicSquare":
+        return self`;
+    const target = implementationTargetAtLine(source, 2);
+    const match = implementationMatchForTarget(implementation, target!);
+
+    expect(target).toEqual({
+      kind: "field",
+      name: "size",
+      className: "MagicSquare",
+      line: 2,
+      endLine: 2,
+      source: "  size: int",
+    });
+    expect(match?.code).toBe("        self.size = size");
+    expect(match?.range).not.toBeNull();
+    expect(implementation.slice(match!.range!.start, match!.range!.end)).toBe("        self.size = size");
+  });
+
+  it("infers an inline natural snippet implementation from a compiled splice", () => {
+    const source = `def main():
+  foo = \`calculate the sum of all primes less than 50\`
+  print(foo)`;
+    const implementation = `def main():
+  foo = 328
+  print(foo)`;
+    const snippet = parse(source).incompleteSnippets[0];
+
+    expect(snippet?.kind).toBe("natural");
+    expect(implementationForIncompleteSnippet(source, implementation, snippet!)).toBe("328");
+  });
+
+  it("returns the exact implementation range for an inline natural splice", () => {
+    const source = `def main():
+  print(328)
+  foo = \`calculate the sum of all primes less than 50\`
+  print(foo)`;
+    const implementation = `def main():
+  print(328)
+  foo = 328
+  print(foo)`;
+    const snippet = parse(source).incompleteSnippets[0];
+    const match = implementationMatchForIncompleteSnippet(source, implementation, snippet!);
+
+    expect(match?.code).toBe("328");
+    expect(match?.range).not.toBeNull();
+    expect(implementation.slice(match!.range!.start, match!.range!.end)).toBe("328");
+    expect(match?.range?.start).toBe(implementation.indexOf("328", implementation.indexOf("foo = ")));
+  });
+
+  it("infers a standalone natural snippet implementation from surrounding concrete statements", () => {
+    const source = `def main():
+  print("before")
+  \`print the first three squares\`
+  print("after")`;
+    const implementation = `def main():
+  print("before")
+  for value in range(1, 4):
+    print(value * value)
+  print("after")`;
+    const snippet = parse(source).incompleteSnippets[0];
+
+    expect(snippet?.kind).toBe("natural");
+    expect(implementationForIncompleteSnippet(source, implementation, snippet!)).toBe(`for value in range(1, 4):
+  print(value * value)`);
+  });
+
+  it("returns the exact implementation range for a standalone natural splice", () => {
+    const source = `def main():
+  print("before")
+  \`print the first three squares\`
+  print("after")`;
+    const implementation = `def main():
+  print("before")
+  for value in range(1, 4):
+    print(value * value)
+  print("after")`;
+    const snippet = parse(source).incompleteSnippets[0];
+    const match = implementationMatchForIncompleteSnippet(source, implementation, snippet!);
+
+    expect(match?.code).toBe(`for value in range(1, 4):
+  print(value * value)`);
+    expect(match?.range).not.toBeNull();
+    expect(implementation.slice(match!.range!.start, match!.range!.end)).toBe(`  for value in range(1, 4):
+    print(value * value)`);
+  });
+
+  it("uses the explicit fallback when adjacent snippets make the exact splice ambiguous", () => {
+    const source = `def main():
+  print("before")
+  \`print the first square\`
+  \`print the second square\`
+  print("after")`;
+    const implementation = `def main():
+  print("before")
+  print(1)
+  print(4)
+  print("after")`;
+    const [firstSnippet, secondSnippet] = parse(source).incompleteSnippets;
+
+    expect(implementationForIncompleteSnippet(source, implementation, firstSnippet!)).toBe(
+      UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
+    );
+    expect(implementationForIncompleteSnippet(source, implementation, secondSnippet!)).toBe(
+      UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
+    );
+  });
+
+  it("uses the explicit fallback when a definition cannot be matched in the implementation", () => {
+    const source = `def add(x: int, y: int) -> int`;
+    const implementation = `def subtract(x: int, y: int) -> int:
+  return x - y`;
+    const target = implementationTargetAtLine(source, 1);
+
+    expect(target?.name).toBe("add");
+    expect(implementationBlockForTarget(implementation, target!)).toBe(UNKNOWN_IMPLEMENTATION_MATCH_TEXT);
   });
 
   it("finds the full implementation target for a typed class with incomplete methods", () => {

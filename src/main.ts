@@ -11,6 +11,9 @@ import {
   hashCompletionInput,
   indentNaturalReplacement,
   implementationBlockForTarget,
+  implementationForIncompleteSnippet,
+  implementationMatchForIncompleteSnippet,
+  implementationMatchForTarget,
   implementationTargetAtLine,
   parse,
   runnables,
@@ -21,6 +24,7 @@ import {
   type ImplementationTarget,
   type Runnable,
   type SnippetHash,
+  UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
 } from "./codeSheet";
 import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
@@ -100,7 +104,7 @@ export type LoadableSessionRunTab = {
 
 export type LoadableSessionSelection =
   | { kind: "snippet"; hash: string | null }
-  | { kind: "definition"; line: number; name: string; targetKind: "function" | "class" }
+  | { kind: "definition"; line: number; name: string; targetKind: "function" | "class" | "field" | "method"; className?: string }
   | { kind: "whole-file" }
   | { kind: "none" };
 
@@ -528,6 +532,7 @@ let runnableDecorations: string[] = [];
 let runnableRunWidgets = new Map<string, monaco.editor.IContentWidget>();
 let incompleteSnippetDecorations: string[] = [];
 let selectedDefinitionDecorations: string[] = [];
+let implementationSnippetDecorations: string[] = [];
 let runnableStateByLine = new Map<number, RunnableState>();
 let incompleteSnippetsByLine = new Map<number, IncompleteSnippetTarget[]>();
 let incompleteSnippetByHash = new Map<SnippetHash, IncompleteSnippetTarget>();
@@ -1038,6 +1043,11 @@ editor.onDidChangeCursorPosition(() => {
 });
 
 editor.onMouseMove((event) => {
+  if (activeToolTabId === implementationToolTabId) {
+    hideSnippetPopup();
+    return;
+  }
+
   if (snippetPopupPinned || snippetPopupHoveringPanel || snippetPopupDragging) {
     return;
   }
@@ -1074,8 +1084,13 @@ editor.onMouseDown((event) => {
       const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
       if (incompleteSnippet) {
         selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
-        snippetPopupPinned = true;
-        showSnippetPopupForTarget(incompleteSnippet, editorMouseClientPoint(event));
+        if (activeToolTabId === implementationToolTabId) {
+          hideSnippetPopup();
+          revealImplementationForSnippet(incompleteSnippet);
+        } else {
+          snippetPopupPinned = true;
+          showSnippetPopupForTarget(incompleteSnippet, editorMouseClientPoint(event));
+        }
         clearEditorSelectionAt(lineNumber, column);
         return;
       }
@@ -1084,6 +1099,9 @@ editor.onMouseDown((event) => {
     if (context.kind === "implementation") {
       hideSnippetPopup();
       selectDefinitionImplementation(context.target);
+      if (activeToolTabId === implementationToolTabId) {
+        revealImplementationForDefinition(context.target);
+      }
       return;
     }
 
@@ -2579,6 +2597,7 @@ function refreshIncompleteSnippets(source: string): void {
 
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
+  updateImplementationSnippetDecorations();
   updateNaturalSnippetEditorMode();
   renderSnippetPanel();
 }
@@ -2615,6 +2634,7 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
   selectedSnippetHash = hash;
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
+  updateImplementationSnippetDecorations();
   renderSnippetPanel();
   sessionCapture.track("incomplete_snippet_selected", {
     hash,
@@ -2629,6 +2649,7 @@ function selectDefinitionImplementation(target: ImplementationTarget): void {
   selectedSnippetHash = null;
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
+  updateImplementationSnippetDecorations();
   renderSnippetPanel();
   sessionCapture.track("definition_implementation_selected", {
     kind: target.kind,
@@ -2643,6 +2664,7 @@ function selectWholeFileImplementation(lineNumber: number): void {
   selectedWholeFileImplementation = true;
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
+  updateImplementationSnippetDecorations();
   renderSnippetPanel();
   sessionCapture.track("whole_file_implementation_selected", {
     line: lineNumber,
@@ -2658,7 +2680,8 @@ function refreshedDefinitionTarget(source: string): ImplementationTarget | null 
   if (
     refreshed === null ||
     refreshed.kind !== selectedDefinitionTarget.kind ||
-    refreshed.name !== selectedDefinitionTarget.name
+    refreshed.name !== selectedDefinitionTarget.name ||
+    refreshed.className !== selectedDefinitionTarget.className
   ) {
     return null;
   }
@@ -2752,20 +2775,169 @@ function snippetOffsetRangeToEditorRange(
 
 function updateSelectedDefinitionDecorations(): void {
   const target = selectedDefinitionTarget;
+  const range = target === null || selectedWholeFileImplementation
+    ? null
+    : sourceDefinitionHighlightRange(target);
   selectedDefinitionDecorations = editor.deltaDecorations(
     selectedDefinitionDecorations,
-    selectedWholeFileImplementation
-      ? []
-      : target === null
+    range === null
       ? []
       : [{
-          range: new monaco.Range(target.line, 1, target.endLine, Number.MAX_SAFE_INTEGER),
+          range,
           options: {
-            isWholeLine: true,
-            className: "definition-implementation-line-selected",
+            isWholeLine: false,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+            inlineClassName: "snippet-source-inline-selected",
             marginClassName: undefined,
           },
         }],
+  );
+}
+
+function sourceDefinitionHighlightRange(target: ImplementationTarget): monaco.Range | null {
+  const line = editor.getModel()?.getLineContent(target.line) ?? "";
+  const startColumn = (line.match(/^\s*/)?.[0].length ?? 0) + 1;
+  const trimmed = line.trimStart();
+  const highlightLength = sourceDefinitionHighlightLength(trimmed, target);
+  if (highlightLength <= 0) {
+    return null;
+  }
+
+  return new monaco.Range(
+    target.line,
+    startColumn,
+    target.line,
+    startColumn + highlightLength,
+  );
+}
+
+function sourceDefinitionHighlightLength(trimmedLine: string, target: ImplementationTarget): number {
+  if (target.kind === "class") {
+    return trimmedLine.match(/^class\s+[A-Za-z_][A-Za-z0-9_]*/)?.[0].length ?? 0;
+  }
+
+  if (target.kind === "field") {
+    return trimmedLine.length;
+  }
+
+  if (target.kind === "function" || target.kind === "method") {
+    return trimmedLine.match(/^(?:async\s+)?(?:def|fn|function)\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)(?:\s*->\s*[^:]+)?/)?.[0].trimEnd().length ?? 0;
+  }
+
+  return 0;
+}
+
+function updateImplementationSnippetDecorations(): monaco.Range | null {
+  const snippetTarget = selectedSnippetHash === null
+    ? null
+    : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
+  const range = snippetTarget !== null
+    ? implementationRangeForSnippet(snippetTarget)
+    : selectedDefinitionTarget !== null
+    ? implementationRangeForDefinition(selectedDefinitionTarget)
+    : null;
+
+  implementationSnippetDecorations = implementationViewEditor.deltaDecorations(
+    implementationSnippetDecorations,
+    range === null
+      ? []
+      : [{
+          range,
+          options: {
+            isWholeLine: false,
+            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+            className: "snippet-source-inline-selected",
+            inlineClassName: "snippet-source-inline-selected",
+          },
+        }],
+  );
+
+  return range;
+}
+
+function revealImplementationForSnippet(target: IncompleteSnippetTarget): void {
+  selectedSnippetHash = target.hash;
+  selectedDefinitionTarget = null;
+  selectedWholeFileImplementation = false;
+  snippetGuideHash = target.hash;
+  updateIncompleteSnippetDecorations();
+  const range = updateImplementationSnippetDecorations();
+  if (range === null) {
+    return;
+  }
+
+  implementationViewEditor.revealRangeInCenter(range, monaco.editor.ScrollType.Smooth);
+  implementationViewEditor.setSelection(range);
+}
+
+function revealImplementationForDefinition(target: ImplementationTarget): void {
+  selectedDefinitionTarget = target;
+  selectedSnippetHash = null;
+  selectedWholeFileImplementation = false;
+  snippetGuideHash = null;
+  updateIncompleteSnippetDecorations();
+  const range = updateImplementationSnippetDecorations();
+  if (range === null) {
+    return;
+  }
+
+  implementationViewEditor.revealRangeInCenter(range, monaco.editor.ScrollType.Smooth);
+  implementationViewEditor.setSelection(range);
+}
+
+function implementationRangeForDefinition(target: ImplementationTarget): monaco.Range | null {
+  const implementation = implementationViewText();
+  const match = implementationMatchForTarget(implementation, target);
+  if (
+    match === null ||
+    match.code === UNKNOWN_IMPLEMENTATION_MATCH_TEXT ||
+    match.code.trim().length === 0 ||
+    match.range === null
+  ) {
+    return null;
+  }
+
+  return implementationOffsetRangeToMonacoRange(implementation, match.range);
+}
+
+function implementationRangeForSnippet(target: IncompleteSnippetTarget): monaco.Range | null {
+  const implementation = implementationViewText();
+  const match = implementationMatchForIncompleteSnippet(
+    editor.getValue(),
+    implementation,
+    {
+      kind: target.kind,
+      line: target.startLine,
+      column: target.startColumn,
+      snippet: target.snippet,
+    },
+  );
+
+  if (
+    match === null ||
+    match.code === UNKNOWN_IMPLEMENTATION_MATCH_TEXT ||
+    match.code.trim().length === 0 ||
+    match.range === null
+  ) {
+    return null;
+  }
+
+  return implementationOffsetRangeToMonacoRange(implementation, match.range);
+}
+
+function implementationOffsetRangeToMonacoRange(
+  implementation: string,
+  range: { start: number; end: number },
+): monaco.Range {
+  const lineStarts = sourceLineStartOffsets(implementation);
+  const startPosition = offsetToEditorPosition(lineStarts, range.start);
+  const endPosition = offsetToEditorPosition(lineStarts, range.end);
+
+  return new monaco.Range(
+    startPosition.line,
+    startPosition.column,
+    endPosition.line,
+    endPosition.column,
   );
 }
 
@@ -2802,9 +2974,13 @@ function renderSnippetPanel(): void {
   }
 
   const preview = snippetPreviewByHash.get(target.hash);
+  const inferredImplementation = preview?.implementation === undefined || preview.implementation === null
+    ? inferredImplementationForSnippet(target)
+    : null;
   const text =
     preview?.implementation ??
     (preview?.streamed.length ? preview.streamed : null) ??
+    inferredImplementation ??
     preview?.snippet ??
     target.snippet;
 
@@ -3012,6 +3188,19 @@ function previewReplacementForSnippet(target: IncompleteSnippetTarget): string |
     (preview.streamed.length > 0 ? preview.streamed : null);
 }
 
+function inferredImplementationForSnippet(target: IncompleteSnippetTarget): string | null {
+  return implementationForIncompleteSnippet(
+    editor.getValue(),
+    previewImplementationSource(),
+    {
+      kind: target.kind,
+      line: target.startLine,
+      column: target.startColumn,
+      snippet: target.snippet,
+    },
+  );
+}
+
 function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPanelStatus {
   if (preview?.status === "complete" || preview?.status === "cached") {
     return preview.status;
@@ -3032,6 +3221,8 @@ function definitionPanelStatus(target: ImplementationTarget): SnippetPanelStatus
   const matchingReadiness = latestReadinessDefinitions.filter((definition) => (
     target.kind === "function"
       ? definition.kind === "function" && definition.name === target.name
+      : target.kind === "method"
+      ? definition.kind === "method" && definition.name === `${target.className}.${target.name}`
       : definition.kind === "method" && definition.name.startsWith(`${target.name}.`)
   ));
 
@@ -4174,6 +4365,12 @@ function renderImplementationView(): void {
   if (implementationViewEditor.getValue() !== text) {
     implementationViewEditor.setValue(text);
   }
+  const selectedRange = updateImplementationSnippetDecorations();
+  if (selectedRange !== null && activeToolTabId === implementationToolTabId) {
+    implementationViewEditor.revealRangeInCenter(selectedRange, monaco.editor.ScrollType.Immediate);
+    return;
+  }
+
   implementationViewEditor.setScrollTop(implementationViewEditor.getScrollHeight());
 }
 
@@ -5210,6 +5407,7 @@ function currentLoadableSelection(): LoadableSessionSelection {
       line: selectedDefinitionTarget.line,
       name: selectedDefinitionTarget.name,
       targetKind: selectedDefinitionTarget.kind,
+      ...(selectedDefinitionTarget.className === undefined ? {} : { className: selectedDefinitionTarget.className }),
     };
   }
 
@@ -5238,7 +5436,8 @@ function restoreLoadableSelection(selection: LoadableSessionSelection): void {
     if (
       target !== null &&
       target.kind === selection.targetKind &&
-      target.name === selection.name
+      target.name === selection.name &&
+      target.className === selection.className
     ) {
       selectedDefinitionTarget = target;
     }
@@ -5304,7 +5503,13 @@ function isLoadableSessionSelection(value: unknown): value is LoadableSessionSel
       selection.kind === "definition" &&
       typeof selection.line === "number" &&
       typeof selection.name === "string" &&
-      (selection.targetKind === "function" || selection.targetKind === "class")
+      (
+        selection.targetKind === "function" ||
+        selection.targetKind === "class" ||
+        selection.targetKind === "field" ||
+        selection.targetKind === "method"
+      ) &&
+      (selection.className === undefined || typeof selection.className === "string")
     )
   );
 }

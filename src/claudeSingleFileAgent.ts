@@ -5,7 +5,11 @@ import type {
   Tool,
   ToolUseBlock,
 } from "@anthropic-ai/sdk/resources/messages/messages";
-import type { CodeSheet } from "./codeSheet";
+import {
+  buildWholeSheetCompletionPrompt,
+  parse,
+  type CodeSheet,
+} from "./codeSheet";
 
 export type SingleFileAgentInput = {
   previousSheet?: CodeSheet;
@@ -183,11 +187,19 @@ export async function* runClaudeSingleFileAgent(
 }
 
 export function buildSingleFileAgentPrompt(input: SingleFileAgentInput): string {
+  const compilerContext = buildWholeSheetCompletionPrompt(parse(input.nextSheet), input.currentCode);
+
   return `You are compiling one Logos worksheet into one Python implementation file.
 
 You can only edit the single in-memory file already provided below. There is no filesystem and no read-file tool.
 Prefer small edits with replace_range or replace_text when updating an existing implementation.
 Call finish when the implementation satisfies the worksheet.
+
+The following legacy compiler context is the same context used by the non-tool whole-sheet compiler. Follow all of its semantic rules, dependency rules, runtime restrictions, output-formatting guidance, annotation guidance, and incomplete-fragment context.
+When that context says to return the entire revised Python code sheet, do not answer with raw code; apply the equivalent change with replace_file, replace_range, or replace_text, then call finish.
+
+Legacy compiler context:
+${compilerContext}
 
 Worksheet to compile:
 \`\`\`python

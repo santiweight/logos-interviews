@@ -36,4 +36,56 @@ describe("frontend compilation policy", () => {
     expect(source).toContain(`language: logosPythonLanguageId`);
     expect(source).not.toContain("implementationViewPanel.textContent");
   });
+
+  it("uses inferred splice matches when snippet previews have no direct implementation", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("implementationForIncompleteSnippet");
+    expect(source).toContain("function inferredImplementationForSnippet");
+    expect(source).toContain("inferredImplementation ??");
+  });
+
+  it("reveals selected snippets inside the implementation view when it is active", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("function revealImplementationForSnippet");
+    expect(source).toContain("function revealImplementationForDefinition");
+    expect(source).toContain("implementationMatchForTarget");
+    expect(source).toContain("function updateImplementationSnippetDecorations");
+    expect(source).toContain("implementationMatchForIncompleteSnippet");
+    expect(source).toContain("activeToolTabId === implementationToolTabId");
+    expect(source).toContain("implementationViewEditor.revealRangeInCenter");
+    expect(source).toContain('"snippet-source-inline-selected"');
+  });
+
+  it("uses matching blue source-code highlights for selected definitions", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("function sourceDefinitionHighlightRange");
+    expect(source).toContain("function sourceDefinitionHighlightLength");
+    expect(source).toContain('inlineClassName: "snippet-source-inline-selected"');
+    expect(source).not.toContain('className: "definition-implementation-line-selected"');
+  });
+
+  it("keeps source snippet highlighting when implementation-view snippet navigation hides the popup", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("function revealImplementationForSnippet");
+    expect(source).toContain("snippetGuideHash = target.hash");
+    expect(source).toContain("updateIncompleteSnippetDecorations();");
+  });
+
+  it("does not auto-focus the implementation view when navigating to a selection", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("implementationViewEditor.focus()");
+  });
+
+  it("does not show snippet hover popups while the implementation view is active", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("editor.onMouseMove((event) => {");
+    expect(source).toContain("if (activeToolTabId === implementationToolTabId)");
+    expect(source).toContain("hideSnippetPopup();");
+  });
 });
