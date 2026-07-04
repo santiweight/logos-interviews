@@ -1,5 +1,6 @@
 import "./styles.css";
 import "@xterm/xterm/css/xterm.css";
+import radixThemesCss from "@radix-ui/themes/styles.css?inline";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import { Terminal } from "@xterm/xterm";
@@ -7,6 +8,30 @@ import { FitAddon } from "@xterm/addon-fit";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Checkbox,
+  Dialog,
+  Flex,
+  Heading,
+  IconButton,
+  Popover,
+  RadioGroup,
+  ScrollArea,
+  Select,
+  Separator,
+  Switch,
+  Table,
+  Tabs,
+  Text,
+  TextArea,
+  TextField,
+  Theme,
+  Tooltip,
+} from "@radix-ui/themes";
 import {
   conf as typeScriptLanguageConfiguration,
   language as typeScriptLanguage,
@@ -48,6 +73,31 @@ globalThis.MonacoEnvironment = {
   getWorker() {
     return new editorWorker();
   },
+};
+
+const logosRadix = {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Checkbox,
+  Dialog,
+  Flex,
+  Heading,
+  IconButton,
+  Popover,
+  RadioGroup,
+  ScrollArea,
+  Select,
+  Separator,
+  Switch,
+  Table,
+  Tabs,
+  Text,
+  TextArea,
+  TextField,
+  Theme,
+  Tooltip,
 };
 
 type SourceTab = {
@@ -156,11 +206,13 @@ declare global {
     createLogosSessionBundle?: () => LoadableSession;
     __logosReact?: typeof React;
     __logosReactCreateRoot?: typeof createRoot;
+    __logosRadix?: typeof logosRadix;
   }
 }
 
 window.__logosReact = React;
 window.__logosReactCreateRoot = createRoot;
+window.__logosRadix = logosRadix;
 
 type InteractiveRunStartResponse = InteractiveTerminalRunStartResponse | InteractiveReactRunStartResponse;
 
@@ -4972,6 +5024,7 @@ body {
 body > * {
   min-height: 100%;
 }
+${styleTagContent(radixThemesCss)}
 </style></head><body></body></html>`);
     doc.close();
     setIframeBody(doc.body);
@@ -4979,8 +5032,8 @@ body > * {
 
   let element: React.ReactNode = null;
   try {
-    const run = new Function("React", `${props.appCode}\nreturn ${props.runnable}();`);
-    element = run(React) as React.ReactNode;
+    const run = new Function("React", "radix", `${props.appCode}\nreturn ${props.runnable}();`);
+    element = run(React, logosRadix) as React.ReactNode;
   } catch (error) {
     element = React.createElement("pre", {
       style: {
@@ -5004,8 +5057,14 @@ body > * {
       className: "react-app-run-frame",
       title: `Run ${props.runnable}`,
     }),
-    iframeBody ? createPortal(element, iframeBody) : null,
+    iframeBody
+      ? createPortal(React.createElement(Theme, { appearance: "light", accentColor: "blue", grayColor: "slate" }, element), iframeBody)
+      : null,
   );
+}
+
+function styleTagContent(css: string): string {
+  return css.replace(/<\/style/gi, "<\\/style");
 }
 
 function terminalFontFamily(): string {

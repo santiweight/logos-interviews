@@ -229,7 +229,7 @@ Call finish only when the whole implementation matches the current worksheet.
 
 The following legacy compiler context is the same context used by the non-tool whole-sheet compiler. Follow all of its semantic rules, dependency rules, runtime restrictions, output-formatting guidance, annotation guidance, and incomplete-fragment context.
 When that context says to return the entire revised TypeScript code sheet, do not answer with raw code; apply the equivalent final-file change through focused replace_range or replace_text calls where practical, or replace_file only when the old file is mostly obsolete, then call finish.
-Generated code runs with Node.js through tsx, except functions returning ReactApp, which render in the browser run panel. For ReactApp functions, return React.createElement(...) and use React hooks through the provided React global; do not use JSX, raw HTML strings, or React imports.
+Generated code runs with Node.js through tsx, except functions returning ReactApp, which render in the browser run panel. For ReactApp functions, return React.createElement(...) and use React hooks through the provided React global; use the provided radix global for Radix Themes UI components; do not use JSX, raw HTML strings, React imports, or Radix imports.
 For persistent interactive terminal apps, use neo-blessed. For simple CLI apps, console.log and Node readline/key events are enough.
 For neo-blessed modal text entry, do not use blessed.form, autoNext, inputOnFocus, or textbox.readInput. Build modal editors from boxes/text and handle modal keypresses manually from one screen.on("keypress", ...) handler.
 Do not add top-level script calls such as main(), await main(), or void main(); the Logos runner invokes the selected runnable.
