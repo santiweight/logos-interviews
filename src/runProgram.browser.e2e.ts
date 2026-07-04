@@ -279,6 +279,10 @@ describe("run program browser flow", () => {
       await expect.poll(async () => frame.locator("button").textContent()).toBe("hello world");
       await frame.locator("button").click();
       await expect.poll(async () => frame.locator("button").textContent()).toBe("clicked");
+      await expect.poll(async () => reactFrameMetrics(page)).toMatchObject({
+        frameMatchesHost: true,
+        hostHasHeight: true,
+      });
       await expect.poll(async () => page.locator(".terminal-xterm-host").first().isHidden()).toBe(true);
     } finally {
       await context.close();
@@ -1143,6 +1147,23 @@ async function resizeOutputPaneDeterministically(page: Page): Promise<void> {
 
     shell.style.setProperty("--code-pane-basis", "500px");
     shell.style.setProperty("--code-pane-grow", "0");
+  });
+}
+
+async function reactFrameMetrics(page: Page): Promise<{ frameMatchesHost: boolean; hostHasHeight: boolean }> {
+  return page.evaluate(() => {
+    const host = document.querySelector(".react-app-run-host");
+    const frame = document.querySelector(".react-app-run-frame");
+    if (!(host instanceof HTMLElement) || !(frame instanceof HTMLElement)) {
+      throw new Error("React app frame is unavailable");
+    }
+
+    const hostRect = host.getBoundingClientRect();
+    const frameRect = frame.getBoundingClientRect();
+    return {
+      hostHasHeight: hostRect.height > 100,
+      frameMatchesHost: Math.abs(hostRect.width - frameRect.width) < 2 && Math.abs(hostRect.height - frameRect.height) < 2,
+    };
   });
 }
 
