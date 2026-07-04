@@ -1430,7 +1430,8 @@ function markdownToHtml(source: string): string {
   const html: string[] = [];
   const paragraph: string[] = [];
   let listTag: "ul" | "ol" | null = null;
-  let codeLines: string[] | null = null;
+  let codeLines: string[] = [];
+  let codeFence: MarkdownCodeFence | null = null;
 
   const closeParagraph = () => {
     if (paragraph.length === 0) {
@@ -1462,20 +1463,23 @@ function markdownToHtml(source: string): string {
   };
 
   for (const line of lines) {
-    if (line.trim().startsWith("```")) {
-      if (codeLines) {
+    if (codeFence) {
+      if (isClosingCodeFence(line, codeFence)) {
         html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-        codeLines = null;
-      } else {
-        closeParagraph();
-        closeList();
         codeLines = [];
+        codeFence = null;
+      } else {
+        codeLines.push(line);
       }
       continue;
     }
 
-    if (codeLines) {
-      codeLines.push(line);
+    const openingCodeFence = parseOpeningCodeFence(line);
+    if (openingCodeFence) {
+      closeParagraph();
+      closeList();
+      codeLines = [];
+      codeFence = openingCodeFence;
       continue;
     }
 
@@ -1511,13 +1515,37 @@ function markdownToHtml(source: string): string {
     paragraph.push(line.trim());
   }
 
-  if (codeLines) {
+  if (codeFence) {
     html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
   }
   closeParagraph();
   closeList();
 
   return html.join("\n");
+}
+
+type MarkdownCodeFence = {
+  marker: "`" | "~";
+  length: number;
+};
+
+function parseOpeningCodeFence(line: string): MarkdownCodeFence | null {
+  const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+  if (!match) {
+    return null;
+  }
+
+  const sequence = match[1];
+  return { marker: sequence[0] as MarkdownCodeFence["marker"], length: sequence.length };
+}
+
+function isClosingCodeFence(line: string, fence: MarkdownCodeFence): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith(fence.marker.repeat(fence.length))) {
+    return false;
+  }
+
+  return [...trimmed].every((char) => char === fence.marker);
 }
 
 function stripFrontmatter(source: string): string {

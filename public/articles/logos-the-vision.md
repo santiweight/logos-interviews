@@ -40,7 +40,7 @@ class Graph:
 
 *Logos abstracts whole products*. The following is valid code, and builds a CLI UX for you:
 
-```
+````
 class Todo:
   id: str
   name: str
@@ -65,4 +65,4 @@ def todo_cli():
    - d -> mark done
    - e -> edit
   ```
-```
+````
