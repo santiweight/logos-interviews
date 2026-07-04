@@ -566,7 +566,7 @@ describe("run program browser flow", () => {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      const source = "def main():\n  print('hi')\n";
+      const source = "function main(): void {\n  console.log('hi');\n}\n";
 
       await page.goto(baseUrl);
       await waitForSessionHelpers(page);
@@ -579,7 +579,7 @@ describe("run program browser flow", () => {
         : { ctrlKey: true };
 
       await page.keyboard.press(`${primaryModifier}+Slash`);
-      await expect.poll(async () => editorSource(page)).toBe("# def main():\n  print('hi')\n");
+      await expect.poll(async () => editorSource(page)).toBe("// function main(): void {\n  console.log('hi');\n}\n");
 
       await page.keyboard.press(`${primaryModifier}+A`);
       await page.keyboard.type("selected");

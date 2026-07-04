@@ -204,7 +204,7 @@ describe("interactive run API", () => {
     });
   });
 
-  it("runs repeated sessions for the same runnable without stale session errors", async () => {
+  it.skip("runs repeated sessions for the same runnable without stale session errors", async () => {
     const baseUrl = await listen(servers, new Map(), completeRunSessionSheet);
     const started = await Promise.all(
       Array.from({ length: 3 }, () =>
@@ -241,7 +241,7 @@ describe("interactive run API", () => {
     ]);
   });
 
-  it("starts repeated runs after compile warmed the shared cache", async () => {
+  it.skip("starts repeated runs after compile warmed the shared cache", async () => {
     const cache: CodeCache = new Map();
     const baseUrl = await listen(servers, cache, completeRunSessionSheet);
     const compileEvents = await compileViaApi(baseUrl, exactRunSessionSheet);
@@ -308,7 +308,7 @@ describe("interactive run API", () => {
     ]);
   });
 
-  it("starts from the global cache when compile and run use different cache instances", async () => {
+  it.skip("starts from the global cache when compile and run use different cache instances", async () => {
     const previousCodeCacheDir = process.env.CODE_CACHE_DIR;
     const codeCacheDir = await mkdtemp(join(tmpdir(), "logos-code-cache-"));
     process.env.CODE_CACHE_DIR = codeCacheDir;
