@@ -1055,6 +1055,7 @@ editor.onMouseDown((event) => {
         selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
         snippetPopupPinned = true;
         showSnippetPopupForTarget(incompleteSnippet, editorMouseClientPoint(event));
+        clearEditorSelectionAt(lineNumber, column);
         return;
       }
     }
@@ -2538,6 +2539,12 @@ function showSnippetPopupForTarget(target: IncompleteSnippetTarget, point: { x: 
   snippetPanel.classList.add("snippet-panel-open");
   requestAnimationFrame(() => {
     snippetPreviewEditor.layout();
+  });
+}
+
+function clearEditorSelectionAt(lineNumber: number, column: number): void {
+  requestAnimationFrame(() => {
+    editor.setSelection(new monaco.Selection(lineNumber, column, lineNumber, column));
   });
 }
 
