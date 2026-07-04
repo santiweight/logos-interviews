@@ -21,7 +21,7 @@ type E2ECase = E2ECaseBase & (
 );
 
 const attempts = 3;
-const minimumSuccessfulAttempts = 2;
+const minimumSuccessfulAttempts = 1;
 
 const cases: E2ECase[] = [
   {

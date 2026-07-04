@@ -72,6 +72,129 @@ describe("product samples", () => {
     expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
   });
 
+  it("accepts denser rotated ASCII fractal frames", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "mandelbrot render and rotate natural snippet");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    const blank = " ".repeat(64);
+    const normalVisible = "  .:-=+*#%@".repeat(4).padEnd(64, " ");
+    const rotatedVisible = ".:-=+*#%@".repeat(5).padEnd(64, " ");
+    const normal = Array.from({ length: 24 }, (_, index) => {
+      return index >= 4 && index < 20 ? normalVisible : blank;
+    });
+    const rotated = Array.from({ length: 18 }, () => rotatedVisible);
+
+    expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
+  });
+
+  it("accepts ASCII fractal frames that use a sparse density subset", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "mandelbrot render and rotate natural snippet");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    const blank = " ".repeat(64);
+    const normalVisible = "@@@@@@@@@@@@....::::".padStart(40, " ").padEnd(64, " ");
+    const rotatedVisible = ":::@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@:::".padStart(56, " ").padEnd(64, " ");
+    const normal = Array.from({ length: 24 }, (_, index) => {
+      return index >= 5 && index < 19 ? normalVisible : blank;
+    });
+    const rotated = Array.from({ length: 18 }, (_, index) => {
+      return index >= 2 ? rotatedVisible : blank;
+    });
+
+    expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
+  });
+
+  it("accepts dotted ASCII fractal backgrounds with minor width drift", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "mandelbrot render and rotate natural snippet");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    const normalVisible = `${".".repeat(16)}${":".repeat(8)}${"@".repeat(24)}${"-".repeat(4)}${".".repeat(12)}`;
+    const rotatedVisible = `${".".repeat(10)}${":".repeat(3)}${"@".repeat(40)}${":".repeat(3)}${".".repeat(9)}`;
+    const normal = Array.from({ length: 24 }, () => normalVisible);
+    const rotated = Array.from({ length: 24 }, () => rotatedVisible);
+
+    expect(normalVisible).toHaveLength(64);
+    expect(rotatedVisible).toHaveLength(65);
+    expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
+  });
+
+  it("accepts transposed rotated ASCII fractal output", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "mandelbrot render and rotate natural snippet");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    const blank = " ".repeat(64);
+    const normalVisible = ".:-=+*#%@".repeat(4).padStart(44, " ").padEnd(64, " ");
+    const normal = Array.from({ length: 24 }, (_, index) => {
+      return index >= 4 && index < 20 ? normalVisible : blank;
+    });
+    const rotatedBlank = " ".repeat(24);
+    const rotatedVisible = ".:-=+*#%@".repeat(2).padStart(22, " ").padEnd(24, " ");
+    const rotated = Array.from({ length: 40 }, (_, index) => {
+      return index >= 20 ? rotatedVisible : rotatedBlank;
+    });
+
+    expect(testCase.stdoutCheck.matches([...normal, "", ...rotated])).toBe(true);
+  });
+
+  it("accepts isometric cube stack rotation checks with any visible edge glyph family", () => {
+    const testCase = sampleEvalCases.find((item) => item.name === "isometric cube stack rotation contract");
+    expect(testCase?.stdoutCheck).toBeDefined();
+    if (!testCase?.stdoutCheck) {
+      return;
+    }
+
+    expect(testCase.stdoutCheck.matches([
+      "18 48",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "18 48",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "True",
+      "False",
+      "False",
+      "True",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "18 48",
+      "True",
+      "True",
+      "True",
+      "True",
+      "False",
+      "True",
+      "False",
+      "False",
+      "True",
+    ])).toBe(false);
+  });
+
   it("accepts spreadsheet renders that use row and column headers", () => {
     const testCase = sampleEvalCases.find((item) => item.name === "formula spreadsheet strings and rendering");
     expect(testCase?.stdoutCheck).toBeDefined();
@@ -236,6 +359,49 @@ describe("product samples", () => {
     ])).toBe(true);
 
     expect(testCase.stdoutCheck.matches([
+      "Magic Square Puzzle  (size=3, ~45% filled)",
+      "Magic sum = 15",
+      "",
+      "Puzzle (· = empty cell):",
+      "",
+      "+---+---+---+",
+      "|\x1b[90m · \x1b[0m|\x1b[90m · \x1b[0m|\x1b[97m 6 \x1b[0m|",
+      "+---+---+---+",
+      "|\x1b[97m 3 \x1b[0m|\x1b[90m · \x1b[0m|\x1b[97m 7 \x1b[0m|",
+      "+---+---+---+",
+      "|\x1b[90m · \x1b[0m|\x1b[97m 9 \x1b[0m|\x1b[90m · \x1b[0m|",
+      "+---+---+---+",
+      "",
+      "Solution:",
+      "",
+      "+---+---+---+",
+      "|\x1b[97m 8 \x1b[0m|\x1b[97m 1 \x1b[0m|\x1b[97m 6 \x1b[0m|",
+      "+---+---+---+",
+      "|\x1b[97m 3 \x1b[0m|\x1b[97m 5 \x1b[0m|\x1b[97m 7 \x1b[0m|",
+      "+---+---+---+",
+      "|\x1b[97m 4 \x1b[0m|\x1b[97m 9 \x1b[0m|\x1b[97m 2 \x1b[0m|",
+      "+---+---+---+",
+      "",
+      "\x1b[32mSolution verified: all cells filled.\x1b[0m",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "=== Magic Square Puzzle (Size 3, ~45% filled) ===",
+      "",
+      "\x1b[36m  8\x1b[0m \x1b[36m  1\x1b[0m \x1b[90m  .\x1b[0m",
+      "\x1b[90m  .\x1b[0m \x1b[90m  .\x1b[0m \x1b[90m  .\x1b[0m",
+      "\x1b[36m  4\x1b[0m \x1b[90m  .\x1b[0m \x1b[36m  2\x1b[0m",
+      "",
+      "=== Magic Square Solution (Size 3) ===",
+      "",
+      "\x1b[32m  8\x1b[0m \x1b[32m  1\x1b[0m \x1b[32m  6\x1b[0m",
+      "\x1b[32m  3\x1b[0m \x1b[32m  5\x1b[0m \x1b[32m  7\x1b[0m",
+      "\x1b[32m  4\x1b[0m \x1b[32m  9\x1b[0m \x1b[32m  2\x1b[0m",
+      "",
+      "Magic constant (each row/col/diagonal sums to): \x1b[33m15\x1b[0m",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
       "Puzzle:",
       "_ _ _",
       "_ _ _",
@@ -270,6 +436,14 @@ describe("product samples", () => {
       "   2    3    5    7   11   13   17   19   23   29",
       "  31   37   41   43   47   53   59   61   67   71",
       "  73   79   83   89   97",
+    ])).toBe(true);
+
+    expect(testCase.stdoutCheck.matches([
+      "Primes less than 100:",
+      "",
+      "  2    3    5    7   11   13   17   19   23   29  ",
+      " 31   37   41   43   47   53   59   61   67   71  ",
+      " 73   79   83   89   97",
     ])).toBe(true);
 
     expect(testCase.stdoutCheck.matches([
