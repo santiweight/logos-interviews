@@ -3978,15 +3978,20 @@ function shouldMonacoHandleKeydown(event: KeyboardEvent): boolean {
     return true;
   }
 
-  return isPrimaryModifierSlash(event);
+  return !isBrowserLocationBarShortcut(event);
 }
 
-function isPrimaryModifierSlash(event: KeyboardEvent): boolean {
-  return (
-    (event.metaKey || event.ctrlKey) &&
-    !event.altKey &&
-    (event.key === "/" || event.code === "Slash")
-  );
+function isBrowserLocationBarShortcut(event: KeyboardEvent): boolean {
+  if (!event.metaKey && !event.ctrlKey) {
+    return false;
+  }
+
+  if (event.altKey || event.shiftKey) {
+    return false;
+  }
+
+  const key = event.key.toLowerCase();
+  return key === "l" || event.code === "KeyL";
 }
 
 function expandOpeningTripleBacktick(
