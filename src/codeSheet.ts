@@ -86,12 +86,20 @@ export type DefinitionReadiness = {
 };
 
 export type ImplementationTarget = {
-  kind: "function" | "class";
+  kind: "function" | "class" | "field" | "method";
   name: string;
+  className?: string;
   line: number;
   endLine: number;
   source: string;
 };
+
+export type ImplementationSnippetMatch = {
+  code: string;
+  range: SourceRange | null;
+};
+
+export const UNKNOWN_IMPLEMENTATION_MATCH_TEXT = "could not determine exact code for match";
 
 export type SourceSelectionContext =
   | { kind: "snippet"; snippet: IncompleteSnippet }
@@ -837,23 +845,39 @@ export function implementationTargetAtLine(
       decl.line,
       decl.snippet,
     )),
+    ...discoverClassFieldBlocks(source).map((decl) => implementationTargetFromBlock(
+      "field",
+      decl.name,
+      decl.line,
+      decl.source,
+      decl.className,
+    )),
+    ...discoverClassMethodBlocks(source).map((decl) => implementationTargetFromBlock(
+      "method",
+      decl.name,
+      decl.line,
+      decl.source,
+      decl.className,
+    )),
     ...discoverTopLevelFunctionBlocks(source).map((decl) => implementationTargetFromBlock(
       "function",
       decl.name,
       decl.line,
       decl.source,
     )),
-  ].sort((left, right) => {
-    if (left.line !== right.line) {
-      return left.line - right.line;
-    }
+  ];
 
-    return right.endLine - left.endLine;
-  });
+  return targets
+    .filter((target) => lineNumber >= target.line && lineNumber <= target.endLine)
+    .sort((left, right) => {
+      const leftSpan = left.endLine - left.line;
+      const rightSpan = right.endLine - right.line;
+      if (leftSpan !== rightSpan) {
+        return leftSpan - rightSpan;
+      }
 
-  return targets.find((target) => (
-    lineNumber >= target.line && lineNumber <= target.endLine
-  )) ?? null;
+      return right.line - left.line;
+    })[0] ?? null;
 }
 
 export function selectionContextAtPosition(
@@ -866,13 +890,17 @@ export function selectionContextAtPosition(
     snippetContainsPosition(source, snippet, lineNumber, column)
   ));
 
-  if (exactSnippet) {
+  if (exactSnippet?.kind === "natural") {
     return { kind: "snippet", snippet: exactSnippet };
   }
 
   const target = implementationTargetAtLine(source, lineNumber);
   if (target) {
     return { kind: "implementation", target };
+  }
+
+  if (exactSnippet) {
+    return { kind: "snippet", snippet: exactSnippet };
   }
 
   return { kind: "whole-file" };
@@ -882,17 +910,328 @@ export function implementationBlockForTarget(
   implementation: CodeSheet,
   target: ImplementationTarget,
 ): string | null {
-  const source = normalizeNewlines(implementation);
+  return implementationMatchForTarget(implementation, target)?.code ?? null;
+}
 
-  if (target.kind === "class") {
-    return discoverClassDecls(source.split("\n"))
-      .find((decl) => decl.name === target.name)
-      ?.snippet ?? null;
+export function implementationMatchForTarget(
+  implementation: CodeSheet,
+  target: ImplementationTarget,
+): ImplementationSnippetMatch | null {
+  const source = normalizeNewlines(implementation);
+  if (source.trim().length === 0) {
+    return null;
   }
 
-  return discoverTopLevelFunctionBlocks(source)
-    .find((decl) => decl.name === target.name)
-    ?.source ?? null;
+  const lineStarts = lineStartOffsets(source);
+  if (target.kind === "class") {
+    const match = discoverClassDecls(source.split("\n")).find((decl) => decl.name === target.name);
+    if (!match) {
+      return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+    }
+
+    const start = lineStarts[match.line - 1] ?? 0;
+    return { code: match.snippet, range: { start, end: start + match.snippet.length } };
+  }
+
+  if (target.kind === "method") {
+    const match = discoverClassMethodBlocks(source).find((decl) => (
+      decl.name === target.name &&
+      (target.className === undefined || decl.className === target.className)
+    ));
+    if (!match) {
+      return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+    }
+
+    const start = lineStarts[match.line - 1] ?? 0;
+    return { code: match.source, range: { start, end: start + match.source.length } };
+  }
+
+  if (target.kind === "field") {
+    const match = implementationFieldMatch(source, target);
+    if (!match) {
+      return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+    }
+
+    return match;
+  }
+
+  const match = discoverTopLevelFunctionBlocks(source).find((decl) => decl.name === target.name);
+  if (!match) {
+    return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+  }
+
+  const start = lineStarts[match.line - 1] ?? 0;
+  return { code: match.source, range: { start, end: start + match.source.length } };
+}
+
+export function implementationForIncompleteSnippet(
+  codeSheet: CodeSheet,
+  implementation: CodeSheet,
+  snippet: IncompleteSnippet,
+): string | null {
+  return implementationMatchForIncompleteSnippet(codeSheet, implementation, snippet)?.code ?? null;
+}
+
+export function implementationMatchForIncompleteSnippet(
+  codeSheet: CodeSheet,
+  implementation: CodeSheet,
+  snippet: IncompleteSnippet,
+): ImplementationSnippetMatch | null {
+  const source = normalizeNewlines(codeSheet);
+  const implementedSource = normalizeNewlines(implementation);
+  if (source.trim().length === 0 || implementedSource.trim().length === 0) {
+    return null;
+  }
+  const resolvedSnippet = snippet.range === undefined
+    ? parse(source).incompleteSnippets.find((candidate) => (
+      candidate.kind === snippet.kind &&
+      candidate.line === snippet.line &&
+      candidate.snippet === snippet.snippet
+    )) ?? snippet
+    : snippet;
+
+  if (resolvedSnippet.kind !== "natural") {
+    const target = implementationTargetAtLine(source, resolvedSnippet.line);
+    return target === null
+      ? { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null }
+      : implementationMatchForTarget(implementedSource, target);
+  }
+
+  return naturalSnippetImplementationMatchForSource(source, implementedSource, resolvedSnippet);
+}
+
+function naturalSnippetImplementationMatchForSource(
+  source: string,
+  implementation: string,
+  snippet: IncompleteSnippet,
+): ImplementationSnippetMatch {
+  const range = snippet.range ?? rangeForLineSnippet(source, snippet.line, snippet.snippet);
+  const lineStarts = lineStartOffsets(source);
+  const startLine = lineForOffset(lineStarts, range.start);
+  const endLine = lineForOffset(lineStarts, Math.max(range.start, range.end - 1));
+  const target = implementationTargetAtLine(source, startLine);
+  if (target === null) {
+    return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+  }
+
+  const implementedBlock = implementationMatchForTarget(implementation, target);
+  if (
+    implementedBlock === null ||
+    implementedBlock.range === null ||
+    implementedBlock.code === UNKNOWN_IMPLEMENTATION_MATCH_TEXT
+  ) {
+    return { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+  }
+
+  const sourceLines = source.split("\n");
+  const sourceLine = sourceLines[startLine - 1] ?? "";
+  const startColumn = range.start - (lineStarts[startLine - 1] ?? 0);
+  const endColumn = range.end - (lineStarts[endLine - 1] ?? 0);
+  const prefix = sourceLine.slice(0, startColumn);
+  const suffix = (sourceLines[endLine - 1] ?? "").slice(endColumn);
+  const sourceBlockLines = target.source.split("\n");
+  const implementationBlockLines = implementedBlock.code.split("\n");
+  const relativeStartLine = startLine - target.line;
+  const relativeEndLine = endLine - target.line;
+  const isStandaloneSnippetLine = sourceLine.trim() === snippet.snippet.trim();
+
+  if (!isStandaloneSnippetLine && startLine === endLine) {
+    const inlineMatch = matchInlineSnippetReplacement(
+      implementationBlockLines,
+      implementedBlock.range.start,
+      relativeStartLine,
+      prefix,
+      suffix,
+    );
+    if (inlineMatch !== null) {
+      return inlineMatch;
+    }
+  }
+
+  const subtreeMatch = matchSnippetSubtreeReplacement(
+    source,
+    sourceBlockLines,
+    implementationBlockLines,
+    implementedBlock.range.start,
+    target,
+    snippet,
+    relativeStartLine,
+    relativeEndLine,
+  );
+
+  return subtreeMatch ?? { code: UNKNOWN_IMPLEMENTATION_MATCH_TEXT, range: null };
+}
+
+function matchInlineSnippetReplacement(
+  implementationLines: string[],
+  implementationBlockStartOffset: number,
+  preferredLine: number,
+  prefix: string,
+  suffix: string,
+): ImplementationSnippetMatch | null {
+  const exactLine = implementationLines[preferredLine];
+  if (exactLine !== undefined && lineMatchesSnippetTemplate(exactLine, prefix, suffix)) {
+    return inlineSnippetMatch(implementationLines, implementationBlockStartOffset, preferredLine, exactLine, prefix, suffix);
+  }
+
+  const matches = implementationLines
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => lineMatchesSnippetTemplate(line, prefix, suffix));
+
+  if (matches.length !== 1) {
+    return null;
+  }
+
+  return inlineSnippetMatch(
+    implementationLines,
+    implementationBlockStartOffset,
+    matches[0].index,
+    matches[0].line,
+    prefix,
+    suffix,
+  );
+}
+
+function inlineSnippetMatch(
+  implementationLines: string[],
+  implementationBlockStartOffset: number,
+  lineIndex: number,
+  line: string,
+  prefix: string,
+  suffix: string,
+): ImplementationSnippetMatch {
+  const start = implementationBlockStartOffset +
+    implementationLines.slice(0, lineIndex).reduce((offset, item) => offset + item.length + 1, 0) +
+    prefix.length;
+  const rawEnd = suffix.length === 0 ? line.length : line.length - suffix.length;
+  const end = implementationBlockStartOffset +
+    implementationLines.slice(0, lineIndex).reduce((offset, item) => offset + item.length + 1, 0) +
+    rawEnd;
+  return {
+    code: line.slice(prefix.length, rawEnd).trimEnd(),
+    range: { start, end },
+  };
+}
+
+function lineMatchesSnippetTemplate(line: string, prefix: string, suffix: string): boolean {
+  return line.startsWith(prefix) &&
+    line.endsWith(suffix) &&
+    line.length >= prefix.length + suffix.length;
+}
+
+function matchSnippetSubtreeReplacement(
+  source: string,
+  sourceBlockLines: string[],
+  implementationBlockLines: string[],
+  implementationBlockStartOffset: number,
+  target: ImplementationTarget,
+  snippet: IncompleteSnippet,
+  relativeStartLine: number,
+  relativeEndLine: number,
+): ImplementationSnippetMatch | null {
+  const previousAnchorLine = nearestConcreteSourceLine(sourceBlockLines, relativeStartLine - 1, -1);
+  const nextAnchorLine = nearestConcreteSourceLine(sourceBlockLines, relativeEndLine + 1, 1);
+  if (previousAnchorLine === null && nextAnchorLine === null) {
+    return null;
+  }
+
+  const implementationStart = previousAnchorLine === null
+    ? 0
+    : uniqueImplementationAnchorIndex(implementationBlockLines, sourceBlockLines[previousAnchorLine], 0);
+  if (implementationStart === null) {
+    return null;
+  }
+
+  const replacementStart = previousAnchorLine === null ? 0 : implementationStart + 1;
+  const implementationEnd = nextAnchorLine === null
+    ? implementationBlockLines.length
+    : uniqueImplementationAnchorIndex(implementationBlockLines, sourceBlockLines[nextAnchorLine], replacementStart);
+  if (implementationEnd === null || implementationEnd < replacementStart) {
+    return null;
+  }
+
+  const sourceSegmentStart = previousAnchorLine === null ? 0 : previousAnchorLine + 1;
+  const sourceSegmentEnd = nextAnchorLine === null ? sourceBlockLines.length : nextAnchorLine;
+  if (containsOtherIncompleteSnippet(source, target, snippet, sourceSegmentStart, sourceSegmentEnd)) {
+    return null;
+  }
+
+  const replacement = trimOuterBlankLines(
+    dedentLines(implementationBlockLines.slice(replacementStart, implementationEnd)),
+  ).join("\n").trimEnd();
+
+  if (replacement.length === 0) {
+    return null;
+  }
+
+  const rawStart = implementationBlockStartOffset + offsetForLineIndex(implementationBlockLines, replacementStart);
+  const rawEnd = implementationBlockStartOffset + offsetForLineIndex(implementationBlockLines, implementationEnd);
+  const rawReplacement = implementationBlockLines.slice(replacementStart, implementationEnd).join("\n");
+
+  return {
+    code: replacement,
+    range: { start: rawStart, end: Math.min(rawEnd, rawStart + rawReplacement.length) },
+  };
+}
+
+function offsetForLineIndex(lines: string[], lineIndex: number): number {
+  return lines.slice(0, lineIndex).reduce((offset, line) => offset + line.length + 1, 0);
+}
+
+function nearestConcreteSourceLine(lines: string[], start: number, step: -1 | 1): number | null {
+  for (let index = start; index >= 0 && index < lines.length; index += step) {
+    const line = lines[index];
+    if (isConcreteSourceLine(line)) {
+      return index;
+    }
+  }
+
+  return null;
+}
+
+function isConcreteSourceLine(line: string): boolean {
+  return line.trim().length > 0 && !line.includes("`");
+}
+
+function uniqueImplementationAnchorIndex(lines: string[], sourceLine: string, start: number): number | null {
+  const normalized = normalizeSourceAnchorLine(sourceLine);
+  const matches: number[] = [];
+
+  for (let index = start; index < lines.length; index += 1) {
+    if (normalizeSourceAnchorLine(lines[index]) === normalized) {
+      matches.push(index);
+    }
+  }
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function normalizeSourceAnchorLine(line: string): string {
+  return line.trim().replace(/\s+/g, " ");
+}
+
+function containsOtherIncompleteSnippet(
+  source: string,
+  target: ImplementationTarget,
+  currentSnippet: IncompleteSnippet,
+  sourceSegmentStart: number,
+  sourceSegmentEnd: number,
+): boolean {
+  const segmentStartLine = target.line + sourceSegmentStart;
+  const segmentEndLine = target.line + sourceSegmentEnd - 1;
+
+  return parse(source).incompleteSnippets.some((candidate) => {
+    if (candidate === currentSnippet) {
+      return false;
+    }
+    if (candidate.kind !== "natural") {
+      return false;
+    }
+    if (candidate.snippet === currentSnippet.snippet && candidate.line === currentSnippet.line) {
+      return false;
+    }
+    return candidate.line >= segmentStartLine && candidate.line <= segmentEndLine;
+  });
 }
 
 export function hashSnippet(incompleteCodeSnippet: string): SnippetHash {
@@ -1272,10 +1611,12 @@ function implementationTargetFromBlock(
   name: string,
   line: number,
   source: string,
+  className?: string,
 ): ImplementationTarget {
   return {
     kind,
     name,
+    ...(className === undefined ? {} : { className }),
     line,
     endLine: line + source.split("\n").length - 1,
     source,
@@ -1380,27 +1721,10 @@ function discoverRunnables(lines: string[]): RunnableInfo[] {
 
 function discoverFunctionDecls(codeSheet: CodeSheet): FunctionDecl[] {
   const source = normalizeNewlines(codeSheet);
-  const lines = source.split("\n");
-  const declarations: FunctionDecl[] = discoverTopLevelFunctionBlocks(source);
-
-  for (const classDecl of discoverClassDecls(lines)) {
-    const classLines = classDecl.snippet.split("\n");
-    for (let index = 1; index < classLines.length; index += 1) {
-      const header = parseFunctionHeader(classLines[index]);
-      if (!header || header.indent.length === 0) {
-        continue;
-      }
-
-      declarations.push({
-        name: header.name,
-        className: classDecl.name,
-        line: classDecl.line + index,
-        source: classLines[index].trimEnd(),
-      });
-    }
-  }
-
-  return declarations.sort((left, right) => left.line - right.line);
+  return [
+    ...discoverTopLevelFunctionBlocks(source),
+    ...discoverClassMethodBlocks(source),
+  ].sort((left, right) => left.line - right.line);
 }
 
 function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
@@ -1436,6 +1760,133 @@ function discoverTopLevelFunctionBlocks(codeSheet: CodeSheet): FunctionDecl[] {
   }
 
   return declarations;
+}
+
+function discoverClassMethodBlocks(codeSheet: CodeSheet): FunctionDecl[] {
+  const source = normalizeNewlines(codeSheet);
+  const declarations: FunctionDecl[] = [];
+
+  for (const classDecl of discoverClassDecls(source.split("\n"))) {
+    const classLines = classDecl.snippet.split("\n");
+    for (let index = 1; index < classLines.length; index += 1) {
+      const header = parseFunctionHeader(classLines[index]);
+      if (!header || header.indent.length === 0) {
+        continue;
+      }
+
+      const headerIndent = indentWidth(classLines[index]);
+      let end = index + 1;
+      while (end < classLines.length) {
+        const candidate = classLines[end];
+        if (candidate.trim().length === 0) {
+          end += 1;
+          continue;
+        }
+
+        if (indentWidth(candidate) <= headerIndent) {
+          break;
+        }
+
+        end += 1;
+      }
+
+      declarations.push({
+        name: header.name,
+        className: classDecl.name,
+        line: classDecl.line + index,
+        source: trimTrailingBlankLines(classLines.slice(index, end)).join("\n"),
+      });
+      index = Math.max(index, end - 1);
+    }
+  }
+
+  return declarations;
+}
+
+function discoverClassFieldBlocks(codeSheet: CodeSheet): FunctionDecl[] {
+  const source = normalizeNewlines(codeSheet);
+  const declarations: FunctionDecl[] = [];
+
+  for (const classDecl of discoverClassDecls(source.split("\n"))) {
+    const classLines = classDecl.snippet.split("\n");
+    for (let index = 1; index < classLines.length; index += 1) {
+      const line = classLines[index];
+      const field = parseClassFieldLine(line);
+      if (!field) {
+        continue;
+      }
+
+      declarations.push({
+        name: field.name,
+        className: classDecl.name,
+        line: classDecl.line + index,
+        source: line.trimEnd(),
+      });
+    }
+  }
+
+  return declarations;
+}
+
+function implementationFieldMatch(source: string, target: ImplementationTarget): ImplementationSnippetMatch | null {
+  const lineStarts = lineStartOffsets(source);
+  const classDecl = discoverClassDecls(source.split("\n")).find((decl) => (
+    target.className === undefined || decl.name === target.className
+  ));
+  if (!classDecl) {
+    return null;
+  }
+
+  const directField = discoverClassFieldBlocks(source).find((decl) => (
+    decl.className === classDecl.name && decl.name === target.name
+  ));
+  if (directField) {
+    const start = lineStarts[directField.line - 1] ?? 0;
+    return { code: directField.source, range: { start, end: start + directField.source.length } };
+  }
+
+  const assignment = classFieldAssignmentLine(classDecl, target.name);
+  if (assignment === null) {
+    return null;
+  }
+
+  const start = lineStarts[assignment.line - 1] ?? 0;
+  return {
+    code: assignment.source,
+    range: { start, end: start + assignment.source.length },
+  };
+}
+
+function classFieldAssignmentLine(
+  classDecl: ClassDecl,
+  fieldName: string,
+): { line: number; source: string } | null {
+  const classLines = classDecl.snippet.split("\n");
+  const pattern = new RegExp(`^\\s*self\\.${escapeRegExp(fieldName)}\\s*=`);
+
+  for (let index = 1; index < classLines.length; index += 1) {
+    const line = classLines[index];
+    if (pattern.test(line)) {
+      return { line: classDecl.line + index, source: line.trimEnd() };
+    }
+  }
+
+  return null;
+}
+
+function parseClassFieldLine(line: string): { name: string } | null {
+  if (line.trim().length === 0) {
+    return null;
+  }
+  const match = line.match(/^(\s+)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=.*)?$/);
+  if (!match) {
+    return null;
+  }
+  if (parseFunctionHeader(line) !== null) {
+    return null;
+  }
+
+  return { name: match[2] };
 }
 
 function parseSumTypeDeclarations(typeDeclarations: ParsedTypeDeclaration[]): SumTypeDecl[] {
