@@ -234,6 +234,10 @@ function test(): void {
     expect(prompt).toContain("Use TypeScript, Node.js built-ins, and approved dependencies");
     expect(prompt).toContain("ReactApp is a predefined Logos browser-app return type");
     expect(prompt).toContain("do not import React; React is provided by the ReactApp runtime");
+    expect(prompt).toContain("ReactApp visual and CSS guidelines:");
+    expect(prompt).toContain("Use a shadcn-inspired product UI style");
+    expect(prompt).toContain("Do not import shadcn/ui, Tailwind, CSS files, icon packages, or external fonts");
+    expect(prompt).toContain("The app must remain usable at common iframe sizes");
     expect(prompt).toContain('import blessed from "neo-blessed"; do not use import * as blessed');
     expect(prompt).toContain("For neo-blessed modal text entry, avoid blessed.form");
     expect(prompt).toContain('handle characters, backspace, tab, shift-tab, enter, and escape from one screen.on("keypress", ...) handler');
