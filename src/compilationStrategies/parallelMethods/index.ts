@@ -13,7 +13,7 @@ import {
   type Runnable,
 } from "../../codeSheet";
 import {
-  buildPythonProgram,
+  buildTypeScriptProgram,
   classNamesFromSnippets,
   collectCompletionResult,
   completedStrategySheet,
@@ -21,7 +21,7 @@ import {
   methodHeadersFromClassSnippet,
   normalizeFencedCode,
   replaceSnippet,
-  runPython,
+  runTypeScript,
   runResult,
   type RunResult,
   type StrategyRunOptions,
@@ -80,9 +80,9 @@ export async function compileAndRunParallelMethods(
     strategyCacheKey("parallel-methods", runnable, codeSheet),
     false,
   );
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
+  const executed = await runTypeScript(
+    buildTypeScriptProgram(completed.source, runnable),
+    options.tsx,
     options.onStdoutLine,
   );
   if (!executed.ok) {
@@ -127,10 +127,9 @@ Do not return the class header, sibling methods, top-level functions, runnable/t
 Preserve the method indentation from the requested snippet.
 Do not implement, redefine, restate, or include sibling methods.
 Parallel method completions are independent: do not depend on a sibling method or constructor adding hidden state unless the worksheet explicitly declares that state.
-If the class has no declared __init__, the method must work on a no-argument instance with no preexisting attributes.
-Use getattr defaults for optional state.
+If the class has no declared constructor, the method must work on a no-argument instance with no preexisting attributes.
+Use optional properties or nullish defaults for optional state.
 If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
-When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
 Do not require undeclared attributes such as _cubes, _points, _width, or _height to exist before this method is called.
 ${renderMethodGuidance(methodSnippet)}`;
 }

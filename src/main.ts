@@ -1,13 +1,20 @@
 import "./styles.css";
+import "@xterm/xterm/css/xterm.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import * as React from "react";
+import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import {
-  conf as pythonLanguageConfiguration,
-  language as pythonLanguage,
-} from "monaco-editor/esm/vs/basic-languages/python/python.js";
+  conf as typeScriptLanguageConfiguration,
+  language as typeScriptLanguage,
+} from "monaco-editor/esm/vs/basic-languages/typescript/typescript.js";
 import {
   completionSnippetHashes,
   definitionReadiness,
+  definitionReadinessFromImplementation,
   hashCompletionInput,
   indentNaturalReplacement,
   implementationBlockForTarget,
@@ -26,7 +33,6 @@ import {
   type SnippetHash,
   UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
 } from "./codeSheet";
-import { renderAnsiTerminalText } from "./ansiTerminal";
 import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import { snippetPopupTargetForClick } from "./snippetHitTest";
 import {
@@ -148,15 +154,33 @@ declare global {
   interface Window {
     loadLogosSession?: (session: LoadableSession) => Promise<void>;
     createLogosSessionBundle?: () => LoadableSession;
+    __logosReact?: typeof React;
+    __logosReactCreateRoot?: typeof createRoot;
   }
 }
 
-type InteractiveRunStartResponse = {
+window.__logosReact = React;
+window.__logosReactCreateRoot = createRoot;
+
+type InteractiveRunStartResponse = InteractiveTerminalRunStartResponse | InteractiveReactRunStartResponse;
+
+type InteractiveTerminalRunStartResponse = {
   ok: true;
+  kind: "terminal";
   sessionId: string;
   runnable: Runnable;
   implementation: string;
   chunks: RunChunk[];
+  status: RunStatus;
+};
+
+type InteractiveReactRunStartResponse = {
+  ok: true;
+  kind: "react";
+  runId: string;
+  runnable: Runnable;
+  implementation: string;
+  appCode: string;
   status: RunStatus;
 };
 
@@ -589,12 +613,14 @@ let snippetPopupPinned = false;
 let snippetPopupDragging = false;
 let snippetPopupHoveringPanel = false;
 let snippetPopupCloseTimer: ReturnType<typeof setTimeout> | null = null;
+let naturalSnippetEditorMode: "code" | "natural" = "code";
 let latestImplementationSource = seedImplementation;
 let runTabs: RunTab[] = [];
 const implementationToolTabId = "implementation-view";
 let activeToolTabId: ToolTabId = implementationToolTabId;
 let activeCompilationUnsubscribe: (() => void) | null = null;
 let draggedSourceTabId: string | null = null;
+let terminalFitFrame: number | null = null;
 
 type SourceTabDropSlot = {
   insertIndex: number;
@@ -616,8 +642,18 @@ type RunTab = {
   runnable: Runnable;
   source: string;
   sessionId: string | null;
+  reactRunId: string | null;
+  renderMode: "terminal" | "react";
+  reactAppCode: string | null;
+  reactRoot: ReturnType<typeof createRoot> | null;
   sourceHash: string;
   terminalText: string;
+  terminalRenderedLength: number;
+  terminalCols: number | null;
+  terminalRows: number | null;
+  terminal: Terminal | null;
+  terminalFitAddon: FitAddon | null;
+  terminalInputDisposable: ReturnType<Terminal["onData"]> | null;
   implementation: string;
   status: RunStatus | null;
   pollTimer: ReturnType<typeof setTimeout> | null;
@@ -897,9 +933,9 @@ function rememberCompilationState(state: CompilationState): void {
   compilationService.rememberCompilationState(state);
 }
 
-const logosPythonLanguageId = "logos-python";
+const logosTypeScriptLanguageId = "logos-typescript";
 
-registerLogosPythonLanguage();
+registerLogosTypeScriptLanguage();
 
 monaco.editor.defineTheme("interview-light", {
   base: "vs",
@@ -922,22 +958,22 @@ monaco.editor.defineTheme("interview-light", {
     { token: "predefined", foreground: "4f677c" },
     { token: "naturalSnippet", foreground: "b74716" },
     { token: "naturalSnippet.delimiter", foreground: "9b4d2e" },
-    { token: "comment.logos-python", foreground: "6f7f68" },
-    { token: "keyword.logos-python", foreground: "7a5268", fontStyle: "normal" },
-    { token: "identifier.logos-python", foreground: "20242a" },
-    { token: "number.logos-python", foreground: "3f6f6a" },
-    { token: "number.hex.logos-python", foreground: "3f6f6a" },
-    { token: "string.logos-python", foreground: "7a5a3a" },
-    { token: "string.escape.logos-python", foreground: "8a6844" },
-    { token: "delimiter.logos-python", foreground: "aca59b" },
-    { token: "delimiter.curly.logos-python", foreground: "aca59b" },
-    { token: "delimiter.bracket.logos-python", foreground: "aca59b" },
-    { token: "delimiter.parenthesis.logos-python", foreground: "aca59b" },
-    { token: "operator.logos-python", foreground: "8e8375" },
-    { token: "type.logos-python", foreground: "3f6f6a" },
-    { token: "predefined.logos-python", foreground: "4f677c" },
-    { token: "naturalSnippet.logos-python", foreground: "b74716" },
-    { token: "naturalSnippet.delimiter.logos-python", foreground: "9b4d2e" },
+    { token: "comment.logos-typescript", foreground: "6f7f68" },
+    { token: "keyword.logos-typescript", foreground: "7a5268", fontStyle: "normal" },
+    { token: "identifier.logos-typescript", foreground: "20242a" },
+    { token: "number.logos-typescript", foreground: "3f6f6a" },
+    { token: "number.hex.logos-typescript", foreground: "3f6f6a" },
+    { token: "string.logos-typescript", foreground: "7a5a3a" },
+    { token: "string.escape.logos-typescript", foreground: "8a6844" },
+    { token: "delimiter.logos-typescript", foreground: "aca59b" },
+    { token: "delimiter.curly.logos-typescript", foreground: "aca59b" },
+    { token: "delimiter.bracket.logos-typescript", foreground: "aca59b" },
+    { token: "delimiter.parenthesis.logos-typescript", foreground: "aca59b" },
+    { token: "operator.logos-typescript", foreground: "8e8375" },
+    { token: "type.logos-typescript", foreground: "3f6f6a" },
+    { token: "predefined.logos-typescript", foreground: "4f677c" },
+    { token: "naturalSnippet.logos-typescript", foreground: "b74716" },
+    { token: "naturalSnippet.delimiter.logos-typescript", foreground: "9b4d2e" },
   ],
   colors: {
     "editor.background": "#fbfaf6",
@@ -970,7 +1006,7 @@ installMonacoShortcutGuard(implementationViewPanel);
 
 const editor = monaco.editor.create(editorEl, {
   value: seedCode,
-  language: logosPythonLanguageId,
+  language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
   fontFamily:
@@ -1002,7 +1038,7 @@ const editor = monaco.editor.create(editorEl, {
 
 const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   value: "",
-  language: logosPythonLanguageId,
+  language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
   fontFamily:
@@ -1036,7 +1072,7 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
 
 const implementationViewEditor = monaco.editor.create(implementationViewPanel, {
   value: implementationViewText(),
-  language: logosPythonLanguageId,
+  language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
   fontFamily:
@@ -1303,12 +1339,6 @@ codeRunResizeHandle.addEventListener("keydown", (event) => {
 });
 toolPanels.addEventListener("submit", (event) => {
   event.preventDefault();
-  const form = event.target;
-  if (!(form instanceof HTMLFormElement)) {
-    return;
-  }
-
-  sendTerminalInput(form.dataset.runInputFormId ?? "");
 });
 snippetResizeHandle.addEventListener("pointerdown", (event) => {
   beginSnippetPanelResize(event);
@@ -1826,6 +1856,7 @@ const shellResizeObserver = new ResizeObserver(() => {
   updateShellResizeHandles();
   renderSourceTabSeparators();
   renderSourceTabSeparators(toolTabsList);
+  scheduleTerminalFit();
 });
 shellResizeObserver.observe(shell);
 shellResizeObserver.observe(codePane);
@@ -1875,6 +1906,17 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
 
   rememberActiveCompilationImplementation(result.implementation, source);
   renderSnippetPanel();
+  if (result.kind === "react") {
+    currentTab.renderMode = "react";
+    currentTab.reactRunId = result.runId;
+    currentTab.reactAppCode = result.appCode;
+    currentTab.implementation = result.implementation;
+    currentTab.status = result.status;
+    finishInteractiveRun(currentTab, result.status, result.implementation);
+    return;
+  }
+
+  currentTab.renderMode = "terminal";
   currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
@@ -2360,7 +2402,7 @@ function renderCompilationState(state: CompilationState): void {
     scheduleSaveSourceTabs();
   }
   renderImplementationView();
-  latestReadinessDefinitions = state.readiness.map((definition) => ({ ...definition }));
+  latestReadinessDefinitions = effectiveReadinessForState(state);
   latestTypeCheckDiagnostics = state.diagnostics.map((diagnostic) => ({ ...diagnostic }));
   snippetPreviewByHash = cloneSnippetPreviewMap(state.snippetPreviews);
   refreshIncompleteSnippets(active.source);
@@ -2436,6 +2478,15 @@ function visibleImplementationForState(state: CompilationState): string {
   return state.session.lastImplementation;
 }
 
+function effectiveReadinessForState(state: CompilationState): DefinitionReadiness[] {
+  const implementation = visibleImplementationForState(state);
+  if (implementation.trim().length === 0) {
+    return state.readiness.map((definition) => ({ ...definition }));
+  }
+
+  return readinessForSource(state.source, implementation);
+}
+
 function completeCompileSession(session: CompileSession, implementation: string): CompileSession {
   return {
     ...session,
@@ -2480,6 +2531,7 @@ function initialCompilationState(
 ): CompilationState {
   const targets = incompleteSnippetTargetsForSource(request.source);
   const cached = sheetImplementationCacheEntry(request.sheetId);
+  const implementation = cached?.implementation ?? "";
   return {
     sheetId: request.sheetId,
     source: request.source,
@@ -2489,11 +2541,11 @@ function initialCompilationState(
     session: {
       sheetId: request.sheetId,
       currentCode: request.source,
-      lastImplementation: cached?.implementation ?? "",
+      lastImplementation: implementation,
       draftImplementation: null,
       streamHash: null,
     },
-    readiness: localReadiness(request.source),
+    readiness: readinessForSource(request.source, implementation),
     diagnostics: [],
     snippetPreviews: new Map(
       targets.map((target) => [
@@ -2930,9 +2982,18 @@ function openUserDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function localReadiness(source: string): DefinitionReadiness[] {
+function readinessForSource(source: string, implementation = ""): DefinitionReadiness[] {
   try {
-    return definitionReadiness(parse(source), new Map());
+    const parsed = parse(source);
+    if (implementation.trim().length === 0) {
+      return definitionReadiness(parsed, new Map());
+    }
+
+    try {
+      return definitionReadinessFromImplementation(parsed, implementation);
+    } catch {
+      return definitionReadiness(parsed, new Map());
+    }
   } catch {
     return [];
   }
@@ -3174,6 +3235,48 @@ function snippetInlineClassName(target: IncompleteSnippetTarget): string | undef
 
   return classes.length === 0 ? undefined : classes.join(" ");
 }
+
+function naturalSnippetTextRanges(target: IncompleteSnippetTarget): monaco.Range[] {
+  const delimiterLength = target.snippet.startsWith("l`") ? 2 : 1;
+  const bodyStartOffset = delimiterLength;
+  const bodyEndOffset = Math.max(bodyStartOffset, target.snippet.length - 1);
+  const body = target.snippet.slice(bodyStartOffset, bodyEndOffset);
+  const ranges: monaco.Range[] = [];
+  let lineStartOffset = bodyStartOffset;
+
+  for (const line of body.split("\n")) {
+    const leadingWhitespace = line.match(/^\s*/)?.[0].length ?? 0;
+    const trailingWhitespace = line.match(/\s*$/)?.[0].length ?? 0;
+    const startOffset = lineStartOffset + leadingWhitespace;
+    const endOffset = lineStartOffset + line.length - trailingWhitespace;
+
+    if (startOffset < endOffset) {
+      ranges.push(snippetOffsetRangeToEditorRange(target, startOffset, endOffset));
+    }
+
+    lineStartOffset += line.length + 1;
+  }
+
+  return ranges;
+}
+
+function snippetOffsetRangeToEditorRange(
+  target: IncompleteSnippetTarget,
+  startOffset: number,
+  endOffset: number,
+): monaco.Range {
+  const lineStarts = sourceLineStartOffsets(target.snippet);
+  const start = offsetToEditorPosition(lineStarts, startOffset);
+  const end = offsetToEditorPosition(lineStarts, endOffset);
+
+  return new monaco.Range(
+    target.startLine + start.line - 1,
+    start.line === 1 ? target.startColumn + start.column - 1 : start.column,
+    target.startLine + end.line - 1,
+    end.line === 1 ? target.startColumn + end.column - 1 : end.column,
+  );
+}
+
 
 function updateSelectedDefinitionDecorations(): void {
   const target = selectedDefinitionTarget;
@@ -3873,33 +3976,28 @@ function indentGuideLevel(line: string, tabSize: number): number {
   return Math.floor(width / tabSize);
 }
 
-function registerLogosPythonLanguage(): void {
+function registerLogosTypeScriptLanguage(): void {
   monaco.languages.register({
-    id: logosPythonLanguageId,
-    aliases: ["Logos Python", "logos-python"],
-    mimetypes: ["text/x-logos-python"],
+    id: logosTypeScriptLanguageId,
+    aliases: ["Logos TypeScript", "logos-typescript"],
+    mimetypes: ["text/x-logos-typescript"],
   });
-  monaco.languages.setLanguageConfiguration(logosPythonLanguageId, pythonLanguageConfiguration);
-  monaco.languages.setMonarchTokensProvider(logosPythonLanguageId, {
-    ...pythonLanguage,
-    tokenPostfix: ".logos-python",
+  monaco.languages.setLanguageConfiguration(logosTypeScriptLanguageId, typeScriptLanguageConfiguration);
+  monaco.languages.setMonarchTokensProvider(logosTypeScriptLanguageId, {
+    ...typeScriptLanguage,
+    tokenPostfix: ".logos-typescript",
     tokenizer: {
-      ...pythonLanguage.tokenizer,
+      ...typeScriptLanguage.tokenizer,
       root: [
-        pythonLanguage.tokenizer.root[0],
+        typeScriptLanguage.tokenizer.root[0],
+        [/\/\/.*$/, "comment"],
         [/#.*$/, "comment"],
-        [/```/, "naturalSnippet.delimiter", "@logosTripleNaturalSnippet"],
-        [/`/, "naturalSnippet.delimiter", "@logosInlineNaturalSnippet"],
-        ...pythonLanguage.tokenizer.root.slice(1),
+        [/\bl`/, "naturalSnippet.delimiter", "@logosNaturalSnippet"],
+        ...typeScriptLanguage.tokenizer.root.slice(1),
       ],
-      logosInlineNaturalSnippet: [
+      logosNaturalSnippet: [
         [/[^`]+/, "naturalSnippet"],
         [/`/, "naturalSnippet.delimiter", "@pop"],
-      ],
-      logosTripleNaturalSnippet: [
-        [/[^`]+/, "naturalSnippet"],
-        [/```/, "naturalSnippet.delimiter", "@pop"],
-        [/`+/, "naturalSnippet"],
       ],
     },
   });
@@ -3994,52 +4092,8 @@ function expandOpeningTripleBacktick(
   targetEditor: monaco.editor.IStandaloneCodeEditor,
   position: monaco.IPosition,
 ): void {
-  const model = targetEditor.getModel();
-  if (!model) {
-    return;
-  }
-
-  const line = model.getLineContent(position.lineNumber);
-  const beforeCursor = line.slice(0, position.column - 1);
-  const afterCursor = line.slice(position.column - 1);
-  const delimiterStartColumn = position.column - 3;
-  if (
-    delimiterStartColumn < 1 ||
-    !beforeCursor.endsWith("```") ||
-    afterCursor.trim().length > 0
-  ) {
-    return;
-  }
-
-  const indent = line.slice(0, delimiterStartColumn - 1);
-  if (indent.trim().length > 0) {
-    return;
-  }
-
-  const delimiterOffset = model.getOffsetAt({
-    lineNumber: position.lineNumber,
-    column: delimiterStartColumn,
-  });
-  if (standaloneTripleBacktickStateBefore(model.getValue(), delimiterOffset) !== "outside") {
-    return;
-  }
-
-  const cursorLine = position.lineNumber + 1;
-  const cursorColumn = indent.length + 1;
-  targetEditor.executeEdits(
-    "logos-triple-backtick",
-    [{
-      range: new monaco.Range(
-        position.lineNumber,
-        position.column,
-        position.lineNumber,
-        model.getLineMaxColumn(position.lineNumber),
-      ),
-      text: `\n${indent}\n${indent}\`\`\``,
-      forceMoveMarkers: true,
-    }],
-    [new monaco.Selection(cursorLine, cursorColumn, cursorLine, cursorColumn)],
-  );
+  void targetEditor;
+  void position;
 }
 
 function insertAssistedNewLine(targetEditor: monaco.editor.IStandaloneCodeEditor): boolean {
@@ -4051,13 +4105,6 @@ function insertAssistedNewLine(targetEditor: monaco.editor.IStandaloneCodeEditor
   }
 
   const line = model.getLineContent(position.lineNumber);
-  const offset = model.getOffsetAt(position);
-  const tripleBacktickIndent = openStandaloneTripleBacktickIndentAt(model.getValue(), offset);
-  if (tripleBacktickIndent !== null) {
-    insertTextAtCursor(targetEditor, `\n${tripleBacktickIndent}`);
-    return true;
-  }
-
   const commentPrefix = commentContinuationPrefix(line);
   if (commentPrefix === null) {
     return false;
@@ -4099,47 +4146,11 @@ function commentContinuationPrefix(line: string): string | null {
   return `${match[1]}# `;
 }
 
-function openStandaloneTripleBacktickIndentAt(source: string, offset: number): string | null {
-  const state = scanStandaloneTripleBackticks(source, offset);
-  return state.kind === "inside" ? state.indent : null;
-}
-
-function standaloneTripleBacktickStateBefore(source: string, offset: number): "inside" | "outside" {
-  return scanStandaloneTripleBackticks(source, offset).kind;
-}
-
-function scanStandaloneTripleBackticks(
-  source: string,
-  offset: number,
-): { kind: "inside"; indent: string } | { kind: "outside" } {
-  let state: { kind: "inside"; indent: string } | { kind: "outside" } = { kind: "outside" };
-  let searchStart = 0;
-
-  while (searchStart < offset) {
-    const delimiterOffset = source.indexOf("```", searchStart);
-    if (delimiterOffset === -1 || delimiterOffset >= offset) {
-      break;
-    }
-
-    const lineStart = source.lastIndexOf("\n", delimiterOffset - 1) + 1;
-    const beforeDelimiter = source.slice(lineStart, delimiterOffset);
-    if (beforeDelimiter.trim().length === 0) {
-      state = state.kind === "outside"
-        ? { kind: "inside", indent: beforeDelimiter }
-        : { kind: "outside" };
-    }
-
-    searchStart = delimiterOffset + 3;
-  }
-
-  return state;
-}
-
 function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
   const firstLine = snippet.snippet.trim().split("\n")[0] ?? "";
   if (snippet.kind === "natural") {
     const inner = naturalSnippetLabelText(snippet.snippet);
-    return inner.length > 0 ? inner : "backtick snippet";
+    return inner.length > 0 ? inner : "Logos snippet";
   }
 
   const functionMatch = firstLine.match(/^(?:async\s+)?(?:def|fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)/);
@@ -4156,7 +4167,7 @@ function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
 }
 
 function naturalSnippetLabelText(snippet: string): string {
-  const body = snippet.trim().replace(/^```|```$/g, "").replace(/^`|`$/g, "");
+  const body = snippet.trim().replace(/^l`|`$/g, "");
   const lines = body
     .split("\n")
     .map((line) => line.trim())
@@ -4181,6 +4192,28 @@ function exactIncompleteSnippetForPosition(
   const lineMaxColumn = editor.getModel()?.getLineMaxColumn(lineNumber);
   return snippetPopupTargetForClick(snippets, lineNumber, column, lineMaxColumn);
 }
+
+function updateNaturalSnippetEditorMode(): void {
+  const position = editor.getPosition();
+  const lineMaxColumn = position === null
+    ? undefined
+    : editor.getModel()?.getLineMaxColumn(position.lineNumber);
+  const inNaturalSnippet = position !== null && Array.from(incompleteSnippetByHash.values()).some((target) => {
+    return target.kind === "natural" &&
+      snippetTargetContainsPosition(target, position.lineNumber, position.column, lineMaxColumn);
+  });
+  const mode = inNaturalSnippet ? "natural" : "code";
+
+  if (mode === naturalSnippetEditorMode) {
+    return;
+  }
+
+  naturalSnippetEditorMode = mode;
+  editor.updateOptions({
+    matchBrackets: "never",
+  });
+}
+
 
 function implementationTargetForLine(
   lineNumber: number,
@@ -4547,6 +4580,8 @@ function createRunnableRunWidget(
   node.type = "button";
   node.textContent = `▶ Run ${runnableDisplayName(runnable.name)}`;
   node.title = runnable.ready ? `Run ${runnable.name}` : disabledRunnableHoverMessage(runnable);
+  node.dataset.ready = runnable.ready ? "true" : "false";
+  node.setAttribute("aria-disabled", runnable.ready ? "false" : "true");
   node.addEventListener("mousedown", (event) => {
     event.preventDefault();
   });
@@ -4673,8 +4708,18 @@ function createRunTab(runnable: Runnable, source: string, sourceHash: string): R
     runnable,
     source,
     sessionId: null,
+    reactRunId: null,
+    renderMode: "terminal",
+    reactAppCode: null,
+    reactRoot: null,
     sourceHash,
     terminalText: "",
+    terminalRenderedLength: 0,
+    terminalCols: null,
+    terminalRows: null,
+    terminal: null,
+    terminalFitAddon: null,
+    terminalInputDisposable: null,
     implementation: latestImplementationSource,
     status: { state: "running" },
     pollTimer: null,
@@ -4724,6 +4769,10 @@ function renderRunTabs(): void {
   const activeIds = new Set(runTabs.map((tab) => tab.id));
   for (const panel of Array.from(toolPanels.querySelectorAll<HTMLElement>("[data-run-panel-id]"))) {
     if (!activeIds.has(panel.dataset.runPanelId ?? "")) {
+      const tab = runTabs.find((item) => item.id === panel.dataset.runPanelId);
+      if (tab) {
+        disposeRunTabTerminal(tab);
+      }
       panel.remove();
     }
   }
@@ -4749,24 +4798,15 @@ function ensureRunPanel(tab: RunTab): void {
   panel.setAttribute("aria-labelledby", runTabButtonId(tab.id));
   panel.setAttribute("aria-live", "polite");
 
-  const output = document.createElement("span");
-  output.className = "terminal-output-text";
-  output.dataset.runOutputId = tab.id;
+  const xtermHost = document.createElement("div");
+  xtermHost.className = "terminal-xterm-host";
+  xtermHost.dataset.runXtermId = tab.id;
 
-  const form = document.createElement("form");
-  form.className = "terminal-form";
-  form.dataset.runInputFormId = tab.id;
+  const reactHost = document.createElement("div");
+  reactHost.className = "react-app-run-host";
+  reactHost.dataset.reactRunHostId = tab.id;
 
-  const input = document.createElement("input");
-  input.className = "terminal-input";
-  input.dataset.runInputId = tab.id;
-  input.type = "text";
-  input.autocomplete = "off";
-  input.spellcheck = false;
-  input.setAttribute("aria-label", `stdin for ${tab.runnable}`);
-
-  form.append(input);
-  panel.append(output, form);
+  panel.append(xtermHost, reactHost);
   toolPanels.append(panel);
 }
 
@@ -4776,24 +4816,206 @@ function renderRunTab(tab: RunTab): void {
     return;
   }
 
-  const output = panel.querySelector<HTMLElement>("[data-run-output-id]");
-  const form = panel.querySelector<HTMLFormElement>("[data-run-input-form-id]");
-  const input = panel.querySelector<HTMLInputElement>("[data-run-input-id]");
+  const xtermHost = panel.querySelector<HTMLElement>("[data-run-xterm-id]");
+  const reactHost = panel.querySelector<HTMLElement>("[data-react-run-host-id]");
   const running = tab.status?.state === "running";
 
   panel.classList.toggle("active", activeToolTabId === tab.id);
   panel.classList.toggle("terminal-running", running);
-  if (output) {
-    renderAnsiTerminalText(output, terminalDisplayText(tab));
+  panel.classList.toggle("terminal-xterm-mode", tab.renderMode === "terminal");
+  panel.classList.toggle("react-app-mode", tab.renderMode === "react");
+  if (xtermHost) {
+    xtermHost.hidden = tab.renderMode !== "terminal";
   }
-  if (form) {
-    form.hidden = !running;
+  if (reactHost) {
+    reactHost.hidden = tab.renderMode !== "react";
   }
-  if (input) {
-    input.disabled = !running;
+  if (xtermHost && tab.renderMode === "terminal") {
+    renderXtermTerminal(tab, xtermHost);
+  }
+  if (reactHost && tab.renderMode === "react") {
+    renderReactApp(tab, reactHost);
   }
 
   panel.scrollTop = panel.scrollHeight;
+}
+
+function scheduleTerminalFit(): void {
+  if (terminalFitFrame !== null) {
+    cancelAnimationFrame(terminalFitFrame);
+  }
+
+  terminalFitFrame = requestAnimationFrame(() => {
+    terminalFitFrame = null;
+    fitVisibleRunTerminals();
+  });
+}
+
+function renderXtermTerminal(tab: RunTab, host: HTMLElement): void {
+  if (!tab.terminal) {
+    tab.terminal = new Terminal({
+      cols: 80,
+      rows: 24,
+      cursorBlink: true,
+      convertEol: false,
+      fontFamily: terminalFontFamily(),
+      fontSize: 14,
+      lineHeight: 1.12,
+      theme: {
+        background: "#111827",
+        foreground: "#f9fafb",
+        cursor: "#f9fafb",
+        selectionBackground: "#2563eb",
+      },
+    });
+    tab.terminalFitAddon = new FitAddon();
+    tab.terminal.loadAddon(tab.terminalFitAddon);
+    tab.terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type !== "keydown" || event.key !== "Tab") {
+        return true;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      void sendRawTerminalInput(tab.id, event.shiftKey ? "\x1b[Z" : "\t");
+      return false;
+    });
+    tab.terminal.open(host);
+    tab.terminalInputDisposable = tab.terminal.onData((input) => {
+      void sendRawTerminalInput(tab.id, input);
+    });
+    tab.terminalRenderedLength = 0;
+  }
+
+  fitRunTabTerminal(tab);
+  if (tab.terminalText.length > tab.terminalRenderedLength) {
+    tab.terminal.write(tab.terminalText.slice(tab.terminalRenderedLength));
+    tab.terminalRenderedLength = tab.terminalText.length;
+  }
+}
+
+function fitRunTabTerminal(tab: RunTab): void {
+  if (!tab.terminal || !tab.terminalFitAddon) {
+    return;
+  }
+
+  try {
+    tab.terminalFitAddon.fit();
+    const cols = tab.terminal.cols;
+    const rows = tab.terminal.rows;
+    if (tab.terminalCols !== cols || tab.terminalRows !== rows) {
+      tab.terminalCols = cols;
+      tab.terminalRows = rows;
+      if (tab.sessionId) {
+        void sendInteractiveRunResizeViaDevApi(tab.sessionId, cols, rows).catch(() => undefined);
+      }
+    }
+  } catch {
+    // xterm can reject fitting before the host is measurable; the resize observer
+    // will retry after layout settles.
+  }
+}
+
+function fitVisibleRunTerminals(): void {
+  for (const tab of runTabs) {
+    if (activeToolTabId === tab.id) {
+      fitRunTabTerminal(tab);
+    }
+  }
+}
+
+function renderReactApp(tab: RunTab, host: HTMLElement): void {
+  const appCode = tab.reactAppCode;
+  if (appCode === null) {
+    host.textContent = "React app is waiting for its implementation.";
+    return;
+  }
+
+  if (!tab.reactRoot) {
+    host.replaceChildren();
+    const mount = document.createElement("div");
+    mount.className = "react-app-run-mount";
+    host.append(mount);
+    tab.reactRoot = createRoot(mount);
+  }
+
+  tab.reactRoot.render(React.createElement(ReactAppFrame, {
+    appCode,
+    runnable: tab.runnable,
+  }));
+}
+
+function ReactAppFrame(props: { appCode: string; runnable: Runnable }): React.ReactElement {
+  const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
+  const [iframeBody, setIframeBody] = React.useState<HTMLElement | null>(null);
+
+  React.useLayoutEffect(() => {
+    const iframe = iframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!iframe || !doc) {
+      return;
+    }
+
+    doc.open();
+    doc.write(`<!doctype html><html><head><style>
+html, body { margin: 0; min-height: 100%; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+</style></head><body></body></html>`);
+    doc.close();
+    setIframeBody(doc.body);
+  }, [props.appCode]);
+
+  let element: React.ReactNode = null;
+  try {
+    const run = new Function("React", `${props.appCode}\nreturn ${props.runnable}();`);
+    element = run(React) as React.ReactNode;
+  } catch (error) {
+    element = React.createElement("pre", {
+      style: {
+        boxSizing: "border-box",
+        minHeight: "100vh",
+        margin: 0,
+        padding: 16,
+        color: "#991b1b",
+        background: "#fef2f2",
+        whiteSpace: "pre-wrap",
+        font: "13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      },
+    }, error instanceof Error && error.stack ? error.stack : String(error));
+  }
+
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement("iframe", {
+      ref: iframeRef,
+      className: "react-app-run-frame",
+      title: `Run ${props.runnable}`,
+    }),
+    iframeBody ? createPortal(element, iframeBody) : null,
+  );
+}
+
+function terminalFontFamily(): string {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue("--terminal-font")
+    .trim() || "monospace";
+}
+
+function disposeRunTabTerminal(tab: RunTab): void {
+  tab.terminalInputDisposable?.dispose();
+  tab.terminalInputDisposable = null;
+  tab.terminal?.dispose();
+  tab.terminal = null;
+  tab.terminalFitAddon = null;
+  tab.terminalCols = null;
+  tab.terminalRows = null;
+  tab.terminalRenderedLength = 0;
+}
+
+function disposeRunTabReactRoot(tab: RunTab): void {
+  tab.reactRoot?.unmount();
+  tab.reactRoot = null;
 }
 
 function renderImplementationView(): void {
@@ -4818,18 +5040,6 @@ function implementationViewText(): string {
     : "No implementation yet.";
 }
 
-function terminalDisplayText(tab: RunTab): string {
-  if (tab.terminalText.length > 0) {
-    return tab.terminalText;
-  }
-
-  if (tab.status?.state === "exited" && tab.status.error) {
-    return `${tab.status.error}\n`;
-  }
-
-  return "";
-}
-
 function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {
   if (chunks.length === 0) {
     return;
@@ -4845,72 +5055,27 @@ function focusTerminalInput(runTabId: string): void {
     return;
   }
 
-  const input = document.querySelector<HTMLInputElement>(
-    `[data-run-input-id="${cssEscape(runTabId)}"]`,
-  );
-  if (!input || input.disabled || input.hidden) {
-    return;
-  }
-
-  input.focus();
+  tab.terminal?.focus();
 }
 
-async function sendTerminalInput(runTabId: string): Promise<void> {
+async function sendRawTerminalInput(runTabId: string, input: string): Promise<void> {
   const tab = runTabById(runTabId);
   if (!tab?.sessionId || tab.status?.state !== "running") {
     return;
   }
 
-  const inputEl = document.querySelector<HTMLInputElement>(
-    `[data-run-input-id="${cssEscape(runTabId)}"]`,
-  );
-  if (!inputEl) {
-    return;
-  }
-
-  const input = `${inputEl.value}\n`;
-  inputEl.value = "";
-  const canSend = await drainRunOutputBeforeInput(tab);
-  if (!canSend || !runTabById(runTabId)) {
-    return;
-  }
-
-  tab.terminalText += input;
-  renderRunTab(tab);
-  sessionCapture.track("run_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
+  sessionCapture.track("run_raw_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
 
   try {
     await sendInteractiveRunInputViaDevApi(tab.sessionId, input);
   } catch (error) {
     appendTerminalChunks(tab, [{
       stream: "stderr",
-      text: `\n${error instanceof Error ? error.message : String(error)}\n`,
+      text: `\r\n${error instanceof Error ? error.message : String(error)}\r\n`,
     }]);
     tab.status = { state: "exited", code: null, signal: null };
     renderRunTab(tab);
   }
-}
-
-async function drainRunOutputBeforeInput(tab: RunTab): Promise<boolean> {
-  if (!tab.sessionId) {
-    return false;
-  }
-
-  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(() => null);
-  if (!result || !runTabById(tab.id)) {
-    return runTabById(tab.id) !== undefined;
-  }
-
-  tab.implementation = result.implementation;
-  rememberActiveCompilationImplementation(result.implementation, tab.source);
-  renderSnippetPanel();
-  appendTerminalChunks(tab, result.chunks);
-  if (result.status.state === "running") {
-    return true;
-  }
-
-  finishInteractiveRun(tab, result.status, result.implementation);
-  return false;
 }
 
 function scheduleRunPoll(runTabId: string, delayMs: number): void {
@@ -5013,11 +5178,20 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
     return;
   }
 
-  currentTab.sessionId = result.sessionId;
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
   rememberActiveCompilationImplementation(result.implementation, currentTab.source);
   renderSnippetPanel();
+  if (result.kind === "react") {
+    currentTab.renderMode = "react";
+    currentTab.reactRunId = result.runId;
+    currentTab.reactAppCode = result.appCode;
+    finishInteractiveRun(currentTab, result.status, result.implementation);
+    return;
+  }
+
+  currentTab.renderMode = "terminal";
+  currentTab.sessionId = result.sessionId;
   appendTerminalChunks(currentTab, result.chunks);
 
   if (result.status.state === "running") {
@@ -5072,6 +5246,8 @@ function closeRunTab(runTabId: string): void {
   const sessionId = tab.sessionId;
   const running = tab.status?.state === "running";
   const index = runTabs.findIndex((item) => item.id === runTabId);
+  disposeRunTabTerminal(tab);
+  disposeRunTabReactRoot(tab);
   runTabs = runTabs.filter((item) => item.id !== runTabId);
 
   if (activeToolTabId === runTabId) {
@@ -5093,6 +5269,8 @@ function closeAllRunTabs(): void {
     if (tab.sessionId && tab.status?.state === "running") {
       void stopInteractiveRunViaDevApi(tab.sessionId).catch(() => undefined);
     }
+    disposeRunTabTerminal(tab);
+    disposeRunTabReactRoot(tab);
   }
   runTabs = [];
   activeToolTabId = implementationToolTabId;
@@ -5113,12 +5291,6 @@ function runPanelId(runTabId: string): string {
 
 function createRunTabId(runnable: Runnable): string {
   return `run-${runnable.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function cssEscape(value: string): string {
-  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
-    ? CSS.escape(value)
-    : value.replaceAll(/["\\]/g, "\\$&");
 }
 
 async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void> {
@@ -5356,12 +5528,15 @@ async function startInteractiveRunViaDevApi(
 
   const payload = (await response.json()) as {
     ok?: boolean;
+    kind?: string;
     sessionId?: string;
+    runId?: string;
     runnable?: string;
     chunks?: RunChunk[];
     status?: RunStatus;
     error?: string;
     implementation?: string;
+    appCode?: string;
   };
 
   sessionCapture.track("api_response", {
@@ -5371,20 +5546,33 @@ async function startInteractiveRunViaDevApi(
     body: payload,
   });
 
-  if (
-    !response.ok ||
-    payload.ok !== true ||
-    typeof payload.sessionId !== "string" ||
-    typeof payload.runnable !== "string" ||
-    !Array.isArray(payload.chunks) ||
-    !isRunStatus(payload.status) ||
-    typeof payload.implementation !== "string"
-  ) {
+  if (!response.ok || payload.ok !== true || typeof payload.runnable !== "string" || !isRunStatus(payload.status) || typeof payload.implementation !== "string") {
+    throw new Error(payload.error ?? "Run request failed");
+  }
+
+  if (payload.kind === "react") {
+    if (typeof payload.runId !== "string" || typeof payload.appCode !== "string") {
+      throw new Error(payload.error ?? "React run request failed");
+    }
+
+    return {
+      ok: true,
+      kind: "react",
+      runId: payload.runId,
+      runnable: payload.runnable,
+      status: payload.status,
+      implementation: payload.implementation,
+      appCode: payload.appCode,
+    };
+  }
+
+  if (typeof payload.sessionId !== "string" || !Array.isArray(payload.chunks)) {
     throw new Error(payload.error ?? "Run request failed");
   }
 
   return {
     ok: true,
+    kind: "terminal",
     sessionId: payload.sessionId,
     runnable: payload.runnable,
     chunks: payload.chunks,
@@ -5414,6 +5602,31 @@ async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string
 
   if (!response.ok || payload.ok !== true) {
     throw new Error(payload.error ?? "Input was not accepted");
+  }
+}
+
+async function sendInteractiveRunResizeViaDevApi(sessionId: string, cols: number, rows: number): Promise<void> {
+  const body = { sessionId, cols, rows };
+  sessionCapture.track("api_request", {
+    method: "POST",
+    path: "/api/run/resize",
+    body,
+  });
+  const response = await fetch("/api/run/resize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = (await response.json()) as { ok?: boolean; error?: string };
+  sessionCapture.track("api_response", {
+    method: "POST",
+    path: "/api/run/resize",
+    status: response.status,
+    body: payload,
+  });
+
+  if (!response.ok) {
+    throw new Error(payload.error ?? "Resize request failed");
   }
 }
 
@@ -5741,17 +5954,35 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     runStatus.textContent = lastRunStatusText || session.run.runStatus.text;
     runStatus.dataset.state = lastRunStatusState;
 
-    runTabs = session.run.tabs.map((tab) => ({
-      id: tab.id,
-      runnable: tab.runnable,
-      source: active?.source ?? session.editor.value,
-      sessionId: null,
-      sourceHash: tab.sourceHash,
-      terminalText: tab.terminalText,
-      implementation: tab.implementation,
-      status: restoredRunStatus(tab.status),
-      pollTimer: null,
-    }));
+    runTabs = session.run.tabs.map((tab) => {
+      const implementation = tab.implementation;
+      const status = restoredRunStatus(tab.status);
+      return {
+        id: tab.id,
+        runnable: tab.runnable,
+        source: active?.source ?? session.editor.value,
+        sessionId: null,
+        reactRunId: null,
+        renderMode: "terminal",
+        reactAppCode: null,
+        reactRoot: null,
+        sourceHash: tab.sourceHash,
+        terminalText: tab.terminalText.length > 0
+          ? tab.terminalText
+          : status?.state === "exited" && status.error
+          ? `${status.error}\r\n`
+          : "",
+        terminalRenderedLength: 0,
+        terminalCols: null,
+        terminalRows: null,
+        terminal: null,
+        terminalFitAddon: null,
+        terminalInputDisposable: null,
+        implementation,
+        status,
+        pollTimer: null,
+      };
+    });
     activeToolTabId = session.run.activeToolTabId === implementationToolTabId
       ? implementationToolTabId
       : runTabs.some((tab) => tab.id === session.run.activeToolTabId)
@@ -5763,7 +5994,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     updateEditorAvailability();
     updateActiveProjectMenuItem();
     updateTypeCheckMarkers([]);
-    updateReadinessDecorations(localReadiness(editor.getValue()));
+    updateReadinessDecorations(readinessForSource(editor.getValue(), latestImplementationSource));
     updateRunStaleness(editor.getValue());
     refreshIncompleteSnippets(editor.getValue());
     if (active) {

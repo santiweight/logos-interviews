@@ -9,7 +9,7 @@ import {
   type Runnable,
 } from "../../codeSheet";
 import {
-  buildPythonProgram,
+  buildTypeScriptProgram,
   classNamesFromSnippets,
   collectCompletionResult,
   completedStrategySheet,
@@ -17,7 +17,7 @@ import {
   methodHeadersFromClassSnippet,
   normalizeLineEndings,
   replaceSnippet,
-  runPython,
+  runTypeScript,
   runResult,
   type RunResult,
   type StrategyRunOptions,
@@ -46,9 +46,9 @@ export async function compileAndRunAgenticMethods(
   const cachedSource = await cachedImplementation(cache, cacheKey);
   if (cachedSource !== undefined) {
     const completed = completedStrategySheet(codeSheet, cachedSource, cacheKey, true);
-    const executed = await runPython(
-      buildPythonProgram(completed.source, runnable),
-      options.python ?? "python3",
+    const executed = await runTypeScript(
+      buildTypeScriptProgram(completed.source, runnable),
+      options.tsx,
       options.onStdoutLine,
     );
     return runResult(executed, completed);
@@ -74,15 +74,15 @@ export async function compileAndRunAgenticMethods(
     currentSource = replaceSnippet(currentSource, replacement.snippet, replacement.replacement);
   }
 
-  const trial = await runPython(buildPythonProgram(currentSource, runnable), options.python ?? "python3");
+  const trial = await runTypeScript(buildTypeScriptProgram(currentSource, runnable), options.tsx);
   if (!trial.ok) {
     return fallback();
   }
 
   const completed = completedStrategySheet(codeSheet, currentSource, cacheKey, false);
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
+  const executed = await runTypeScript(
+    buildTypeScriptProgram(completed.source, runnable),
+    options.tsx,
     options.onStdoutLine,
   );
   if (executed.ok) {
@@ -137,9 +137,9 @@ function buildMethodAgentPrompt(options: {
   siblingSnippets: string[];
   targetKind: "method" | "snippet";
 }): string {
-  return `You are one of several parallel coding agents compiling a Python worksheet.
+  return `You are one of several parallel coding agents compiling a TypeScript worksheet.
 
-Return exactly one JSON object and no other text: {"replacement":"<complete Python code that replaces the target snippet>"}.
+Return exactly one JSON object and no other text: {"replacement":"<complete TypeScript code that replaces the target snippet>"}.
 The first character of your response must be "{" and the last character must be "}". Do not include markdown, prose, notes, or reasoning.
 
 Rules:
@@ -148,34 +148,33 @@ Rules:
 - Do not implement, redefine, restate, or include any sibling method, class, top-level function, runnable, or test.
 - If another declaration is needed, assume it will be implemented separately and only call it by its declared name.
 - Preserve the public behavior required by the runnable/test function.
-- Use only the Python standard library.
+- Use only the Node.js standard library.
 - Keep the replacement concise.
 - For class methods, the replacement is inserted inside the existing class at the same indentation as the target method.
 - For class methods, return only the requested method definition and its nested local helpers. Do not include sibling methods, the class header, or top-level functions.
 - Helpers are allowed only when nested inside the requested declaration.
 - For top-level functions, do not define nested replacements for methods on declared classes. Construct the declared class and set ordinary instance state only.
 - Do not monkey-patch declared classes or assign methods onto instances or classes. Avoid MethodType, setattr for methods, and assignments such as obj.render = ... or ClassName.render = ....
-- For classes without __init__, methods must work with no-argument construction. Use getattr defaults and dynamic attributes rather than requiring constructor arguments.
+- For classes without constructors, methods must work with no-argument construction. Use ordinary optional properties or nullish defaults rather than requiring constructor arguments.
 - Parallel agents may complete sibling methods independently, so do not depend on a sibling method adding hidden state during construction.
 - If this method handles rotation or turns, use _rotation as the shared rotation state unless the target snippet already names another state field.
-- When returning a new instance from a method, copy existing attributes with new_instance.__dict__.update(getattr(self, "__dict__", {})) before changing the state this method owns.
-- Do not include an if __name__ == "__main__" block.
+- Do not include an top-level main() call.
 
 Runnable to satisfy: ${options.runnable}
 Target kind: ${options.targetKind}
 
 Worksheet:
-\`\`\`python
+\`\`\`typescript
 ${options.codeSheet}
 \`\`\`
 
 Sibling declarations for context only. Do not implement these:
-\`\`\`python
+\`\`\`typescript
 ${options.siblingSnippets.join("\n")}
 \`\`\`
 
 Target snippet:
-\`\`\`python
+\`\`\`typescript
 ${options.targetSnippet}
 \`\`\``;
 }
@@ -206,6 +205,6 @@ function parseMethodAgentReplacement(raw: string, targetSnippet: string): string
 
 function normalizeMethodAgentReplacement(source: string): string {
   const withoutCarriageReturns = normalizeLineEndings(source);
-  const fenced = withoutCarriageReturns.trim().match(/```(?:python)?\s*\n([\s\S]*?)```/)?.[1];
+  const fenced = withoutCarriageReturns.trim().match(/```(?:typescript|ts|python)?\s*\n([\s\S]*?)```/)?.[1];
   return (fenced ?? withoutCarriageReturns).replace(/^\n+/, "").trimEnd();
 }

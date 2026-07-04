@@ -120,7 +120,10 @@ function toWireEvent(event: CompilationEvent): Record<string, unknown> {
         totalSnippets: event.totalSnippets,
       };
     case "compiled": {
-      const totalSnippets = event.completed.ir.nodes.filter((node) => node.kind === "incomplete").length;
+      const totalSnippets = Math.max(
+        event.completed.completions.length,
+        event.completed.ir.nodes.filter((node) => node.kind === "incomplete").length,
+      );
       return {
         kind: "compiled",
         implementation: event.completed.source,

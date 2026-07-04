@@ -8,41 +8,34 @@ import { createGlobalCodeCache } from "./codeCache";
 import type { CodeCache, CompleteFunction } from "./codeSheet";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
+import { InteractiveTypeScriptRun } from "./compilationStrategies/shared";
 
-const runSessionSheet = `def add(x: int, y: int) -> int
+const runSessionSheet = `function add(x: number, y: number): number {
+  return x + y;
+}
 
-def mul(x: int, y: int) -> int
+function mul(x: number, y: number): number {
+  return x * y;
+}
 
-def test_basic():
-  print(mul(add(1, 2), 3))
-  \`print mul of (add one and two) and 3\`
-  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
+function test_basic(): void {
+  console.log(mul(add(1, 2), 3));
+  console.log(add(1, 2));
+  console.log(mul(3, 4));
+}`;
 
-  added = \`add 1 and 2\`
-  product = \`mul 3 and 4\`
-  print(added)
-  print(product)`;
+const exactRunSessionSheet = `// In Logos, LLMs will complete partial code for you.
+// Click \`add\` in the code view to see its implementation.
+function add(x: number, y: number): number;
 
-const exactRunSessionSheet = `# In Logos, LLMs will complete partial code for you.
-# Click \`add\` in the code view to see its implementation.
-def add(x: int, y: int) -> int
+function mul(x: number, y: number): number;
 
-def mul(x: int, y: int) -> int
-
-# Click the run button to run this class (once it's been compiled).
-# Click \`test\` in the code view to see its implementation.
-def test_basic():
-  # In Logos, you can use regular python...
-  print("(1 + 2) * 3 == ", mul(add(1, 2), 3))
-
-  # Or use a snippet to have the LLM write it for you...
-  \`print mul of (add one and two) and 3\`
-  print(mul(add(\`the number one\`, \`the number two\`), \`the number three\`))
-
-  added = \`add 1 and 2\`
-  product = \`mul 3 and 4\`
-  print(added)
-  print(product)
+// Click the run button to run this once it has been compiled.
+function test_basic(): void {
+  console.log("(1 + 2) * 3 == ", mul(add(1, 2), 3));
+  console.log(add(1, 2));
+  console.log(mul(3, 4));
+}
 `;
 
 describe("interactive run API", () => {
@@ -59,8 +52,9 @@ describe("interactive run API", () => {
     });
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
-      sheet: `def test_basic():
-  print("done")`,
+      sheet: `function test_basic(): void {
+  console.log("done");
+}`,
       runnable: "test_basic",
     });
 
@@ -78,6 +72,61 @@ describe("interactive run API", () => {
       status: { state: "exited", code: 0 },
       chunks: [],
     });
+  });
+
+  it("starts interactive TypeScript runs through a PTY without the pipe fallback warning", async () => {
+    const session = await InteractiveTypeScriptRun.start(`console.log("pty ok");`);
+    const completed = await drainInteractiveSession(session);
+
+    expect(completed.output).toContain("pty ok");
+    expect(completed.output).not.toContain("PTY unavailable, using pipe fallback");
+    expect(completed.status).toMatchObject({ state: "exited", code: 0 });
+  });
+
+  it("starts ReactApp runnables as browser render payloads instead of PTY sessions", async () => {
+    const sheet = `function hello_app(): ReactApp {
+  l\`render hello world\`
+}`;
+    const implementation = `function hello_app(): ReactApp {
+  return React.createElement("h1", null, "hello world");
+}`;
+    const api = createInteractiveRunApi({
+      cache: new Map(),
+      compileSheet: async (incomingSheet) => {
+        expect(incomingSheet).toBe(sheet);
+        return implementation;
+      },
+    });
+    const server = createServer(async (req, res) => {
+      if (req.url === "/api/run/start") {
+        await api.handleStart(req, res);
+        return;
+      }
+
+      sendJson(res, 404, { ok: false, error: "not found" });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Could not start test server");
+    }
+
+    const started = await postJson<ReactRunStartResponse>(`http://127.0.0.1:${address.port}`, "/api/run/start", {
+      sheet,
+      runnable: "hello_app",
+    });
+
+    expect(started).toMatchObject({
+      ok: true,
+      kind: "react",
+      runnable: "hello_app",
+      implementation,
+      status: { state: "exited", code: 0 },
+    });
+    expect(started.appCode).toContain("function hello_app()");
+    expect(started.appCode).toContain("React.createElement");
+    expect(started).not.toHaveProperty("sessionId");
   });
 
   it("marks missing poll sessions with a stable error code", async () => {
@@ -135,8 +184,9 @@ describe("interactive run API", () => {
     const baseUrl = `http://127.0.0.1:${address.port}`;
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
-      sheet: `def test():
-  print("fresh")`,
+      sheet: `function test(): void {
+  console.log("fresh");
+}`,
       runnable: "test",
     });
     const response = await fetch(`${baseUrl}/api/run/poll`, {
@@ -176,17 +226,17 @@ describe("interactive run API", () => {
       {
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["9", "9", "9", "3", "12"],
+        output: ["9", "3", "12"],
       },
       {
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["9", "9", "9", "3", "12"],
+        output: ["9", "3", "12"],
       },
       {
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["9", "9", "9", "3", "12"],
+        output: ["9", "3", "12"],
       },
     ]);
   });
@@ -234,17 +284,17 @@ describe("interactive run API", () => {
       {
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+        output: ["(1 + 2) * 3 ==  9", "3", "12"],
       },
       {
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+        output: ["(1 + 2) * 3 ==  9", "3", "12"],
       },
       {
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+        output: ["(1 + 2) * 3 ==  9", "3", "12"],
       },
     ]);
     expect(repolled.map((run) => ({
@@ -314,7 +364,7 @@ describe("interactive run API", () => {
       }).toEqual({
         ok: true,
         status: { state: "exited", code: 0, signal: null },
-        output: ["(1 + 2) * 3 ==  9", "9", "9", "3", "12"],
+        output: ["(1 + 2) * 3 ==  9", "3", "12"],
       });
     } finally {
       await rm(codeCacheDir, { recursive: true, force: true });
@@ -331,8 +381,9 @@ describe("interactive run API", () => {
     const agentStarted = deferred<void>();
     const releaseAgent = deferred<void>();
     let agentCalls = 0;
-    const sheet = `def test_basic():
-  print("ok")`;
+    const sheet = `function test_basic(): void {
+  console.log("ok");
+}`;
     const implementation = sheet;
     const agentCompilation = new AgentCompilationFramework({
       cache,
@@ -414,6 +465,16 @@ type RunStartResponse = {
   status: RunStatus;
 };
 
+type ReactRunStartResponse = {
+  ok: true;
+  kind: "react";
+  runId: string;
+  runnable: string;
+  implementation: string;
+  appCode: string;
+  status: RunStatus;
+};
+
 type RunPollResponse = {
   ok: true;
   chunks: RunChunk[];
@@ -477,11 +538,19 @@ async function pollUntilExited(
   sessionId: string,
   initialChunks: RunChunk[] = [],
 ): Promise<CompletedPollResponse> {
-  let output = initialChunks.map((chunk) => chunk.text).join("");
+  let output = initialChunks
+    .filter((chunk) => chunk.stream === "stdout")
+    .map((chunk) => chunk.text)
+    .join("")
+    .replaceAll("\r\n", "\n");
 
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const polled = await postJson<RunPollResponse>(baseUrl, "/api/run/poll", { sessionId });
-    output += polled.chunks.map((chunk) => chunk.text).join("");
+    output += polled.chunks
+      .filter((chunk) => chunk.stream === "stdout")
+      .map((chunk) => chunk.text)
+      .join("")
+      .replaceAll("\r\n", "\n");
     if (polled.status.state === "exited") {
       return { ...polled, output };
     }
@@ -490,6 +559,26 @@ async function pollUntilExited(
   }
 
   throw new Error(`Timed out waiting for run to exit. Output: ${output}`);
+}
+
+async function drainInteractiveSession(
+  session: InteractiveTypeScriptRun,
+): Promise<{ output: string; status: ReturnType<InteractiveTypeScriptRun["status"]> }> {
+  let output = "";
+
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    output += session.drainOutput().map((chunk) => chunk.text).join("");
+    const status = session.status();
+    if (status.state === "exited") {
+      output += session.drainOutput().map((chunk) => chunk.text).join("");
+      return { output, status };
+    }
+
+    await delay(20);
+  }
+
+  session.stop();
+  throw new Error(`Timed out waiting for interactive session to exit. Output: ${output}`);
 }
 
 async function postJson<T>(
@@ -535,44 +624,20 @@ function completeRunSessionSheet(prompt: string): string {
       .at(-1) ?? "";
 
   if (prompt.includes("Your job is to finish the implementation of:")) {
-    if (implementationTarget.includes("def add(x: int, y: int) -> int")) {
-      return `def add(x: int, y: int) -> int:
-  return x + y`;
+    if (implementationTarget.includes("function add(x: number, y: number): number")) {
+      return `function add(x: number, y: number): number {
+  return x + y;
+}`;
     }
 
-    if (implementationTarget.includes("def mul(x: int, y: int) -> int")) {
-      return `def mul(x: int, y: int) -> int:
-  return x * y`;
+    if (implementationTarget.includes("function mul(x: number, y: number): number")) {
+      return `function mul(x: number, y: number): number {
+  return x * y;
+}`;
     }
-  }
-
-  switch (naturalFragment(prompt)) {
-    case "`print mul of (add one and two) and 3`":
-      return "print(9)";
-    case "`add`":
-      return "add";
-    case "`test`":
-      return "test";
-    case "`the number one`":
-      return "1";
-    case "`the number two`":
-      return "2";
-    case "`the number three`":
-      return "3";
-    case "`add 1 and 2`":
-      return "3";
-    case "`mul 3 and 4`":
-      return "12";
   }
 
   throw new Error(`unexpected prompt: ${prompt}`);
-}
-
-function naturalFragment(prompt: string): string | null {
-  const [, rest] = prompt.split(
-    "Your job is to replace this natural-language Python fragment with valid Python code:\n\n",
-  );
-  return rest?.split("\n\nReturn only")[0]?.trim() ?? null;
 }
 
 function sendJson(

@@ -25,15 +25,20 @@ describe("product samples", () => {
     expect(new Set(templateIds)).toEqual(new Set(sampleIds));
   });
 
-  it("has runnable eval fixtures for every product sample", () => {
-    const sampleIds = samples
-      .map((sample) => sample.id)
-      .filter((id) => id !== "interactive-reverse");
-    const evalIds = sampleEvalCases.map((testCase) => testCase.sampleId);
+  it("keeps the product UI scoped to the three TypeScript examples", () => {
+    expect(samples.map((sample) => sample.id)).toEqual([
+      "starter-arithmetic",
+      "beyond-basics",
+      "todo-cli",
+    ]);
+    expect(sampleTemplateGroups).toEqual([{
+      label: "Getting started",
+      sampleIds: ["starter-arithmetic", "beyond-basics", "todo-cli"],
+    }]);
+  });
 
-    expect(new Set(evalIds)).toEqual(new Set(sampleIds));
+  it("keeps legacy eval fixtures import-safe while hidden from the product menu", () => {
     for (const testCase of sampleEvalCases) {
-      expect(sampleIds, testCase.name).toContain(testCase.sampleId);
       expect(runnables(testCase.sheet), testCase.name).toEqual([
         { line: expect.any(Number), name: testCase.runnable },
       ]);
@@ -43,15 +48,6 @@ describe("product samples", () => {
         expect(testCase.stdoutCheck.description.length, testCase.name).toBeGreaterThan(0);
       }
     }
-  });
-
-  it("keeps the reverse CLI sample as an interactive natural-language prompt", () => {
-    const sample = samples.find((item) => item.id === "interactive-reverse");
-
-    expect(sample?.code).toBe(`def main():
-  \`\`\`
-  A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
-  \`\`\``);
   });
 
   it("accepts ASCII fractal output with trailing blank rows trimmed by stdout capture", () => {

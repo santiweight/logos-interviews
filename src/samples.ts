@@ -1,4 +1,5 @@
 import type { CodeSheet, Runnable } from "./codeSheet";
+import todoCliSample from "../todo-cli.logos.ts?raw";
 
 export type SampleProgram = {
   id: string;
@@ -127,17 +128,14 @@ def main():
   Use colors to make it clear where the path went.
   \`\`\``;
 
-export const sampleGroups: SampleGroup[] = [
+export const legacySampleGroups: SampleGroup[] = [
   {
     label: "Product workflows",
     samples: [
       {
-        id: "interactive-reverse",
-        label: "Reverse CLI",
-        code: `def main():
-  \`\`\`
-  A CLI loop where user is prompted for a line, and the CLI prints the reversed word.
-  \`\`\``,
+        id: "todo-cli",
+        label: "Todo CLI",
+        code: todoCliSample,
       },
       {
         id: "cart-promotions",
@@ -401,46 +399,40 @@ def test():
       {
         id: "starter-arithmetic",
         label: "Intro to Logos",
-        code: `# Logos is a Natural Language Programming Language.
-# 
-# The following is valid code in Logos.
-#
-# Click the green "Run Main" and see results on the right. 
-# 
-# Click the blue text to see the generated code.
-# 
-# Try some edits:
-#   1. change the range to 50-100, or 100-200
-#   2. print the numbers in a formatted grid
+        code: `// Logos is a natural-language programming environment for TypeScript.
+//
+// Click Run Main to compile and run this file.
+// Click generated code to inspect the implementation.
+//
+// Try edits:
+//   1. change the range to 50-100, or 100-200
+//   2. print the numbers in a formatted grid
 
-
-
-def main():
-  \`\`\`
-  Print all prime numbers from 1 to 50 in in a rainbow gradient
+function main(): void {
+  l\`
+  Print all prime numbers from 1 to 50 in a rainbow gradient
   in a 3-wide grid.
 
   The first number is red, the last is indigo
-  \`\`\``,
+  \`
+}`,
       },
       {
         id: "beyond-basics",
         label: "Beyond Basics",
-        code: `# Logos supports classes, even when incomplete.
-#
-# Click MagicSquare, and notice how the agent's implementations
-# compare to the stub we provided.
+        code: `// Logos supports classes, even when incomplete.
+//
+// Click MagicSquare and compare the implementation to the stub.
 
-class MagicSquare:
-  size: int
+class MagicSquare {
+  size: number;
 
-  def gen(self) -> MagicSquare
-  def grid(self) -> [[int]]
+  gen(): MagicSquare;
+  grid(): number[][];
+  pretty(): string;
+}
 
-  def pretty(self) -> str
-
-
-def magic_square_example():
+function magic_square_example(): void {
   \`\`\`
   Generate a MagicSquare of size 4.
 
@@ -448,22 +440,25 @@ def magic_square_example():
 
   Check the MagicSquare is valid, and show the work.
   \`\`\`
+}
 
-# [Idea] Build a magic square puzzle solver (use Cmd+/ to uncomment)
+// [Idea] Build a magic square puzzle solver (use Cmd+/ to uncomment)
 
-# class MagicSquarePuzzle:
-#   size: int
-#   def grid(self) -> list[int | None]
+// class MagicSquarePuzzle {
+//   size: number;
+//   grid(): Array<number | null>;
+// }
 
-# def generate_solvable_magic_square(size, percent_filled) -> MagicSquarePuzzle
+// function generate_solvable_magic_square(size: number, percent_filled: number): MagicSquarePuzzle;
 
-# def solve_magic_square(puzzle) -> MagicSquarePuzzle
+// function solve_magic_square(puzzle: MagicSquarePuzzle): MagicSquarePuzzle;
 
-# def puzzle_example():
-#   \`\`\`
-#   Generate a size 3 puzzle with about 45% of cells filled, print it,
-#   then solve it and print the solution.
-#   \`\`\``,
+// function puzzle_example(): void {
+//   \`\`\`
+//   Generate a size 3 puzzle with about 45% of cells filled, print it,
+//   then solve it and print the solution.
+//   \`\`\`
+// }`,
       },
       {
         id: "ascii-fractal",
@@ -744,41 +739,80 @@ def main():
   },
 ];
 
+export const sampleGroups: SampleGroup[] = [
+  {
+    label: "Getting started",
+    samples: [
+      {
+        id: "starter-arithmetic",
+        label: "Intro to Logos",
+        code: `// Logos is a natural-language programming environment for TypeScript.
+//
+// Click Run Main to compile and run this file.
+// Click generated code to inspect the implementation.
+//
+// Try edits:
+//   1. change the range to 50-100, or 100-200
+//   2. print the numbers in a formatted grid
+
+function main(): void {
+  l\`
+  Print all prime numbers from 1 to 50 in a rainbow gradient
+  in a 3-wide grid.
+
+  The first number is red, the last is indigo.
+  \`
+}`,
+      },
+      {
+        id: "beyond-basics",
+        label: "Beyond Basics",
+        code: `// Logos supports classes, even when incomplete.
+//
+// Click MagicSquare and compare the implementation to the stub.
+
+class MagicSquare {
+  size: number;
+
+  gen(): MagicSquare;
+  grid(): number[][];
+  pretty(): string;
+}
+
+function magic_square_example(): void {
+  \`\`\`
+  Generate a 3 by 3 magic square.
+  Print the grid as an aligned table.
+  Print the row sums, column sums, and diagonal sums.
+  \`\`\`
+}`,
+      },
+    ],
+  },
+  {
+    label: "Product workflows",
+    samples: [
+      {
+        id: "todo-cli",
+        label: "Todo CLI",
+        code: todoCliSample,
+      },
+    ],
+  },
+];
+
 export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.samples);
 
 export const defaultProjectIds = [
   "starter-arithmetic",
   "beyond-basics",
-  "annotated-maze",
-  "formula-spreadsheet",
+  "todo-cli",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
     label: "Getting started",
-    sampleIds: ["starter-arithmetic", "beyond-basics", "interactive-reverse"],
-  },
-  {
-    label: "Product workflows",
-    sampleIds: ["cart-promotions", "feature-flag-rollout", "calendar-availability"],
-  },
-  {
-    label: "Backend systems",
-    sampleIds: ["notification-retries", "rate-limiter", "job-queue"],
-  },
-  {
-    label: "Modeling and data",
-    sampleIds: ["annotated-maze", "formula-spreadsheet", "sudoku-state", "sudoku-human-strategies"],
-  },
-  {
-    label: "ASCII art",
-    sampleIds: [
-      "ascii-fractal",
-      "weather-map",
-      "maze-renderer",
-      "julia-set-explorer",
-      "isometric-cube-stack",
-    ],
+    sampleIds: ["starter-arithmetic", "beyond-basics", "todo-cli"],
   },
 ];
 
@@ -1678,7 +1712,8 @@ def test():
 ];
 
 function sampleById(id: string): SampleProgram {
-  const sample = samples.find((item) => item.id === id);
+  const sample = [...samples, ...legacySampleGroups.flatMap((group) => group.samples)]
+    .find((item) => item.id === id);
   if (!sample) {
     throw new Error(`Missing sample: ${id}`);
   }

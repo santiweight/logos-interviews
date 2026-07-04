@@ -56,6 +56,11 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/run/resize") {
+      await interactiveRunApi.handleResize(req, res);
+      return;
+    }
+
     if (url.pathname === "/api/run/poll") {
       await interactiveRunApi.handlePoll(req, res);
       return;

@@ -5,8 +5,8 @@ import {
   type Runnable,
 } from "../../codeSheet";
 import {
-  buildPythonProgram,
-  runPython,
+  buildTypeScriptProgram,
+  runTypeScript,
   runResult,
   type RunResult,
   type StrategyRunOptions,
@@ -19,9 +19,9 @@ export async function compileAndRunSequential(
   options: StrategyRunOptions,
 ): Promise<RunResult> {
   const completed = await completeSheet(cache, codeSheet, options.complete, { strategy: "sequential" });
-  const executed = await runPython(
-    buildPythonProgram(completed.source, runnable),
-    options.python ?? "python3",
+  const executed = await runTypeScript(
+    buildTypeScriptProgram(completed.source, runnable),
+    options.tsx,
     options.onStdoutLine,
   );
   return runResult(executed, completed);
