@@ -27,7 +27,9 @@ The `Anthropic E2E` GitHub Actions workflow runs that live eval on relevant
 `main` changes and on a weekday work-hours cadence, skipping scheduled runs
 when the current `main` SHA has already passed.
 
-The production server requires `ANTHROPIC_API_KEY` and `python3`. It serves the
+The production server requires `ANTHROPIC_API_KEY`. Generated programs run as
+TypeScript through `tsx`; interactive terminal apps can use `neo-blessed`.
+The server serves the
 Vite build from `dist`, exposes interactive run session endpoints under
 `/api/run/*`, and caches completed snippets in a process-local map backed by
 durable storage. Local development uses files under `logs/` unless object

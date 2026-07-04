@@ -33,7 +33,7 @@ describe("frontend compilation policy", () => {
 
     expect(source).toContain("const implementationViewEditor = monaco.editor.create");
     expect(source).toContain("implementationViewEditor.setValue");
-    expect(source).toContain(`language: logosPythonLanguageId`);
+    expect(source).toContain(`language: logosTypeScriptLanguageId`);
     expect(source).not.toContain("implementationViewPanel.textContent");
   });
 

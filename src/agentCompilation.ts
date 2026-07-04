@@ -3,6 +3,7 @@ import {
   cachedCompiledSheet,
   cacheImplementation,
   compile,
+  definitionReadinessFromImplementation,
   definitionReadiness,
   buildCompilationIR,
   completeSheet,
@@ -19,8 +20,8 @@ import {
   type Runnable,
 } from "./codeSheet";
 import {
-  buildPythonProgram,
-  runPython,
+  buildTypeScriptProgram,
+  runTypeScript,
   runResult,
   type RunResult,
 } from "./compilationStrategies/shared";
@@ -39,6 +40,7 @@ export type AgentCompilationFrameworkOptions = {
   complete?: CompleteFunction;
   fileAgent?: SingleFileAgentFunction;
   python?: string;
+  tsx?: string;
   onStdoutLine?: (line: string) => void;
 };
 
@@ -90,7 +92,7 @@ export class AgentCompilationFramework {
   ): AsyncIterable<CompilationEvent> {
     const cached = await cachedCompiledSheet(this.cacheStore, sheetCode);
     if (cached) {
-      yield* cachedCompilationEvents(sheetCode, cached, this.cacheStore, options);
+      yield* cachedCompilationEvents(sheetCode, cached, options);
       this.rememberRecent(sheetCode, cached.source);
       return;
     }
@@ -173,9 +175,9 @@ export class AgentCompilationFramework {
   async run(sheetCode: CodeSheet, runnable: Runnable): Promise<RunResult> {
     const code = await this.cache(sheetCode) ?? await this.compile(sheetCode);
     const completed = completedFromCachedCode(sheetCode, code);
-    const executed = await runPython(
-      buildPythonProgram(code, runnable),
-      this.options.python ?? "python3",
+    const executed = await runTypeScript(
+      buildTypeScriptProgram(code, runnable),
+      this.options.tsx,
       this.options.onStdoutLine,
     );
     return runResult(executed, completed);
@@ -272,7 +274,7 @@ export class AgentCompilationFramework {
         completedSnippets: totalSnippets,
         totalSnippets,
       };
-      yield { kind: "readiness", definitions: definitionReadiness(parse(code), this.cacheStore) };
+      yield { kind: "readiness", definitions: definitionReadinessFromImplementation(parsed, code) };
     }
 
     yield {
@@ -300,7 +302,7 @@ export class AgentCompilationFramework {
     try {
       for await (const event of this.runFileAgent(previous, sheetCode, diffFromPrevious, {})) {
         if (event.kind === "file" || event.kind === "done") {
-          code = event.source;
+          code = normalizeImplementationCode(event.source);
         }
       }
 
@@ -371,7 +373,7 @@ export class AgentCompilationFramework {
           }
 
           if (event.kind === "file" || event.kind === "done") {
-            code = event.source;
+            code = normalizeImplementationCode(event.source);
             if (emitProgress) {
               yield {
                 kind: "implementation",
@@ -416,7 +418,7 @@ export class AgentCompilationFramework {
         completedSnippets: totalSnippets,
         totalSnippets,
       };
-      yield { kind: "readiness", definitions: definitionReadiness(parse(code), this.cacheStore) };
+      yield { kind: "readiness", definitions: definitionReadinessFromImplementation(parsed, code) };
     }
 
     yield {
@@ -473,7 +475,6 @@ export class AgentCompilationFramework {
 function cachedCompilationEvents(
   sheetCode: CodeSheet,
   completed: CompletedCodeSheet,
-  cache: CodeCache,
   options: Pick<CompileOptions, "signal" | "emitProgress">,
 ): CompilationEvent[] {
   if (options.signal?.aborted) {
@@ -504,7 +505,7 @@ function cachedCompilationEvents(
       completedSnippets: parsed.incompleteSnippets.length,
       totalSnippets: parsed.incompleteSnippets.length,
     },
-    { kind: "readiness", definitions: definitionReadiness(parse(completed.source), cache) },
+    { kind: "readiness", definitions: definitionReadinessFromImplementation(parsed, completed.source) },
     { kind: "compiled", completed },
   ];
 }
@@ -558,15 +559,16 @@ function buildCompilationUpdatePrompt(options: {
 }): string {
   return `${buildWholeSheetCompletionPrompt(parse(options.nextSheet))}
 
-You are updating an existing compilation for the same sheet agent. Prefer preserving working implementation code from the previous compiled sheet when it still satisfies the new worksheet.
+You are updating an existing compilation for the same sheet agent. The current worksheet is the sole source of truth, and your goal is the right final implementation, not preserving old code or making a minimal edit.
+Use the previous compiled code only as a baseline for reusable pieces that still directly implement the current worksheet. Remove obsolete functions, classes, helpers, imports, UI elements, stories, workflows, runnables, and behavior that are no longer implied by the current worksheet.
 
 Previous worksheet:
-\`\`\`python
+\`\`\`typescript
 ${options.previousSheet}
 \`\`\`
 
 Previous compiled code:
-\`\`\`python
+\`\`\`typescript
 ${options.previousCode}
 \`\`\`
 
@@ -651,8 +653,17 @@ function isAsyncIterable(value: CompleteResult): value is AsyncIterable<string> 
 function normalizeWholeSheetAgentResult(source: string): CodeSheet {
   const trimmed = source.trim();
   const json = tryExtractSourceJson(trimmed);
-  const fenced = (json ?? trimmed).match(/^```(?:python)?\s*\n([\s\S]*?)\n```$/)?.[1];
-  return (fenced ?? json ?? source).replaceAll("\r\n", "\n").trim();
+  const fenced = (json ?? trimmed).match(/^```(?:typescript|ts|python)?\s*\n([\s\S]*?)\n```$/)?.[1];
+  return normalizeImplementationCode(fenced ?? json ?? source);
+}
+
+function normalizeImplementationCode(source: CodeSheet): CodeSheet {
+  return source
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .filter((line) => !/^\s*(?:(?:void|await)\s+)?main\(\);?\s*$/.test(line))
+    .join("\n")
+    .trim();
 }
 
 function tryExtractSourceJson(source: string): string | null {

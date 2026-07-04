@@ -1238,8 +1238,11 @@ h2 {
 }
 
 .output {
-  flex: 1;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   margin: 0;
   border: 0;
   overflow: auto;
@@ -1272,7 +1275,45 @@ h2 {
 
 .terminal-output {
   display: block;
-  white-space: pre-wrap;
+  overflow: hidden;
+  padding: 0;
+  background: #111827;
+  white-space: normal;
+}
+
+.terminal-xterm-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #111827;
+}
+
+.terminal-xterm-host .xterm {
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+}
+
+.terminal-xterm-host .xterm-viewport,
+.terminal-xterm-host .xterm-screen {
+  width: 100% !important;
+}
+
+.react-app-run-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  background: #ffffff;
+}
+
+.react-app-run-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #ffffff;
 }
 
 .implementation-output {
@@ -1283,41 +1324,6 @@ h2 {
 
 .implementation-output .cursor {
   display: none !important;
-}
-
-.terminal-output-text {
-  white-space: pre-wrap;
-}
-
-.terminal-form {
-  display: inline-flex;
-  align-items: baseline;
-  max-width: 100%;
-  gap: 6px;
-  background: transparent;
-  color: var(--ink);
-  font-family: var(--terminal-font);
-  padding: 0;
-  vertical-align: baseline;
-}
-
-.terminal-input {
-  width: min(34ch, calc(100vw - 96px));
-  min-width: 0;
-  height: calc(var(--terminal-line-height) * 1em);
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  caret-color: var(--accent);
-  color: var(--ink);
-  font-family: inherit;
-  font-size: inherit;
-  line-height: inherit;
-  padding: 0;
-}
-
-.terminal-input::placeholder {
-  color: #74767a;
 }
 
 .tab-panel {
@@ -1467,7 +1473,6 @@ h2 {
   background: rgba(102, 92, 78, 0.12);
 }
 
-.terminal-input:focus,
 .source-tab:focus-visible,
 .source-tab-close:focus-visible,
 .feedback-button:focus-visible,
@@ -1574,9 +1579,12 @@ h2 {
   color: #129a49;
 }
 
-.runnable-run-widget-disabled {
+.runnable-run-widget.runnable-run-widget-disabled,
+.runnable-run-widget.runnable-run-widget-disabled:hover,
+.runnable-run-widget[aria-disabled="true"],
+.runnable-run-widget[aria-disabled="true"]:hover {
   background: transparent;
-  color: #74767a;
+  color: #74767a !important;
   cursor: not-allowed;
 }
 

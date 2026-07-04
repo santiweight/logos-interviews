@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import ts from "typescript";
 import type {
   CodeCache,
   CompleteFunction,
   Runnable,
 } from "./codeSheet";
 import {
-  buildPythonProgram,
-  InteractivePythonRun,
+  buildTypeScriptProgram,
+  InteractiveTypeScriptRun,
   startInteractiveCodeSheet,
   type CompilationMode,
   type InteractiveRunStatus,
@@ -15,9 +16,16 @@ import {
 import { isCompilationMode } from "./compilationStrategies/types";
 
 type InteractiveRunRecord = {
-  session: InteractivePythonRun;
+  session: InteractiveTypeScriptRun;
   runnable: Runnable;
   implementation: string;
+  updatedAt: number;
+};
+
+type ReactAppRecord = {
+  runnable: Runnable;
+  implementation: string;
+  appCode: string;
   updatedAt: number;
 };
 
@@ -31,6 +39,7 @@ const sessionTtlMs = 10 * 60 * 1000;
 
 export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
   const sessions = new Map<string, InteractiveRunRecord>();
+  const reactApps = new Map<string, ReactAppRecord>();
 
   function cleanupSessions(): void {
     const now = Date.now();
@@ -38,6 +47,11 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       if (now - record.updatedAt > sessionTtlMs) {
         record.session.stop();
         sessions.delete(sessionId);
+      }
+    }
+    for (const [runId, record] of reactApps) {
+      if (now - record.updatedAt > sessionTtlMs) {
+        reactApps.delete(runId);
       }
     }
   }
@@ -72,13 +86,35 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       return;
     }
 
-    const result = options.compileSheet
-      ? await startFromCompiledSheet(sheet, runnable, await options.compileSheet(sheet))
+    const implementation = options.compileSheet ? await options.compileSheet(sheet) : null;
+    if (implementation !== null && isReactAppRunnable(sheet, runnable)) {
+      const runId = randomUUID();
+      const appCode = transpileReactAppImplementation(implementation);
+      reactApps.set(runId, {
+        runnable,
+        implementation,
+        appCode,
+        updatedAt: Date.now(),
+      });
+      sendJson(res, 200, {
+        ok: true,
+        kind: "react",
+        runId,
+        runnable,
+        implementation,
+        appCode,
+        status: { state: "exited", code: 0, signal: null },
+      });
+      return;
+    }
+
+    const result = implementation !== null
+      ? await startFromCompiledSheet(sheet, runnable, implementation)
       : await startInteractiveCodeSheet(sheet, runnable, {
-          cache: options.cache,
-          complete: options.complete,
-          compilationStrategy: compilationMode(compilationStrategy),
-        });
+        cache: options.cache,
+        complete: options.complete,
+        compilationStrategy: compilationMode(compilationStrategy),
+      });
     const sessionId = randomUUID();
     sessions.set(sessionId, {
       session: result.session,
@@ -89,6 +125,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
 
     sendJson(res, 200, {
       ok: true,
+      kind: "terminal",
       sessionId,
       runnable,
       implementation: result.completed.source,
@@ -115,6 +152,33 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
 
     const [, record] = entry;
     const accepted = record.session.writeInput(input);
+    sendJson(res, 200, { ok: accepted });
+  }
+
+  async function handleResize(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "Method not allowed" });
+      return;
+    }
+
+    const { sessionId, cols, rows } = await readJson(req);
+    const entry = getSession(sessionId);
+    if (
+      !entry ||
+      typeof cols !== "number" ||
+      typeof rows !== "number" ||
+      !Number.isFinite(cols) ||
+      !Number.isFinite(rows)
+    ) {
+      sendJson(res, 404, {
+        ok: false,
+        error: "Missing active run session or terminal dimensions",
+      });
+      return;
+    }
+
+    const [, record] = entry;
+    const accepted = record.session.resize(Math.max(1, Math.floor(cols)), Math.max(1, Math.floor(rows)));
     sendJson(res, 200, { ok: accepted });
   }
 
@@ -178,6 +242,7 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
   return {
     handleStart,
     handleInput,
+    handleResize,
     handlePoll,
     handleStop,
   };
@@ -189,8 +254,9 @@ async function startFromCompiledSheet(
   implementation: string,
 ) {
   void sheet;
+  const source = buildTypeScriptProgram(implementation, runnable);
   return {
-    session: new InteractivePythonRun(buildPythonProgram(implementation, runnable), "python3"),
+    session: await InteractiveTypeScriptRun.start(source),
     completed: { source: implementation },
   };
 }
@@ -204,6 +270,41 @@ function compilationMode(strategy: unknown): CompilationMode {
 }
 
 export type InteractiveRunWireStatus = InteractiveRunStatus;
+
+function isReactAppRunnable(sheet: string, runnable: Runnable): boolean {
+  const escaped = escapeRegExp(runnable);
+  const pattern = new RegExp(String.raw`function\s+${escaped}\s*\([^)]*\)\s*:\s*ReactApp\b`);
+  return pattern.test(sheet);
+}
+
+function transpileReactAppImplementation(implementation: string): string {
+  const source = implementation
+    .split("\n")
+    .filter((line) => !/^\s*import\s+.*\bfrom\s+["'](?:react|react-dom|react-dom\/client)["'];?\s*$/.test(line))
+    .map((line) => line.replace(/^\s*export\s+/, ""))
+    .join("\n");
+  const result = ts.transpileModule(source, {
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.None,
+      jsx: ts.JsxEmit.React,
+      esModuleInterop: true,
+    },
+    reportDiagnostics: true,
+  });
+  const errors = (result.diagnostics ?? [])
+    .filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+  if (errors.length > 0) {
+    throw new Error(`ReactApp transpile failed: ${errors.join("; ")}`);
+  }
+
+  return result.outputText;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];

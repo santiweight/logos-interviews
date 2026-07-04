@@ -4,6 +4,7 @@ import {
   compile,
   completionSnippetHashes,
   definitionReadiness,
+  definitionReadinessFromImplementation,
   completeSheet,
   hashCompletionInput,
   hashSnippet,
@@ -2550,6 +2551,30 @@ def test():
       dependencies: ["helper"],
       blockingDependencies: [],
     });
+  });
+
+  it("projects readiness from completed TypeScript implementations with nested helpers", () => {
+    const source = `function main(): void {
+  l\`print hello world\`
+}`;
+    const implementation = `function main(): void {
+  function message(): string {
+    return "hello world";
+  }
+
+  console.log(message());
+}`;
+
+    expect(definitionReadinessFromImplementation(parse(source), implementation)).toEqual([
+      {
+        name: "main",
+        line: 1,
+        kind: "function",
+        ready: true,
+        dependencies: [],
+        blockingDependencies: [],
+      },
+    ]);
   });
 
   it("finds implementation targets for complete functions and classes", () => {
