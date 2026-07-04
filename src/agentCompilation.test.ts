@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { AgentCompilationFramework } from "./agentCompilation";
-import { buildSingleFileAgentPrompt, singleFileAgentTools } from "./claudeSingleFileAgent";
+import {
+  buildSingleFileAgentPrompt,
+  singleFileAgentTools,
+  singleFileAgentTypeScriptSyntaxErrors,
+} from "./claudeSingleFileAgent";
 import type { CodeCache, CompilationEvent } from "./codeSheet";
 import type { SingleFileAgentFunction, SingleFileAgentInput } from "./claudeSingleFileAgent";
 
@@ -252,6 +256,20 @@ function test(): void {
     expect(replaceFile?.description).toContain("Use this only when the current file is mostly obsolete");
     expect(replaceFile?.description).toContain("Do not use this for normal first-pass codegen from a scaffold");
     expect(replaceRange?.description).toContain("including first-pass implementation from a scaffold");
+  });
+
+  it("detects invalid TypeScript before accepting a single-file agent finish", () => {
+    const invalidSplice = `class TodoList {
+  delete(todoId: string): void {
+function todo_app(): ReactApp {
+  return React.createElement("div", null, "broken");
+}
+}`;
+
+    expect(singleFileAgentTypeScriptSyntaxErrors(invalidSplice).join("\n")).toContain("'}' expected");
+    expect(singleFileAgentTypeScriptSyntaxErrors(`function todo_app(): ReactApp {
+  return React.createElement("div", null, "ok");
+}`)).toEqual([]);
   });
 });
 
