@@ -365,6 +365,31 @@ export async function* compile(
     return;
   }
 
+  const sheetHash = hashWholeSheetCompletionInput(parsed);
+  const cachedSheet = await cachedImplementation(codeCache, sheetHash);
+  if (cachedSheet !== undefined) {
+    completions.push({
+      hash: sheetHash,
+      snippet: parsed.source,
+      replacement: cachedSheet,
+      cached: true,
+    });
+    if (emitProgress) {
+      yield { kind: "parsed", parsed };
+      yield { kind: "typecheck", diagnostics: typeCheck(parsed) };
+      yield { kind: "cache-hit", hash: sheetHash, snippet: parsed.source, implementation: cachedSheet };
+      yield {
+        kind: "implementation",
+        source: cachedSheet,
+        completedSnippets: totalSnippets,
+        totalSnippets,
+      };
+      yield { kind: "readiness", definitions: definitionReadiness(parse(cachedSheet), codeCache) };
+    }
+    yield compiledEventFromSource(cachedSheet, completions);
+    return;
+  }
+
   for (const node of ir.nodes) {
     if (node.kind !== "incomplete" || node.state.kind !== "partial") {
       continue;
@@ -395,6 +420,76 @@ export async function* compile(
       totalSnippets,
     };
     yield { kind: "readiness", definitions: definitionReadiness(parsed, codeCache) };
+  }
+
+  if (compileAgentically(options)) {
+    if (completedSnippets === totalSnippets) {
+      const source = renderImplementation(ir);
+      await cacheImplementation(codeCache, sheetHash, source);
+      yield compiledEventFromSource(source, completions);
+      return;
+    }
+
+    if (!complete) {
+      yield {
+        kind: "compiled",
+        completed: {
+          source: renderImplementation(ir),
+          lowered: ir.lowered,
+          completions,
+          ir,
+        },
+      };
+      return;
+    }
+
+    if (emitProgress) {
+      yield { kind: "llm-start", hash: sheetHash, snippet: parsed.source };
+    }
+
+    let completedSource = "";
+    const result = complete(
+      buildWholeSheetCompletionPrompt(parsed, renderImplementation(ir)),
+      options.abortCurrentCompletion ? { signal: options.signal } : undefined,
+    );
+
+    if (isAsyncIterable(result)) {
+      for await (const token of result) {
+        completedSource += token;
+        if (emitProgress && !isAborted(options.signal) && options.streamTokens !== false) {
+          yield { kind: "llm-token", hash: sheetHash, token };
+        }
+      }
+    } else {
+      completedSource = await result;
+    }
+
+    if (isAborted(options.signal)) {
+      return;
+    }
+
+    completedSource = normalizeWholeSheetCompletion(completedSource);
+    await cacheImplementation(codeCache, sheetHash, completedSource);
+    completions.push({
+      hash: sheetHash,
+      snippet: parsed.source,
+      replacement: completedSource,
+      cached: false,
+    });
+
+    if (emitProgress) {
+      yield { kind: "llm-complete", hash: sheetHash, implementation: completedSource };
+      yield {
+        kind: "implementation",
+        source: completedSource,
+        completedSnippets: totalSnippets,
+        totalSnippets,
+      };
+      yield { kind: "readiness", definitions: definitionReadiness(parse(completedSource), codeCache) };
+    }
+
+    yield compiledEventFromSource(completedSource, completions);
+    return;
   }
 
   if (compileInParallel(options) && complete) {
@@ -615,8 +710,30 @@ export async function* compile(
   };
 }
 
+function compileAgentically(options: CompileOptions): boolean {
+  return options.strategy === "agentic";
+}
+
 function compileInParallel(options: CompileOptions): boolean {
   return options.strategy === "parallel";
+}
+
+function compiledEventFromSource(source: CodeSheet, completions: Completion[]): CompilationEvent {
+  return {
+    kind: "compiled",
+    completed: completedSheetFromSource(source, completions),
+  };
+}
+
+function completedSheetFromSource(source: CodeSheet, completions: Completion[]): CompletedCodeSheet {
+  const parsed = parse(source);
+  const lowered = lower(parsed);
+  return {
+    source,
+    lowered,
+    completions,
+    ir: buildCompilationIR(parsed),
+  };
 }
 
 export function renderImplementation(ir: CompilationIR): CodeSheet {
@@ -800,6 +917,42 @@ export async function cacheImplementation(
 ): Promise<void> {
   codeCache.set(hash, implementation);
   await codeCache.persist?.(hash, implementation);
+}
+
+export async function cachedCompiledSheet(
+  codeCache: CodeCache,
+  codeSheet: CodeSheet,
+): Promise<CompletedCodeSheet | null> {
+  const parsed = parse(codeSheet);
+  const sheetHash = hashWholeSheetCompletionInput(parsed);
+  const source = await cachedImplementation(codeCache, sheetHash);
+  if (source === undefined) {
+    return null;
+  }
+
+  return completedSheetFromSource(source, [{
+    hash: sheetHash,
+    snippet: parsed.source,
+    replacement: source,
+    cached: true,
+  }]);
+}
+
+export function hashWholeSheetCompletionInput(parsed: ParsedSheet): SnippetHash {
+  return hashText(
+    "sheet",
+    [
+      "--- code sheet ---",
+      parsed.source.trim(),
+      "",
+      "--- incomplete snippets ---",
+      ...parsed.incompleteSnippets.map((snippet) => [
+        snippet.kind,
+        snippet.snippet.trim(),
+        ...(snippet.annotationContexts ?? []).map((context) => context.cacheKey),
+      ].join("\n")),
+    ].join("\n"),
+  );
 }
 
 export function hashCompletionInput(
@@ -2267,6 +2420,95 @@ ${pythonPrintingPolicy}
 Use normal Python. Prefer dataclasses and match statements for sum types.
 ${annotationGuidance.length === 0 ? "" : `${annotationGuidance}\n`}Preserve the intended public behavior shown in the runnable/test functions, even if that means adapting a pseudo-code signature into a valid Python signature or accepting multiple call shapes.
 Do not include runnable/test calls, example usage, printouts, or result construction unless they are inside the requested declaration's implementation.`;
+}
+
+export function buildWholeSheetCompletionPrompt(
+  parsed: ParsedSheet,
+  currentImplementation: CodeSheet = renderImplementation(buildCompilationIR(parsed)),
+): string {
+  const snippetGuidance = parsed.incompleteSnippets.map((snippet, index) => {
+    const annotationGuidance = annotationPromptGuidance(snippet.annotationContexts ?? []);
+    return [
+      `Fragment ${index + 1} (${snippet.kind}, line ${snippet.line}):`,
+      "```python",
+      snippet.snippet,
+      "```",
+      annotationGuidance,
+    ].filter((part) => part.length > 0).join("\n");
+  }).join("\n\n");
+
+  return `You are an expert software engineer building Python programs.
+
+Your job is to compile this Logos worksheet into one complete executable Python code sheet.
+
+Input worksheet:
+\`\`\`python
+${parsed.source}
+\`\`\`
+
+Current partially compiled implementation:
+\`\`\`python
+${currentImplementation}
+\`\`\`
+
+Incomplete fragments to replace:
+${snippetGuidance.length === 0 ? "None." : snippetGuidance}
+
+Return the entire revised Python code sheet, not a patch. Return only Python code, without Markdown fences, JSON, prose, comments about your work, or explanations.
+
+Rules:
+- Replace every incomplete function, incomplete class method, incomplete class, and natural-language Logos fragment with executable Python.
+- Preserve all runnable/test functions and the public behavior they imply.
+- Keep existing completed code unless changing it is necessary to make the sheet compile and run.
+- Use only Python built-ins and standard-library modules.
+- Do not add sibling top-level declarations that are unrelated to the worksheet.
+- Do not define a nested class or function with the same name as a top-level declaration from the sheet; use the declared top-level dependency instead.
+- Do not assign local variables, loop variables, classes, or functions with the same names as top-level helpers, classes, constructors, or types already present in the sheet.
+- Do not call a class constructor with arguments unless the sheet declares that __init__ signature or shows that call shape in runnable/test code.
+- If a class has no declared __init__, support no-argument construction.
+- When completing a function whose return type is a declared top-level class with no declared constructor arguments, return an instance of that top-level class using no-argument construction instead of defining a nested class, subclass, or duplicate implementation.
+${pythonCompletionRuntimePolicy}
+${pythonPrintingPolicy}`;
+}
+
+function normalizeWholeSheetCompletion(source: string): CodeSheet {
+  const normalized = normalizeFencedCompletion(source);
+  const toolResult = parseWholeSheetToolResult(normalized);
+  return stripPythonMainBlock(toolResult ?? normalized)
+    .split("\n")
+    .filter((line) => !/^```/.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+function parseWholeSheetToolResult(source: string): string | null {
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "source" in parsed &&
+      typeof (parsed as { source?: unknown }).source === "string"
+    ) {
+      return (parsed as { source: string }).source;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function normalizeFencedCompletion(source: string): string {
+  const trimmed = source.trim();
+  const fenced = trimmed.match(/^```(?:python)?\s*\n([\s\S]*?)\n```$/)?.[1];
+  return (fenced ?? source).replaceAll("\r\n", "\n").trim();
+}
+
+function stripPythonMainBlock(source: string): string {
+  const lines = source.replaceAll("\r\n", "\n").split("\n");
+  const mainIndex = lines.findIndex((line) => /^if\s+__name__\s*==\s*["']__main__["']\s*:/.test(line.trim()));
+  return (mainIndex < 0 ? lines : lines.slice(0, mainIndex)).join("\n").trimEnd();
 }
 
 function annotationPromptGuidance(contexts: LogosAnnotationContext[]): string {

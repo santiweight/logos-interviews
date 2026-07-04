@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+import { AgentCompilationFramework } from "./agentCompilation";
 import type { CodeCache, CompleteFunction } from "./codeSheet";
 import { handleCompileStream } from "./compileStream";
 
@@ -39,7 +40,53 @@ describe("compile stream", () => {
     ));
 
     expect(readyIndex).toBeGreaterThan(-1);
-    expect(events.slice(readyIndex + 1)).toEqual([{ kind: "compiled" }]);
+    expect(events.slice(readyIndex + 1)).toEqual([
+      expect.objectContaining({
+        kind: "compiled",
+        implementation: expect.any(String),
+      }),
+    ]);
+  });
+
+  it("keeps compile as the only frontend operation while updating server-side state", async () => {
+    const cache: CodeCache = new Map();
+    const prompts: string[] = [];
+    const complete: CompleteFunction = (prompt) => {
+      prompts.push(prompt);
+      if (prompt.includes("Previous compiled code")) {
+        return `def add(x: int, y: int) -> int:
+  return x + y + 1
+
+def test():
+  print(add(2, 3))`;
+      }
+
+      return `def add(x: int, y: int) -> int:
+  return x + y
+
+def test():
+  print(add(1, 2))`;
+    };
+    const agentCompilation = new AgentCompilationFramework({ cache, complete });
+    const baseUrl = await listen(servers, cache, complete, agentCompilation);
+    const firstSheet = `def add(x: int, y: int) -> int
+
+def test():
+  print(add(1, 2))`;
+    const nextSheet = `def add(x: int, y: int) -> int
+
+def test():
+  print(add(2, 3))`;
+
+    await compileViaApi(baseUrl, firstSheet);
+    const events = await compileViaApi(baseUrl, nextSheet);
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain("Previous compiled code");
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: "implementation",
+      implementation: expect.stringContaining("return x + y + 1"),
+    }));
   });
 });
 
@@ -53,10 +100,11 @@ async function listen(
   servers: Array<ReturnType<typeof createServer>>,
   cache: CodeCache,
   complete: CompleteFunction,
+  agentCompilation?: AgentCompilationFramework,
 ): Promise<string> {
   const server = createServer(async (req, res) => {
     if (req.url === "/api/compile") {
-      await handleCompileStream(req, res, cache, complete);
+      await handleCompileStream(req, res, cache, complete, agentCompilation);
       return;
     }
 

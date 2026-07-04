@@ -6,9 +6,10 @@ import type {
   Runnable,
 } from "./codeSheet";
 import {
+  buildPythonProgram,
+  InteractivePythonRun,
   startInteractiveCodeSheet,
   type CompilationMode,
-  type InteractivePythonRun,
   type InteractiveRunStatus,
 } from "./codeSheetRunner";
 import { isCompilationMode } from "./compilationStrategies/types";
@@ -23,6 +24,7 @@ type InteractiveRunRecord = {
 type InteractiveRunApiOptions = {
   cache: CodeCache;
   complete?: CompleteFunction;
+  compileSheet?: (sheet: string) => Promise<string>;
 };
 
 const sessionTtlMs = 10 * 60 * 1000;
@@ -70,11 +72,13 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       return;
     }
 
-    const result = await startInteractiveCodeSheet(sheet, runnable, {
-      cache: options.cache,
-      complete: options.complete,
-      compilationStrategy: compilationMode(compilationStrategy),
-    });
+    const result = options.compileSheet
+      ? await startFromCompiledSheet(sheet, runnable, await options.compileSheet(sheet))
+      : await startInteractiveCodeSheet(sheet, runnable, {
+          cache: options.cache,
+          complete: options.complete,
+          compilationStrategy: compilationMode(compilationStrategy),
+        });
     const sessionId = randomUUID();
     sessions.set(sessionId, {
       session: result.session,
@@ -176,6 +180,18 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     handleInput,
     handlePoll,
     handleStop,
+  };
+}
+
+async function startFromCompiledSheet(
+  sheet: string,
+  runnable: Runnable,
+  implementation: string,
+) {
+  void sheet;
+  return {
+    session: new InteractivePythonRun(buildPythonProgram(implementation, runnable), "python3"),
+    completed: { source: implementation },
   };
 }
 

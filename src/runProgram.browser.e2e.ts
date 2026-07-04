@@ -140,6 +140,7 @@ describe("run program browser flow", () => {
     try {
       const page = await context.newPage();
       let clearRequests = 0;
+      let compileRequestsAfterClear = 0;
       await page.route("**/api/cache", async (route) => {
         clearRequests += 1;
         expect(route.request().method()).toBe("DELETE");
@@ -149,14 +150,25 @@ describe("run program browser flow", () => {
           body: JSON.stringify({ ok: true, cleared: 3 }),
         });
       });
+      await page.route("**/api/compile", async (route) => {
+        compileRequestsAfterClear += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: `${JSON.stringify({ kind: "compiled", implementation: "", completedSnippets: 0, totalSnippets: 0 })}\n`,
+        });
+      });
 
       await page.goto(baseUrl);
       await waitForSessionHelpers(page);
+      compileRequestsAfterClear = 0;
       await page.locator("#workspace-menu summary").click();
       await page.getByRole("menuitem", { name: "Clear code cache" }).click();
 
       await expect.poll(() => clearRequests).toBe(1);
       await expect.poll(async () => page.locator("#run-status").textContent()).toBe("Code cache cleared");
+      await page.waitForTimeout(300);
+      expect(compileRequestsAfterClear).toBe(0);
     } finally {
       await context.close();
     }

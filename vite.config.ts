@@ -4,6 +4,8 @@ import { createServer as createNetServer } from "node:net";
 import { createGlobalCodeCache } from "./src/codeCache";
 import type { CodeCache } from "./src/codeSheet";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./src/anthropicComplete";
+import { runClaudeSingleFileAgent } from "./src/claudeSingleFileAgent";
+import { AgentCompilationFramework } from "./src/agentCompilation";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
 import { handleFeedback } from "./src/feedbackCapture";
@@ -61,9 +63,15 @@ function anthropicCompletionPlugin() {
   const codeCache: CodeCache = createGlobalCodeCache();
   const complete = completeWithAnthropic;
   const compileComplete = streamCompleteWithAnthropic;
+  const agentCompilation = new AgentCompilationFramework({
+    cache: codeCache,
+    complete: compileComplete,
+    fileAgent: anthropicApiKeyConfigured() ? runClaudeSingleFileAgent : undefined,
+  });
   const interactiveRunApi = createInteractiveRunApi({
     cache: codeCache,
     complete,
+    compileSheet: (sheet) => agentCompilation.compile(sheet),
   });
 
   return {
@@ -107,7 +115,7 @@ function anthropicCompletionPlugin() {
 
       server.middlewares.use("/api/compile", async (req, res) => {
         try {
-          await handleCompileStream(req, res, codeCache, compileComplete);
+          await handleCompileStream(req, res, codeCache, compileComplete, agentCompilation);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           sendJson(res, 500, { ok: false, error: message });
@@ -124,6 +132,7 @@ function anthropicCompletionPlugin() {
           const cleared = codeCache.size;
           codeCache.clear();
           await codeCache.clearRemote?.();
+          agentCompilation.clear();
           sendJson(res, 200, { ok: true, cleared });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
@@ -184,6 +193,10 @@ function anthropicCompletionPlugin() {
       });
     },
   };
+}
+
+function anthropicApiKeyConfigured(): boolean {
+  return typeof process.env.ANTHROPIC_API_KEY === "string" && process.env.ANTHROPIC_API_KEY.length > 0;
 }
 
 function isAgentMessages(value: unknown): value is AgentChatMessage[] {

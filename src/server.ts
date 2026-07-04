@@ -3,22 +3,34 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicComplete";
+import { runClaudeSingleFileAgent } from "./claudeSingleFileAgent";
 import { createGlobalCodeCache } from "./codeCache";
 import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
+import { AgentCompilationFramework } from "./agentCompilation";
 import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 const codeCache: CodeCache = createGlobalCodeCache();
+const agentCompilation = new AgentCompilationFramework({
+  cache: codeCache,
+  complete: streamCompleteWithAnthropic,
+  fileAgent: anthropicApiKeyConfigured() ? runClaudeSingleFileAgent : undefined,
+});
 const interactiveRunApi = createInteractiveRunApi({
   cache: codeCache,
   complete: completeWithAnthropic,
+  compileSheet: (sheet) => agentCompilation.compile(sheet),
 });
 const port = Number(process.env.PORT ?? 8080);
 const distDir = resolve(fileURLToPath(new URL("../dist", import.meta.url)));
+
+function anthropicApiKeyConfigured(): boolean {
+  return typeof process.env.ANTHROPIC_API_KEY === "string" && process.env.ANTHROPIC_API_KEY.length > 0;
+}
 
 const server = createServer(async (req, res) => {
   try {
@@ -55,7 +67,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === "/api/compile") {
-      await handleCompileStream(req, res, codeCache, streamCompleteWithAnthropic);
+      await handleCompileStream(req, res, codeCache, streamCompleteWithAnthropic, agentCompilation);
       return;
     }
 
@@ -109,6 +121,7 @@ async function handleCache(req: IncomingMessage, res: ServerResponse): Promise<v
   const cleared = codeCache.size;
   codeCache.clear();
   await codeCache.clearRemote?.();
+  agentCompilation.clear();
   sendJson(res, 200, { ok: true, cleared });
 }
 
