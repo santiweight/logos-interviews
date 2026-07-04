@@ -27,4 +27,13 @@ describe("frontend compilation policy", () => {
     expect(source).toContain('"Code is being generated..."');
     expect(source).toContain('compilationPending\n    ? "Code is being generated..."');
   });
+
+  it("renders the implementation view through the highlighted Logos editor", async () => {
+    const source = await readFile(new URL("./main.ts", import.meta.url), "utf8");
+
+    expect(source).toContain("const implementationViewEditor = monaco.editor.create");
+    expect(source).toContain("implementationViewEditor.setValue");
+    expect(source).toContain(`language: logosPythonLanguageId`);
+    expect(source).not.toContain("implementationViewPanel.textContent");
+  });
 });
