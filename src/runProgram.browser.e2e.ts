@@ -116,7 +116,7 @@ describe("run program browser flow", () => {
       const startResponsePromise = page.waitForResponse((response) => {
         return response.request().method() === "POST" && response.url().endsWith("/api/run/start");
       });
-      await page.locator(".runnable-play-glyph").first().click();
+      await page.locator(".runnable-run-widget").first().click();
       const startResponse = await startResponsePromise;
       await expect.poll(async () => {
         return page.locator(".terminal-output-text").first().textContent();
@@ -323,7 +323,7 @@ describe("run program browser flow", () => {
       await waitForSessionHelpers(page);
       await loadSource(page, reverseSource(), "Reverse CLI");
 
-      await page.locator(".runnable-play-glyph").first().click();
+      await page.locator(".runnable-run-widget").first().click();
       const terminalInput = page.locator(".terminal-input").first();
       await expect.poll(async () => terminalInput.isEnabled()).toBe(true);
       expect(await isTerminalInputFocused(page)).toBe(false);
@@ -391,7 +391,7 @@ describe("run program browser flow", () => {
       await waitForSessionHelpers(page);
       await loadSource(page, reverseSource(), "Reverse CLI");
 
-      await page.locator(".runnable-play-glyph").first().click();
+      await page.locator(".runnable-run-widget").first().click();
       await expect.poll(async () => page.locator(".terminal-input").first().isEnabled()).toBe(true);
       expect(await isTerminalInputFocused(page)).toBe(false);
 
