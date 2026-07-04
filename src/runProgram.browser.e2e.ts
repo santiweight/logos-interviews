@@ -174,6 +174,28 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("closes the add-file menu when clicking back into the editor", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+
+      await page.getByLabel("Add file").click();
+      await expect.poll(async () => isDetailsOpen(page, "#sample-menu")).toBe(true);
+
+      await page.locator("#editor").click({ position: { x: 24, y: 24 } });
+      await expect.poll(async () => isDetailsOpen(page, "#sample-menu")).toBe(false);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("renders the implementation view with highlighted code", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
@@ -527,6 +549,10 @@ async function visibleImplementationLines(page: Page): Promise<string[]> {
 
 async function isTerminalInputFocused(page: Page): Promise<boolean> {
   return page.evaluate(() => document.activeElement?.classList.contains("terminal-input") === true);
+}
+
+async function isDetailsOpen(page: Page, selector: string): Promise<boolean> {
+  return page.$eval(selector, (element) => element instanceof HTMLDetailsElement && element.open);
 }
 
 function reverseSource(): string {

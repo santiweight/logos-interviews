@@ -1332,6 +1332,8 @@ document.addEventListener("keydown", (event) => {
   }
 });
 document.addEventListener("pointerdown", (event) => {
+  closeMenusOnOutsidePointerDown(event);
+
   if (!snippetPopupPinned) {
     return;
   }
@@ -1390,6 +1392,24 @@ function openProject(sampleId: string): void {
 function closeOpenMenus(): void {
   sampleMenu.open = false;
   workspaceMenu.open = false;
+}
+
+function closeMenusOnOutsidePointerDown(event: PointerEvent): void {
+  if (!sampleMenu.open && !workspaceMenu.open) {
+    return;
+  }
+
+  const target = event.target instanceof Node ? event.target : null;
+  if (!target) {
+    closeOpenMenus();
+    return;
+  }
+
+  if (sampleMenu.contains(target) || workspaceMenu.contains(target)) {
+    return;
+  }
+
+  closeOpenMenus();
 }
 
 function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}): void {
