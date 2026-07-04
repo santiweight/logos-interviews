@@ -1156,10 +1156,6 @@ async function outputPaneRightGap(page: Page): Promise<number> {
   });
 }
 
-async function isTerminalInputFocused(page: Page): Promise<boolean> {
-  return page.evaluate(() => document.activeElement?.classList.contains("terminal-input") === true);
-}
-
 async function xtermText(page: Page): Promise<string> {
   return await page.locator(".terminal-xterm-host .xterm-rows").first().textContent() ?? "";
 }
