@@ -402,20 +402,23 @@ def test():
         id: "starter-arithmetic",
         label: "Intro to Logos",
         code: `# Logos is a Natural Language Programming Language.
-#
+# 
 # The following is valid code in Logos.
 #
-# Click the green run button and see results on the right. 
-#
+# Click the green "Run Main" and see results on the right. 
+# 
+# Click the blue text to see the generated code.
+# 
 # Try some edits:
 #   1. change the range to 50-100, or 100-200
 #   2. print the numbers in a formatted grid
-#   3. change the color scheme
+
+
 
 def main():
   \`\`\`
   Print all prime numbers from 1 to 50 in in a rainbow gradient
-  in a 3x3 grid.
+  in a 3-wide grid.
 
   The first number is red, the last is indigo
   \`\`\``,

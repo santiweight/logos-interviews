@@ -495,6 +495,7 @@ let latestReadinessDefinitions: DefinitionReadiness[] = [];
 let latestTypeCheckDiagnostics: TypeCheckDiagnostic[] = [];
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
+let runnableRunWidgets = new Map<string, monaco.editor.IContentWidget>();
 let incompleteSnippetDecorations: string[] = [];
 let selectedDefinitionDecorations: string[] = [];
 let runnableStateByLine = new Map<number, RunnableState>();
@@ -3590,9 +3591,6 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
     runnablesState.map((runnable) => ({
       range: new monaco.Range(runnable.line, 1, runnable.line, 1),
       options: {
-        glyphMarginClassName: runnable.ready
-          ? "runnable-play-glyph"
-          : "runnable-play-glyph runnable-play-glyph-disabled",
         glyphMarginHoverMessage: {
           value: runnable.ready
             ? `Run ${runnable.name}`
@@ -3601,6 +3599,65 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
       },
     })),
   );
+  updateRunnableRunWidgets(runnablesState);
+}
+
+function updateRunnableRunWidgets(runnablesState: Array<RunnableState & { line: number }>): void {
+  for (const widget of runnableRunWidgets.values()) {
+    editor.removeContentWidget(widget);
+  }
+  runnableRunWidgets = new Map();
+
+  for (const runnable of runnablesState) {
+    const widget = createRunnableRunWidget(runnable, 1);
+    runnableRunWidgets.set(widget.getId(), widget);
+    editor.addContentWidget(widget);
+  }
+}
+
+function createRunnableRunWidget(
+  runnable: RunnableState & { line: number },
+  column: number,
+): monaco.editor.IContentWidget {
+  const node = document.createElement("button");
+  node.className = runnable.ready
+    ? "runnable-run-widget"
+    : "runnable-run-widget runnable-run-widget-disabled";
+  node.type = "button";
+  node.textContent = `▶ Run ${runnableDisplayName(runnable.name)}`;
+  node.title = runnable.ready ? `Run ${runnable.name}` : disabledRunnableHoverMessage(runnable);
+  node.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
+  node.addEventListener("click", () => {
+    if (!runnable.ready) {
+      runStatus.textContent = runnable.compiling
+        ? "Dependencies still compiling"
+        : `${runnable.name} is blocked`;
+      runStatus.dataset.state = "error";
+      return;
+    }
+
+    runCurrentProgram(runnable.name);
+  });
+
+  return {
+    allowEditorOverflow: true,
+    suppressMouseDown: true,
+    getId: () => `runnable-run-widget-${runnable.line}-${runnable.name}`,
+    getDomNode: () => node,
+    getPosition: () => ({
+      position: { lineNumber: runnable.line, column },
+      preference: [
+        monaco.editor.ContentWidgetPositionPreference.ABOVE,
+        monaco.editor.ContentWidgetPositionPreference.BELOW,
+      ],
+    }),
+  };
+}
+
+function runnableDisplayName(name: string): string {
+  return name.length === 0 ? name : `${name[0]?.toUpperCase() ?? ""}${name.slice(1)}`;
 }
 
 function disabledRunnableHoverMessage(runnable: RunnableState): string {

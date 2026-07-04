@@ -1406,8 +1406,7 @@ h2 {
   background-color: var(--paper) !important;
 }
 
-.monaco-editor .not-ready-glyph-spinner,
-.monaco-editor .runnable-play-glyph {
+.monaco-editor .not-ready-glyph-spinner {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1427,23 +1426,33 @@ h2 {
   transform-origin: center;
 }
 
-.monaco-editor .runnable-play-glyph::before {
+.runnable-run-widget {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
-  width: 12px;
-  height: 12px;
-  margin-right: 1px;
-  color: var(--run-accent);
-  content: "▶";
+  height: 16px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #19b85a;
   cursor: pointer;
-  font-size: 0.72rem;
-  font-weight: 850;
-  line-height: 12px;
+  font-family:
+    Inter, Aptos, "Segoe UI Variable", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 0 4px;
+  white-space: nowrap;
 }
 
-.monaco-editor .runnable-play-glyph-disabled::before {
+.runnable-run-widget:hover {
+  background: rgba(25, 184, 90, 0.1);
+  color: #129a49;
+}
+
+.runnable-run-widget-disabled {
+  background: transparent;
   color: #74767a;
   cursor: not-allowed;
 }
