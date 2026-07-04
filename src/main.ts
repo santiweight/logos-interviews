@@ -4958,8 +4958,20 @@ function ReactAppFrame(props: { appCode: string; runnable: Runnable }): React.Re
 
     doc.open();
     doc.write(`<!doctype html><html><head><style>
-html, body { margin: 0; min-height: 100%; }
-body { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow: auto;
+}
+body > * {
+  min-height: 100%;
+}
 </style></head><body></body></html>`);
     doc.close();
     setIframeBody(doc.body);
