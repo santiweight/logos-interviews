@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import ts from "typescript";
-import { runnables as parseRunnables } from "../codeSheet";
+import { runnables as parseRunnables } from "../domain/codeSheet";
 import type { LogosSheet, LogosImplSheet, LogosImplSheetId } from "./codegen";
 
 export type DeclaredRunnable = {

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { buildCompilationIR, parse, renderImplementation, type Runnable } from "../codeSheet";
+import { buildCompilationIR, parse, renderImplementation, type Runnable } from "../domain/codeSheet";
 import { defaultProjectIds, samples } from "../samples";
 import { CodeEditor, type CodeEditorHandle } from "./CodeEditor";
 import {
@@ -688,7 +688,7 @@ export function App() {
     try {
       await navigator.clipboard?.writeText(id);
     } catch {
-      // Clipboard permission is optional; the session id still exists for replay/debugging.
+      // Clipboard permission is optional; the session id still exists for debugging.
     }
   }
 
