@@ -24,7 +24,7 @@ type SmokeResult = {
 
 const smokeAttempts = 5;
 
-const describeIfAnthropicE2E = process.env.RUN_ANTHROPIC_E2E === "true" && process.env.ANTHROPIC_API_KEY
+const describeIfAnthropicE2E = process.env.RUN_ANTHROPIC_E2E === "true" && process.env.LOGOS_ANTHROPIC_API_KEY
   ? describe
   : describe.skip;
 

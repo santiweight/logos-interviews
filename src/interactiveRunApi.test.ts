@@ -50,11 +50,15 @@ describe("interactive run API", () => {
     const baseUrl = await listen(servers, new Map(), () => {
       throw new Error("completion should not be called");
     });
+    const sheet = `function test_basic(): void {
+  console.log("done");
+}`;
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
-      sheet: `function test_basic(): void {
-  console.log("done");
-}`,
+      sheetId: "test-basic-sheet",
+      implSheetId: "test-basic-impl",
+      sheet,
+      implementation: sheet,
       runnable: "test_basic",
     });
 
@@ -90,16 +94,15 @@ describe("interactive run API", () => {
     const implementation = `function hello_app(): ReactApp {
   return React.createElement("h1", null, "hello world");
 }`;
-    const api = createInteractiveRunApi({
-      cache: new Map(),
-      compileSheet: async (incomingSheet) => {
-        expect(incomingSheet).toBe(sheet);
-        return implementation;
-      },
-    });
+    const api = createInteractiveRunApi();
     const server = createServer(async (req, res) => {
       if (req.url === "/api/run/start") {
         await api.handleStart(req, res);
+        return;
+      }
+
+      if (req.url === "/api/run/poll") {
+        await api.handlePoll(req, res);
         return;
       }
 
@@ -113,7 +116,10 @@ describe("interactive run API", () => {
     }
 
     const started = await postJson<ReactRunStartResponse>(`http://127.0.0.1:${address.port}`, "/api/run/start", {
+      sheetId: "hello-app-sheet",
+      implSheetId: "hello-app-impl",
       sheet,
+      implementation,
       runnable: "hello_app",
     });
 
@@ -127,6 +133,55 @@ describe("interactive run API", () => {
     expect(started.appCode).toContain("function hello_app()");
     expect(started.appCode).toContain("React.createElement");
     expect(started).not.toHaveProperty("sessionId");
+  });
+
+  it("uses provided implementations for run/start without recompiling the sheet", async () => {
+    const sheet = `function main(): void {
+  l\`print hello\`
+}`;
+    const implementation = `function main(): void {
+  console.log("provided implementation");
+}`;
+    const api = createInteractiveRunApi();
+    const server = createServer(async (req, res) => {
+      if (req.url === "/api/run/start") {
+        await api.handleStart(req, res);
+        return;
+      }
+
+      if (req.url === "/api/run/poll") {
+        await api.handlePoll(req, res);
+        return;
+      }
+
+      sendJson(res, 404, { ok: false, error: "not found" });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Could not start test server");
+    }
+
+    const started = await postJson<RunStartResponse>(`http://127.0.0.1:${address.port}`, "/api/run/start", {
+      sheetId: "sheet-main",
+      implSheetId: "compile-main",
+      sheet,
+      runnable: "main",
+      implementation,
+    });
+
+    expect(started).toMatchObject({
+      ok: true,
+      sheetId: "sheet-main",
+      implSheetId: "compile-main",
+    });
+    const completed = await pollUntilExited(`http://127.0.0.1:${address.port}`, started.sessionId, started.chunks);
+    expect(completed).toMatchObject({
+      ok: true,
+      status: { state: "exited", code: 0 },
+    });
+    expect(completed.output).toBe("provided implementation\n");
   });
 
   it("marks missing poll sessions with a stable error code", async () => {
@@ -150,18 +205,8 @@ describe("interactive run API", () => {
   });
 
   it("reproduces a fresh session miss when start and poll use different API instances", async () => {
-    const startApi = createInteractiveRunApi({
-      cache: new Map(),
-      complete: () => {
-        throw new Error("completion should not be called");
-      },
-    });
-    const pollApi = createInteractiveRunApi({
-      cache: new Map(),
-      complete: () => {
-        throw new Error("completion should not be called");
-      },
-    });
+    const startApi = createInteractiveRunApi();
+    const pollApi = createInteractiveRunApi();
     const server = createServer(async (req, res) => {
       if (req.url === "/api/run/start") {
         await startApi.handleStart(req, res);
@@ -182,11 +227,15 @@ describe("interactive run API", () => {
       throw new Error("Could not start test server");
     }
     const baseUrl = `http://127.0.0.1:${address.port}`;
+    const sheet = `function test(): void {
+  console.log("fresh");
+}`;
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
-      sheet: `function test(): void {
-  console.log("fresh");
-}`,
+      sheetId: "fresh-sheet",
+      implSheetId: "fresh-impl",
+      sheet,
+      implementation: sheet,
       runnable: "test",
     });
     const response = await fetch(`${baseUrl}/api/run/poll`, {
@@ -209,7 +258,10 @@ describe("interactive run API", () => {
     const started = await Promise.all(
       Array.from({ length: 3 }, () =>
         postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+          sheetId: "run-session-sheet",
+          implSheetId: "run-session-impl",
           sheet: runSessionSheet,
+          implementation: runSessionSheet,
           runnable: "test_basic",
         })),
     );
@@ -262,7 +314,10 @@ describe("interactive run API", () => {
     const started = await Promise.all(
       Array.from({ length: 3 }, () =>
         postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+          sheetId: "exact-run-session-sheet",
+          implSheetId: "exact-run-session-impl",
           sheet: exactRunSessionSheet,
+          implementation: exactRunSessionSheet,
           runnable: "test_basic",
         })),
     );
@@ -315,12 +370,7 @@ describe("interactive run API", () => {
 
     try {
       const compileCache = createGlobalCodeCache();
-      const runApi = createInteractiveRunApi({
-        cache: createGlobalCodeCache(),
-        complete: () => {
-          throw new Error("run should use the global cache");
-        },
-      });
+      const runApi = createInteractiveRunApi();
       const server = createServer(async (req, res) => {
         if (req.url === "/api/compile") {
           await handleCompileStream(req, res, compileCache, completeRunSessionSheet);
@@ -352,7 +402,10 @@ describe("interactive run API", () => {
       expect(compiled).toMatchObject({ kind: "compiled" });
 
       const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+        sheetId: "global-cache-sheet",
+        implSheetId: "global-cache-impl",
         sheet: exactRunSessionSheet,
+        implementation: exactRunSessionSheet,
         runnable: "test_basic",
       });
       const completed = await pollUntilExited(baseUrl, started.sessionId, started.chunks);
@@ -376,7 +429,7 @@ describe("interactive run API", () => {
     }
   });
 
-  it("joins an active agent compilation when a run starts for the same sheet", async () => {
+  it("runs a provided implementation without joining an active agent compilation", async () => {
     const cache: CodeCache = new Map();
     const agentStarted = deferred<void>();
     const releaseAgent = deferred<void>();
@@ -395,13 +448,7 @@ describe("interactive run API", () => {
         yield { kind: "done", source: implementation };
       },
     });
-    const runApi = createInteractiveRunApi({
-      cache,
-      compileSheet: (code) => agentCompilation.compile(code),
-      complete: () => {
-        throw new Error("run/start should join the active agent compilation");
-      },
-    });
+    const runApi = createInteractiveRunApi();
     const server = createServer(async (req, res) => {
       if (req.url === "/api/compile") {
         await handleCompileStream(req, res, cache, () => {
@@ -433,7 +480,10 @@ describe("interactive run API", () => {
     const compilePromise = compileViaApi(baseUrl, sheet);
     await agentStarted.promise;
     const runStartPromise = postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheetId: "agent-sheet",
+      implSheetId: "agent-impl",
       sheet,
+      implementation,
       runnable: "test_basic",
     });
     await delay(20);
@@ -461,6 +511,8 @@ type RunStatus =
 type RunStartResponse = {
   ok: true;
   sessionId: string;
+  sheetId: string;
+  implSheetId: string;
   chunks: RunChunk[];
   status: RunStatus;
 };
@@ -469,6 +521,8 @@ type ReactRunStartResponse = {
   ok: true;
   kind: "react";
   runId: string;
+  sheetId: string;
+  implSheetId: string;
   runnable: string;
   implementation: string;
   appCode: string;
@@ -490,7 +544,7 @@ async function listen(
   cache: CodeCache,
   complete: CompleteFunction,
 ): Promise<string> {
-  const api = createInteractiveRunApi({ cache, complete });
+  const api = createInteractiveRunApi();
   const server = createServer(async (req, res) => {
     if (req.url === "/api/run/start") {
       await api.handleStart(req, res);

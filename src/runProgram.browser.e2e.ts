@@ -7,6 +7,9 @@ type TestSourceTab = {
   projectId: string;
   title: string;
   source: string;
+  implementation?: string | null;
+  implSheetId?: string | null;
+  compileSessionId?: string | null;
 };
 
 type TestRunStatus =
@@ -15,6 +18,8 @@ type TestRunStatus =
 
 type TestRunTab = {
   id: string;
+  sheetId: string;
+  implSheetId: string;
   runnable: string;
   sourceHash: string;
   terminalText: string;
@@ -58,6 +63,21 @@ describe("run program browser flow", () => {
     server = await createServer({
       configFile: "vite.config.ts",
       logLevel: "error",
+      plugins: [{
+        name: "logos-browser-e2e-default-project",
+        configureServer(vite) {
+          vite.middlewares.use("/api/v2/project/default", (_req, res) => {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, sheets: [], activeSheetId: null }));
+          });
+          vite.middlewares.use("/api/v2/sheet/new", (_req, res) => {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, sheet: { currentSessionId: null } }));
+          });
+        },
+      }],
     });
     await server.listen();
     baseUrl = server.resolvedUrls?.local[0] ?? "";
@@ -111,7 +131,7 @@ describe("run program browser flow", () => {
       await waitForSessionHelpers(page);
 
       const source = "def foo():\n  print('hi')\n";
-      await loadSource(page, source, "Simple Run");
+      await loadSourceWithImplementation(page, source, source, "Simple Run");
 
       const startResponsePromise = page.waitForResponse((response) => {
         return response.request().method() === "POST" && response.url().endsWith("/api/run/start");
@@ -148,43 +168,62 @@ describe("run program browser flow", () => {
       let compileRequests = 0;
       let runStartRequests = 0;
 
-      await page.route("**/api/compile", async (route) => {
+      const compileSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let sessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
         expect(route.request().method()).toBe("POST");
-        const body = route.request().postDataJSON() as { sheet?: string };
-        if (body.sheet?.trim() === source) {
+        const body = route.request().postDataJSON() as { sheetId?: string; source?: string };
+        if (body.source?.trim() === source) {
           compileRequests += 1;
         }
-        const responseImplementation = body.sheet?.trim() === source ? implementation : body.sheet ?? "";
+        const responseImplementation = body.source?.trim() === source ? implementation : body.source ?? "";
+        const sessionId = `test-session-${++sessionCounter}`;
+        compileSessions.set(sessionId, {
+          events: [
+            { kind: "implementation", code: responseImplementation },
+            { kind: "done", code: responseImplementation },
+          ],
+          done: true,
+        });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: [
-            JSON.stringify({
-              kind: "implementation",
-              implementation: responseImplementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            JSON.stringify({
-              kind: "readiness",
-              definitions: [{ name: "main", ready: true, blockingDependencies: [] }],
-            }),
-            JSON.stringify({
-              kind: "compiled",
-              implementation: responseImplementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            "",
-          ].join("\n"),
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = compileSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: (session.events.at(-1) as any)?.code ?? "" }),
         });
       });
 
       await page.route("**/api/run/start", async (route) => {
         runStartRequests += 1;
-        const body = route.request().postDataJSON() as { sheet?: string; runnable?: string };
+        const body = route.request().postDataJSON() as {
+          sheetId?: string;
+          implSheetId?: string;
+          sheet?: string;
+          runnable?: string;
+          implementation?: string;
+        };
         expect(body.sheet?.trim()).toBe(source);
         expect(body.runnable).toBe("main");
+        expect(body.sheetId).toBeTruthy();
+        expect(body.implSheetId).toBeTruthy();
+        expect(body.implementation).toBe(implementation);
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -242,9 +281,18 @@ describe("run program browser flow", () => {
 }`;
 
       await page.route("**/api/run/start", async (route) => {
-        const body = route.request().postDataJSON() as { sheet?: string; runnable?: string };
+        const body = route.request().postDataJSON() as {
+          sheetId?: string;
+          implSheetId?: string;
+          sheet?: string;
+          runnable?: string;
+          implementation?: string;
+        };
         expect(body.sheet?.trim()).toBe(source);
         expect(body.runnable).toBe("hello_app");
+        expect(body.sheetId).toBeTruthy();
+        expect(body.implSheetId).toBeTruthy();
+        expect(body.implementation).toBe(implementation);
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -311,35 +359,39 @@ describe("run program browser flow", () => {
 }`;
       let runStartRequests = 0;
 
-      await page.route("**/api/compile", async (route) => {
+      const staleReadinessSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let staleSessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
+        const sessionId = `stale-session-${++staleSessionCounter}`;
+        staleReadinessSessions.set(sessionId, {
+          events: [
+            { kind: "implementation", code: implementation },
+            { kind: "done", code: implementation },
+          ],
+          done: true,
+        });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: [
-            JSON.stringify({
-              kind: "implementation",
-              implementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            JSON.stringify({
-              kind: "readiness",
-              definitions: [{
-                name: "main",
-                ready: false,
-                reason: "implementation",
-                dependencies: [],
-                blockingDependencies: [],
-              }],
-            }),
-            JSON.stringify({
-              kind: "compiled",
-              implementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            "",
-          ].join("\n"),
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = staleReadinessSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation }),
         });
       });
 
@@ -402,21 +454,53 @@ describe("run program browser flow", () => {
         releaseCompile = resolve;
       });
 
-      await page.route("**/api/compile", async (route) => {
+      const pendingSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let pendingSessionCounter = 0;
+      let latestPendingSessionId: string | null = null;
+
+      await page.route("**/api/v2/compile", async (route) => {
         compileRequests += 1;
-        await compileCanFinish;
+        const sessionId = `pending-session-${++pendingSessionCounter}`;
+        latestPendingSessionId = sessionId;
+        pendingSessions.set(sessionId, {
+          events: [{ kind: "implementation", code: implementation }],
+          done: false,
+        });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: [
-            JSON.stringify({
-              kind: "compiled",
-              implementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            "",
-          ].join("\n"),
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+        await compileCanFinish;
+        const session = pendingSessions.get(sessionId);
+        if (session) {
+          session.events.push({ kind: "done", code: implementation });
+          session.done = true;
+        }
+      });
+
+      await page.route("**/api/v2/sheet**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, source, currentSessionId: latestPendingSessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = pendingSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: session.done ? implementation : "" }),
         });
       });
 
@@ -431,10 +515,222 @@ describe("run program browser flow", () => {
       await expect.poll(() => compileRequests).toBeGreaterThan(0);
       await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("true");
       await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Claude is still compiling this sheet.");
+      await page.locator("[data-tool-tab-id='agent-view']").click();
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Implementation updated");
+      await expect.poll(async () => page.locator("[data-agent-status='running']").textContent()).toContain("Waiting for Claude to finish");
+      await expect.poll(async () => page.locator("[data-agent-status='running'] .agent-spinner").count()).toBe(1);
 
       releaseCompile();
       await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
       await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Run main");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("polls the active backend session when Agent View opens without local compile events", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      let sessionPolls = 0;
+
+      await page.route("**/api/v2/sheet**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, source: "", currentSessionId: "agent-view-server-session" }),
+        });
+      });
+      await page.route("**/api/v2/session**", async (route) => {
+        sessionPolls += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            events: [
+              { kind: "agent-text", text: "Reading current file" },
+              { kind: "agent-tool", tool: "view", input: { command: "view", path: "main.ts" } },
+            ],
+            done: false,
+            total: 2,
+            implementation: "",
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadTwoSourceTabs(page, {
+        activeSourceTabId: "agent-view-sheet",
+        tabs: [{
+          id: "agent-view-sheet",
+          projectId: "agent-view-sheet",
+          title: "Agent Server Session",
+          source: "function main(): void {\n  l`print hi`\n}",
+          compileSessionId: "agent-view-server-session",
+        }],
+      });
+
+      await page.locator("[data-tool-tab-id='agent-view']").click();
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Reading current file");
+      await expect.poll(async () => page.locator("[data-agent-status='running']").textContent()).toContain("Waiting for Claude to finish");
+      await expect.poll(() => sessionPolls).toBeGreaterThan(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("clears Agent View when switching to a sheet without a backend compile session", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const sheetWithSessionId = "agent-session-sheet";
+      const blankSheetId = "agent-blank-sheet";
+
+      await page.route("**/api/v2/sheet**", async (route) => {
+        const url = new URL(route.request().url());
+        const sheetId = url.searchParams.get("id");
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            source: "",
+            currentSessionId: sheetId === sheetWithSessionId ? "agent-view-server-session" : null,
+          }),
+        });
+      });
+      await page.route("**/api/v2/session**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            events: [{ kind: "agent-text", text: "Reading current file" }],
+            done: false,
+            total: 1,
+            implementation: "",
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadTwoSourceTabs(page, {
+        activeSourceTabId: sheetWithSessionId,
+        tabs: [
+          {
+            id: sheetWithSessionId,
+            projectId: sheetWithSessionId,
+            title: "Sheet With Session",
+            source: "function main(): void {\n  l`print hi`\n}",
+            compileSessionId: "agent-view-server-session",
+          },
+          {
+            id: blankSheetId,
+            projectId: blankSheetId,
+            title: "Blank Sheet",
+            source: "function main(): void {\n  l`print bye`\n}",
+            compileSessionId: null,
+          },
+        ],
+      });
+
+      await page.locator("[data-tool-tab-id='agent-view']").click();
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Reading current file");
+
+      await page.locator(`[data-source-tab-id="${blankSheetId}"]`).click();
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).not.toContain("Reading current file");
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Compile this sheet");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("loads watched sheets from the backend default project without compiling on tab switch", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const firstSheetId = "backend-first-sheet";
+      const secondSheetId = "backend-second-sheet";
+      let compileRequests = 0;
+      let watchRequests = 0;
+
+      await page.route("**/api/v2/project/default", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            activeSheetId: firstSheetId,
+            sheets: [
+              {
+                id: firstSheetId,
+                projectId: firstSheetId,
+                title: "Backend First Sheet",
+                source: "function main(): void {\n  l`print first`\n}",
+                currentSessionId: "first-session",
+              },
+              {
+                id: secondSheetId,
+                projectId: secondSheetId,
+                title: "Backend Second Sheet",
+                source: "function main(): void {\n  l`print second`\n}",
+                currentSessionId: "second-session",
+              },
+            ],
+          }),
+        });
+      });
+
+      await page.route("**/api/v2/compile", async (route) => {
+        compileRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId: "unexpected-compile-session" }),
+        });
+      });
+
+      await page.route("**/api/v2/watch", async (route) => {
+        watchRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId: "unexpected-watch-session" }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await expect.poll(async () => page.locator(`[data-source-tab-id="${firstSheetId}"]`).textContent())
+        .toBe("Backend First Sheet");
+      await expect.poll(async () => page.locator(`[data-source-tab-id="${secondSheetId}"]`).textContent())
+        .toBe("Backend Second Sheet");
+
+      await page.locator(`[data-source-tab-id="${secondSheetId}"]`).click();
+      await expect.poll(async () => {
+        return page.evaluate(() => (window as LogosWindow).createLogosSessionBundle?.().activeSourceTabId);
+      }).toBe(secondSheetId);
+      await page.locator(`[data-source-tab-id="${firstSheetId}"]`).click();
+      await expect.poll(async () => {
+        return page.evaluate(() => (window as LogosWindow).createLogosSessionBundle?.().activeSourceTabId);
+      }).toBe(firstSheetId);
+      expect(compileRequests).toBe(0);
+      expect(watchRequests).toBe(0);
     } finally {
       await context.close();
     }
@@ -513,12 +809,34 @@ describe("run program browser flow", () => {
           body: JSON.stringify({ ok: true, cleared: 3 }),
         });
       });
-      await page.route("**/api/compile", async (route) => {
+      const cacheSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let cacheSessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
         compileRequestsAfterClear += 1;
+        const sessionId = `cache-session-${++cacheSessionCounter}`;
+        cacheSessions.set(sessionId, { events: [{ kind: "done", code: "" }], done: true });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: `${JSON.stringify({ kind: "compiled", implementation: "", completedSnippets: 0, totalSnippets: 0 })}\n`,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = cacheSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: "" }),
         });
       });
 
@@ -682,7 +1000,7 @@ describe("run program browser flow", () => {
     }
   });
 
-  it("shows a compilation status marker for selected runnable definitions", async () => {
+  it("shows selected runnable definitions without reopening the legacy snippet panel", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
     }
@@ -701,11 +1019,9 @@ describe("run program browser flow", () => {
         targetKind: "function",
       });
 
-      await expect.poll(async () => page.locator("#snippet-title").textContent()).toBe("Implementation: main");
-      await expect.poll(async () => {
-        return page.locator("#snippet-status-indicator").getAttribute("data-state");
-      }).toBe("complete");
-      await expect.poll(async () => page.locator("#snippet-status-indicator").getAttribute("title")).toBe("Ready");
+      await expect.poll(async () => page.locator(".snippet-panel").count()).toBe(0);
+      await expect.poll(async () => page.locator(".runnable-run-widget").first().getAttribute("data-ready")).toBe("true");
+      await expect.poll(async () => page.locator(".runnable-run-widget").first().getAttribute("title")).toBe("Run main");
     } finally {
       await context.close();
     }
@@ -768,6 +1084,8 @@ describe("run program browser flow", () => {
             lastRunStatusText: "Running main · last run previously",
             tabs: [{
               id: "run-main",
+              sheetId: activeSourceTabId,
+              implSheetId: "restored-impl-sheet",
               runnable: "main",
               sourceHash: "mandelbrot-source",
               terminalText: "",
@@ -841,7 +1159,7 @@ describe("run program browser flow", () => {
 
       await page.goto(baseUrl);
       await waitForSessionHelpers(page);
-      await loadSource(page, reverseSource(), "Reverse CLI");
+      await loadSourceWithImplementation(page, reverseSource(), reverseSource(), "Reverse CLI");
 
       await page.locator(".runnable-run-widget").first().click();
       await expect.poll(async () => page.locator(".terminal-input").count()).toBe(0);
@@ -1024,7 +1342,7 @@ function main(): void {
 
       await page.goto(baseUrl);
       await waitForSessionHelpers(page);
-      await loadSource(page, reverseSource(), "Reverse CLI");
+      await loadSourceWithImplementation(page, reverseSource(), reverseSource(), "Reverse CLI");
 
       await page.locator(".runnable-run-widget").first().click();
       await expect.poll(async () => page.locator(".terminal-input").count()).toBe(0);
@@ -1087,6 +1405,45 @@ async function loadSource(page: Page, source: string, title: string, selection: 
   }, { source, title, selection });
 }
 
+async function loadTwoSourceTabs(
+  page: Page,
+  payload: { activeSourceTabId: string; tabs: TestSourceTab[] },
+): Promise<void> {
+  await page.evaluate(async ({ activeSourceTabId, tabs }) => {
+    const logosWindow = window as LogosWindow;
+    const session = logosWindow.createLogosSessionBundle?.();
+    if (!session || !logosWindow.loadLogosSession) {
+      throw new Error("Logos session helpers are unavailable");
+    }
+
+    const active = tabs.find((tab) => tab.id === activeSourceTabId) ?? tabs[0];
+    await logosWindow.loadLogosSession({
+      ...session,
+      sourceTabs: tabs,
+      activeSourceTabId: active?.id ?? null,
+      editor: {
+        ...session.editor,
+        value: active?.source ?? "",
+        cursor: { lineNumber: 1, column: 1 },
+        scrollTop: 0,
+        scrollLeft: 0,
+      },
+      compilation: {
+        ...session.compilation,
+        latestImplementationSource: "",
+        selection: { kind: "none" },
+      },
+      run: {
+        ...session.run,
+        activeToolTabId: "implementation-view",
+        lastRunLabel: "never",
+        lastRunStatusText: "",
+        tabs: [],
+      },
+    });
+  }, payload);
+}
+
 async function loadSourceWithImplementation(
   page: Page,
   source: string,
@@ -1109,6 +1466,8 @@ async function loadSourceWithImplementation(
         title,
         source,
         implementation,
+        implSheetId: implementation.length > 0 ? `${activeSourceTabId}-impl` : null,
+        compileSessionId: null,
       }],
       activeSourceTabId,
       editor: {

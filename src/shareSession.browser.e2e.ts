@@ -131,7 +131,7 @@ describe("shared session browser flow", () => {
       const createResponsePromise = page.waitForResponse((response) => {
         return response.request().method() === "POST" && response.url().includes("/api/shared-sessions");
       });
-      await page.getByLabel("Share session link").click();
+      await page.getByRole("region", { name: "Code editor panel" }).getByLabel("Share session link").click();
       const createResponse = await createResponsePromise;
       const createPayload = await createResponse.json() as { ok?: boolean; shareId?: string };
       expect(createPayload).toMatchObject({ ok: true, shareId: expect.any(String) });

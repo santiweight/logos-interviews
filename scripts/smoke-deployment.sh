@@ -34,6 +34,18 @@ process.stdout.write(JSON.stringify({
 NODE
 }
 
+json_run_payload_for() {
+  PAYLOAD_SHEET="$1" PAYLOAD_RUNNABLE="$2" PAYLOAD_IMPLEMENTATION="$3" PAYLOAD_IMPL_SHEET_ID="$4" PAYLOAD_SHEET_ID="$5" node <<'NODE'
+process.stdout.write(JSON.stringify({
+  sheet: process.env.PAYLOAD_SHEET,
+  sheetId: process.env.PAYLOAD_SHEET_ID,
+  runnable: process.env.PAYLOAD_RUNNABLE,
+  implementation: process.env.PAYLOAD_IMPLEMENTATION,
+  implSheetId: process.env.PAYLOAD_IMPL_SHEET_ID,
+}));
+NODE
+}
+
 post_json() {
   local path="$1"
   local payload="$2"
@@ -93,6 +105,21 @@ if (!smokeRunnable?.ready) {
 if (events.at(-1)?.kind !== "compiled") {
   throw new Error(`compile did not finish with compiled marker: ${JSON.stringify(events.at(-1))}`);
 }
+NODE
+}
+
+compiled_implementation() {
+  COMPILE_RESPONSE="$1" node <<'NODE'
+const lines = process.env.COMPILE_RESPONSE
+  .split(/\n/)
+  .map((line) => line.trim())
+  .filter(Boolean);
+const events = lines.map((line) => JSON.parse(line));
+const compiled = events.findLast((event) => event.kind === "compiled");
+if (typeof compiled?.implementation !== "string" || compiled.implementation.length === 0) {
+  throw new Error(`compile response did not include implementation: ${JSON.stringify(events.at(-1))}`);
+}
+process.stdout.write(compiled.implementation);
 NODE
 }
 
@@ -282,9 +309,11 @@ payload="$(json_payload_for "$sheet" "smoke_compile_run")"
 echo "Checking compile stream"
 compile_response="$(post_json "/api/compile" "$payload")"
 check_compile_response "$compile_response" "smoke_compile_run"
+implementation="$(compiled_implementation "$compile_response")"
+run_payload="$(json_run_payload_for "$sheet" "smoke_compile_run" "$implementation" "${smoke_id}-smoke_compile_run-impl" "${smoke_id}-sheet")"
 
 echo "Checking interactive compile + run lifecycle"
-check_interactive_run "$payload" "$smoke_output"
+check_interactive_run "$run_payload" "$smoke_output"
 
 if [[ "${SMOKE_ANTHROPIC_E2E:-false}" == "true" ]]; then
   unique_suffix="$(date +%s)_$$"
@@ -306,7 +335,9 @@ NODE
   echo "Checking live Anthropic compile + run lifecycle"
   llm_compile_response="$(post_json "/api/compile" "$llm_payload")"
   check_compile_response "$llm_compile_response" "$llm_runnable"
-  check_interactive_run "$llm_payload" "3"
+  llm_implementation="$(compiled_implementation "$llm_compile_response")"
+  llm_run_payload="$(json_run_payload_for "$llm_sheet" "$llm_runnable" "$llm_implementation" "${smoke_id}-${llm_runnable}-impl" "${smoke_id}-${llm_runnable}-sheet")"
+  check_interactive_run "$llm_run_payload" "3"
 fi
 
 echo "Deployment smoke passed for ${base_url}"
