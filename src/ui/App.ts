@@ -261,6 +261,21 @@ export function App() {
     void deleteBackendSheet(sheetId);
   }, [activeSourceTabId]);
 
+  const moveSheet = React.useCallback((sheetId: string, insertIndex: number) => {
+    setSourceTabs((tabs) => {
+      const draggedIndex = tabs.findIndex((tab) => tab.id === sheetId);
+      if (draggedIndex === -1) return tabs;
+
+      const nextTabs = [...tabs];
+      const [draggedTab] = nextTabs.splice(draggedIndex, 1);
+      const boundedInsertIndex = Math.min(Math.max(insertIndex, 0), nextTabs.length);
+      nextTabs.splice(boundedInsertIndex, 0, draggedTab);
+
+      if (sameSourceTabOrder(nextTabs, tabs)) return tabs;
+      return nextTabs;
+    });
+  }, []);
+
   const startRun = React.useCallback((runnable: Runnable) => {
     if (!activeSourceTab) return;
     const implSheetId = activeSourceTab.implSheetId;
@@ -756,6 +771,7 @@ export function App() {
               compilingSheetIds,
               onSelectSheet: selectSheet,
               onCloseSheet: closeSheet,
+              onMoveSheet: moveSheet,
               onAddScratch: addScratch,
               onOpenTemplate: openTemplate,
             }),
@@ -1100,6 +1116,10 @@ function createSourceTabId(projectId: string): string {
 function nextScratchTitle(tabs: SourceTab[]): string {
   const count = tabs.filter((tab) => tab.projectId === "scratch").length;
   return count === 0 ? "Scratch" : `Scratch ${count + 1}`;
+}
+
+function sameSourceTabOrder(left: SourceTab[], right: SourceTab[]): boolean {
+  return left.length === right.length && left.every((tab, index) => tab.id === right[index]?.id);
 }
 
 function pageIdFromHash(hash: string): string | null {
