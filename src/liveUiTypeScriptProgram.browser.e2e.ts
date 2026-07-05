@@ -86,9 +86,6 @@ describeIfAnthropicE2E("live UI TypeScript compile and run e2e", () => {
         timeout: 60_000,
       }).toMatch(/Scaffold generated|Implementation updated|Waiting for Claude/i);
 
-      await expect.poll(async () => await page.locator("#run-status").textContent(), {
-        timeout: 240_000,
-      }).toBe("Compiled");
       await expect.poll(async () => await page.locator("[data-agent-status='running']").count(), {
         timeout: 30_000,
       }).toBe(0);
@@ -199,13 +196,6 @@ async function loadTwoSheetSession(page: Page): Promise<void> {
       run: {
         ...session.run,
         activeToolTabId: "implementation-view",
-        lastRunLabel: "never",
-        lastRunStatusText: "",
-        lastRunCompletedAtMs: null,
-        lastRunStatusPrefix: "",
-        lastRunStatusState: "",
-        lastRunDefinitionHash: null,
-        runStatus: { text: "", state: "" },
         tabs: [],
       },
     });
@@ -283,13 +273,6 @@ async function loadTwoProgramSession(page: Page): Promise<void> {
       run: {
         ...session.run,
         activeToolTabId: "implementation-view",
-        lastRunLabel: "never",
-        lastRunStatusText: "",
-        lastRunCompletedAtMs: null,
-        lastRunStatusPrefix: "",
-        lastRunStatusState: "",
-        lastRunDefinitionHash: null,
-        runStatus: { text: "", state: "" },
         tabs: [],
       },
     });
@@ -312,9 +295,6 @@ async function compileActiveSheetAndRun(
   await compileStarted;
 
   await page.locator("[data-tool-tab-id='agent-view']").click();
-  await expect.poll(async () => await page.locator("#run-status").textContent(), {
-    timeout: 240_000,
-  }).toBe("Compiled");
   await expect.poll(async () => await page.locator("[data-agent-status='running']").count(), {
     timeout: 30_000,
   }).toBe(0);

@@ -154,10 +154,6 @@ function minimalLoadableSession(): Record<string, unknown> {
     },
     run: {
       activeToolTabId: null,
-      lastRunLabel: "never",
-      lastRunStatusText: "",
-      lastRunDefinitionHash: null,
-      runStatus: { text: "", state: "" },
       tabs: [],
     },
     agent: { expanded: false, input: "", messages: [] },

@@ -106,13 +106,6 @@ export type LoadableSession = {
   };
   run: {
     activeToolTabId: string | null;
-    lastRunLabel: string;
-    lastRunStatusText: string;
-    lastRunCompletedAtMs?: number | null;
-    lastRunStatusPrefix?: string;
-    lastRunStatusState?: string;
-    lastRunDefinitionHash: string | null;
-    runStatus: { text: string; state: string };
     tabs: LoadableSessionRunTab[];
   };
   agent: {
