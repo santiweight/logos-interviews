@@ -15,9 +15,7 @@ import { createLogosApi } from "./src/logosApi";
 import { AgentCompilationFramework } from "./src/agentCompilation";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
-import { handleFeedback } from "./src/feedbackCapture";
 import { handleSessionEvents } from "./src/sessionCapture";
-import { handleSharedSessions } from "./src/sharedSessions";
 import { createInteractiveRunApi } from "./src/interactiveRunApi";
 
 const devHost = "127.0.0.1";
@@ -307,14 +305,6 @@ function anthropicCompletionPlugin() {
 
       server.middlewares.use("/api/session-events", async (req, res) => {
         await handleSessionEvents(req, res);
-      });
-
-      server.middlewares.use("/api/feedback", async (req, res) => {
-        await handleFeedback(req, res);
-      });
-
-      server.middlewares.use("/api/shared-sessions", async (req, res) => {
-        await handleSharedSessions(req, res);
       });
     },
   };

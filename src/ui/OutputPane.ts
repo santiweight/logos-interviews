@@ -17,7 +17,6 @@ type OutputPaneProps = {
   onCloseRunTab: (tabId: string) => void;
   onRunInput: (runTabId: string, input: string) => void;
   onRunResize: (runTabId: string, cols: number, rows: number) => void;
-  onShareSession: () => void;
 };
 
 export function OutputPane(props: OutputPaneProps) {
@@ -33,22 +32,6 @@ export function OutputPane(props: OutputPaneProps) {
         onSelectTab: props.onSelectTab,
         onCloseRunTab: props.onCloseRunTab,
       }),
-      e(
-        "div",
-        { className: "feedback-controls", "data-feedback-controls": "output" },
-        e(
-          "button",
-          {
-            className: "feedback-button share-button",
-            type: "button",
-            "data-share-session": true,
-            "aria-label": "Share session link",
-            title: "Share link",
-            onClick: props.onShareSession,
-          },
-          "Share",
-        ),
-      ),
     ),
     e(
       "div",

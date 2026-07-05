@@ -138,85 +138,6 @@ process.stdout.write((response.chunks ?? []).map((chunk) => chunk.text ?? "").jo
 NODE
 }
 
-check_shared_session_loading() {
-  local marker="shared session smoke ${smoke_id}"
-  local shared_payload
-  local create_response
-  local share_id
-  local read_response
-
-  shared_payload="$(
-    SHARED_MARKER="$marker" node <<'NODE'
-const marker = process.env.SHARED_MARKER;
-const source = `function shared_session_smoke(): void {
-  console.log(${JSON.stringify(marker)});
-}`;
-process.stdout.write(JSON.stringify({
-  loadableSession: {
-    schemaVersion: 1,
-    capturedAt: new Date().toISOString(),
-    sessionId: "deployment-smoke-session",
-    workspaceId: "deployment-smoke-workspace",
-    sourceTabs: [{
-      id: "deployment-smoke-tab",
-      projectId: "deployment-smoke-project",
-      title: "Deployment smoke",
-      source,
-    }],
-    activeSourceTabId: "deployment-smoke-tab",
-    editor: {
-      value: source,
-      cursor: { lineNumber: 2, column: 24 },
-      scrollTop: 0,
-      scrollLeft: 0,
-    },
-    compilation: {
-      compileVersion: 1,
-      latestImplementationSource: source,
-      selection: { kind: "none" },
-    },
-    run: {
-      tabs: [],
-      activeToolTabId: null,
-      runStatus: { text: "", state: "" },
-      lastRunDefinitionHash: null,
-    },
-    agent: {
-      messages: [],
-      input: "",
-      expanded: false,
-    },
-  },
-}));
-NODE
-  )"
-
-  create_response="$(post_json "/api/shared-sessions" "$shared_payload")"
-  share_id="$(json_field "$create_response" "shareId")"
-  if [[ -z "$share_id" ]]; then
-    echo "Shared session create response did not include a share id: ${create_response}" >&2
-    exit 1
-  fi
-
-  read_response="$(
-    curl -fsS "${base_url}/api/shared-sessions/${share_id}" || {
-      echo "Could not load shared session ${share_id}" >&2
-      exit 1
-    }
-  )"
-
-  SHARED_RESPONSE="$read_response" SHARED_MARKER="$marker" node <<'NODE'
-const response = JSON.parse(process.env.SHARED_RESPONSE);
-if (response.ok !== true) {
-  throw new Error(`shared session load was not ok: ${JSON.stringify(response)}`);
-}
-const session = response.loadableSession;
-if (!session || session.editor?.value?.includes(process.env.SHARED_MARKER) !== true) {
-  throw new Error(`loaded shared session did not include marker: ${JSON.stringify(response)}`);
-}
-NODE
-}
-
 check_interactive_run() {
   local payload="$1"
   local expected_output="$2"
@@ -300,9 +221,6 @@ if [[ "$health_response" != '{"ok":true}' ]]; then
   echo "Unexpected health response from ${base_url}/healthz: ${health_response}" >&2
   exit 1
 fi
-
-echo "Checking shared session loading"
-check_shared_session_loading
 
 payload="$(json_payload_for "$sheet" "smoke_compile_run")"
 

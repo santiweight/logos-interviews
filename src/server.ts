@@ -10,9 +10,7 @@ import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
 import { AgentCompilationFramework } from "./agentCompilation";
-import { handleFeedback } from "./feedbackCapture";
 import { handleSessionEvents } from "./sessionCapture";
-import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 requireAnthropicApiKey();
@@ -88,16 +86,6 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/session-events" || url.pathname.startsWith("/api/session-events/")) {
       await handleSessionEvents(req, res);
-      return;
-    }
-
-    if (url.pathname === "/api/feedback") {
-      await handleFeedback(req, res);
-      return;
-    }
-
-    if (url.pathname === "/api/shared-sessions" || url.pathname.startsWith("/api/shared-sessions/")) {
-      await handleSharedSessions(req, res);
       return;
     }
 
