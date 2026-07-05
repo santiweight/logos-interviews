@@ -3,7 +3,6 @@ import type { AgentEvent } from "./types";
 
 const e = React.createElement;
 const activePollMs = 100;
-const donePollMs = 250;
 const errorPollMs = 1000;
 
 type AgentViewProps = {
@@ -63,8 +62,6 @@ export function AgentView({ compileSessionId, active }: AgentViewProps) {
             compiling: true,
             implementation: "",
           });
-        } else if (!current.compiling) {
-          setState((next) => next.sessionId === compileSessionId ? { ...next, compiling: true } : next);
         }
 
         const response = await fetch(`/api/v2/session?id=${encodeURIComponent(compileSessionId)}&after=${after}`);
@@ -80,16 +77,30 @@ export function AgentView({ compileSessionId, active }: AgentViewProps) {
         setState((next) => {
           const reset = next.sessionId !== compileSessionId;
           const eventsSoFar = reset ? [] : next.events;
+          const nextAfter = typeof session.total === "number" ? session.total : after + nextEvents.length;
+          const nextCompiling = session.done !== true;
+          const nextImplementation = session.implementation ?? next.implementation;
+          if (
+            !reset &&
+            nextEvents.length === 0 &&
+            next.after === nextAfter &&
+            next.compiling === nextCompiling &&
+            next.implementation === nextImplementation
+          ) {
+            return next;
+          }
           return {
             sessionId: compileSessionId,
             events: nextEvents.length > 0 ? [...eventsSoFar, ...nextEvents] : eventsSoFar,
-            after: typeof session.total === "number" ? session.total : after + nextEvents.length,
-            compiling: session.done !== true,
-            implementation: session.implementation ?? next.implementation,
+            after: nextAfter,
+            compiling: nextCompiling,
+            implementation: nextImplementation,
           };
         });
 
-        timer = setTimeout(poll, session.done ? donePollMs : activePollMs);
+        if (!session.done) {
+          timer = setTimeout(poll, activePollMs);
+        }
       } catch {
         setState((next) => next.sessionId === compileSessionId ? { ...next, compiling: false } : next);
         timer = setTimeout(poll, errorPollMs);
