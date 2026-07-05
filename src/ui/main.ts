@@ -1,4 +1,4 @@
-import "../styles.css";
+import "./styles.css";
 import "@xterm/xterm/css/xterm.css";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import * as React from "react";

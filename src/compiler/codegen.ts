@@ -5,8 +5,8 @@ import type {
   ToolUseBlock,
   ToolUnion,
 } from "@anthropic-ai/sdk/resources/messages/messages";
-import { anthropicClient } from "../anthropicKeyService";
-import { buildWholeSheetCompletionPrompt, parse } from "../codeSheet";
+import { anthropicClient } from "../ai/anthropicKeyService";
+import { buildWholeSheetCompletionPrompt, parse } from "../domain/codeSheet";
 
 export type LogosSheet = string;
 export type LogosSheetId = string;
@@ -292,5 +292,5 @@ function lineCount(source: string): number {
   return source.length === 0 ? 0 : source.split("\n").length;
 }
 
-export { parse as parseLogos } from "../codeSheet";
-export type { ParsedSheet as LogosAst } from "../codeSheet";
+export { parse as parseLogos } from "../domain/codeSheet";
+export type { ParsedSheet as LogosAst } from "../domain/codeSheet";

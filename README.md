@@ -78,5 +78,5 @@ run from `main`. Configure GitHub environments named `dev` and `prod` with:
 - object-storage secrets such as `BUCKET_NAME`, `AWS_ENDPOINT_URL_S3`,
   `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY`
 
-The main code sheet compiler lives in `src/codeSheet.ts`. The runtime API lives
-in `src/codeSheetRunner.ts` and `src/server.ts`.
+The main code sheet compiler lives in `src/domain/codeSheet.ts`. The runtime API lives
+in `src/runtime/codeSheetRunner.ts` and `src/server/index.ts`.

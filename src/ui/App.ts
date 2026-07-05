@@ -1,5 +1,5 @@
 import * as React from "react";
-import { buildCompilationIR, parse, renderImplementation, type Runnable } from "../codeSheet";
+import { buildCompilationIR, parse, renderImplementation, type Runnable } from "../domain/codeSheet";
 import { defaultProjectIds, samples } from "../samples";
 import { CodeEditor, type CodeEditorHandle } from "./CodeEditor";
 import { OutputPane } from "./OutputPane";

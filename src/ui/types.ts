@@ -1,4 +1,4 @@
-import type { Runnable } from "../codeSheet";
+import type { Runnable } from "../domain/codeSheet";
 
 export type CompilationMode =
   | "parallel"
