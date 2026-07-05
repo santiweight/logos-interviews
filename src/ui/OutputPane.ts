@@ -13,8 +13,6 @@ type OutputPaneProps = {
   compiling: boolean;
   runTabs: RunTab[];
   activeTabId: string | null;
-  runStatusText: string;
-  runStatusState: string;
   onSelectTab: (tabId: string | null) => void;
   onCloseRunTab: (tabId: string) => void;
   onRunInput: (runTabId: string, input: string) => void;
@@ -35,7 +33,6 @@ export function OutputPane(props: OutputPaneProps) {
         onSelectTab: props.onSelectTab,
         onCloseRunTab: props.onCloseRunTab,
       }),
-      e("span", { id: "run-status", className: "status", "data-state": props.runStatusState }, props.runStatusText),
       e(
         "div",
         { className: "feedback-controls", "data-feedback-controls": "output" },

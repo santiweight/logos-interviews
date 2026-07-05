@@ -71,8 +71,6 @@ export function App() {
   const [compileVersion, setCompileVersion] = React.useState(0);
   const [runTabs, setRunTabs] = React.useState<RunTab[]>([]);
   const [activeToolTabId, setActiveToolTabId] = React.useState<string | null>(implementationTabId);
-  const [runStatusText, setRunStatusText] = React.useState("");
-  const [runStatusState, setRunStatusState] = React.useState("");
   const [selection, setSelection] = React.useState<LoadableSessionSelection>({ kind: "none" });
   const [articleHtmlById, setArticleHtmlById] = React.useState<Record<string, string>>({});
 
@@ -127,7 +125,7 @@ export function App() {
     const source = activeSourceTab?.source ?? "";
     const controller = new AbortController();
     setCompilingSheetIds((ids) => new Set(ids).add(activeSourceTabId));
-    void pollCompileSession(activeSourceTabId, activeCompileSessionId, source, controller, { quietStatus: true });
+    void pollCompileSession(activeSourceTabId, activeCompileSessionId, source, controller);
     return () => {
       controller.abort();
     };
@@ -268,13 +266,11 @@ export function App() {
     if (!activeSourceTab) return;
     const implSheetId = activeSourceTab.implSheetId;
     if (!implSheetId) {
-      setRunStatus(`${runnable} is missing an implementation id`, "error");
       return;
     }
     const runTab = createRunTab(runnable, activeSourceTab.id, activeSourceTab.source, implementation, implSheetId);
     setRunTabs((tabs) => [...tabs, runTab]);
     setActiveToolTabId(runTab.id);
-    setRunStatus(`Running ${runnable}`, "");
     void startRunRequest(runTab, activeSourceTab.source, runnable, implementation, implSheetId);
   }, [activeSourceTab, implementation]);
 
@@ -305,21 +301,9 @@ export function App() {
     });
   }, []);
 
-  function setRunStatus(text: string, state: string) {
-    setRunStatusText(text);
-    setRunStatusState(state);
-  }
-
-  function scheduleCompilation(
-    sheetId: string,
-    source: string,
-    options: { quietStatus?: boolean } = {},
-  ) {
+  function scheduleCompilation(sheetId: string, source: string) {
     setCompileVersion((version) => version + 1);
     setCompilingSheetIds((ids) => new Set(ids).add(sheetId));
-    if (!options.quietStatus && activeSourceTabIdRef.current === sheetId) {
-      setRunStatus("Code is being generated...", "");
-    }
     const existingTimer = compileTimerRef.current.get(sheetId);
     if (existingTimer) clearTimeout(existingTimer);
     compileControllerRef.current.get(sheetId)?.abort();
@@ -328,7 +312,7 @@ export function App() {
     const timer = setTimeout(() => {
       compileTimerRef.current.delete(sheetId);
       if (!controller.signal.aborted) {
-        void updateSheetAndPoll(sheetId, source, controller, options);
+        void updateSheetAndPoll(sheetId, source, controller);
       }
     }, 250);
     compileTimerRef.current.set(sheetId, timer);
@@ -338,7 +322,6 @@ export function App() {
     sheetId: string,
     source: string,
     controller: AbortController,
-    options: { quietStatus?: boolean } = {},
   ): Promise<void> {
     compileSessionRef.current.get(sheetId)?.controller.abort();
     try {
@@ -360,13 +343,10 @@ export function App() {
             : tab
         ),
       );
-      await pollCompileSession(sheetId, startPayload.sessionId, source, controller, options);
+      await pollCompileSession(sheetId, startPayload.sessionId, source, controller);
     } catch (error) {
-      if (!controller.signal.aborted) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (activeSourceTabIdRef.current === sheetId) {
-          setRunStatus(message, "error");
-        }
+      if (!controller.signal.aborted && activeSourceTabIdRef.current === sheetId) {
+        console.error(error);
       }
     } finally {
       if (compileControllerRef.current.get(sheetId) === controller) {
@@ -380,7 +360,6 @@ export function App() {
     sessionId: string,
     source: string,
     controller: AbortController,
-    options: { quietStatus?: boolean } = {},
   ): Promise<void> {
     compileSessionRef.current.set(sheetId, { sheetId, sessionId, source, controller });
     let after = 0;
@@ -425,7 +404,6 @@ export function App() {
               ),
             );
           }
-          if (activeSheet && !options.quietStatus) setRunStatus("Compiled", "ok");
           break;
         }
         await sleep(200);
@@ -487,14 +465,10 @@ export function App() {
           };
         }),
       );
-      if (payload.kind === "react" || payload.status?.state === "exited") {
-        setRunStatus(`Ran ${runnable}`, "ok");
-        return;
-      }
+      if (payload.kind === "react" || payload.status?.state === "exited") return;
       if (payload.sessionId) scheduleRunPoll(runTab.id, payload.sessionId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setRunStatus(message, "error");
       appendRunChunks(runTab.id, [{ stream: "stderr", text: `${message}\n` }], { state: "exited", code: 1, signal: null, error: message });
     }
   }
@@ -518,13 +492,10 @@ export function App() {
       appendRunChunks(runTabId, payload.chunks ?? [], payload.status ?? { state: "running" }, payload.implementation);
       if (payload.status?.state === "running") {
         scheduleRunPoll(runTabId, sessionId);
-      } else {
-        setRunStatus(`Ran ${current.runnable}`, payload.status?.state === "exited" && payload.status.code === 0 ? "ok" : "error");
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       appendRunChunks(runTabId, [{ stream: "stderr", text: `${message}\n` }], { state: "exited", code: 1, signal: null, error: message });
-      setRunStatus(message, "error");
     }
   }
 
@@ -561,7 +532,7 @@ export function App() {
       );
       if (options.poll !== false && sessionId) {
         setCompilingSheetIds((ids) => new Set(ids).add(tab.id));
-        await pollCompileSession(tab.id, sessionId, tab.source, new AbortController(), { quietStatus: true });
+        await pollCompileSession(tab.id, sessionId, tab.source, new AbortController());
       }
     } catch {
       // Sheet registration is best-effort for local/session-loaded sheets; source edits retry through updateSheet.
@@ -590,13 +561,6 @@ export function App() {
       },
       run: {
         activeToolTabId,
-        lastRunLabel: runStatusText ? "recently" : "never",
-        lastRunStatusText: runStatusText,
-        lastRunCompletedAtMs: Date.now(),
-        lastRunStatusPrefix: runStatusText,
-        lastRunStatusState: runStatusState,
-        lastRunDefinitionHash: activeSource ? hashString(activeSource) : null,
-        runStatus: { text: runStatusText, state: runStatusState },
         tabs: runTabs.map((tab) => ({
           id: tab.id,
           sheetId: tab.sheetId,
@@ -630,8 +594,6 @@ export function App() {
     setCompilingSheetIds(new Set());
     setCompileVersion(session.compilation.compileVersion);
     setSelection(session.compilation.selection ?? { kind: "none" });
-    setRunStatusText(session.run.runStatus.text ?? session.run.lastRunStatusText ?? "");
-    setRunStatusState(session.run.runStatus.state ?? "");
     setRunTabs(session.run.tabs.map((tab) => {
       const sheetId = tab.sheetId;
       const implSheetId = tab.implSheetId;
@@ -679,7 +641,7 @@ export function App() {
       if (!payload.loadableSession) throw new Error("Shared session response is missing session data");
       await loadSession(payload.loadableSession);
     } catch (error) {
-      setRunStatus(error instanceof Error ? error.message : String(error), "error");
+      console.error(error);
     }
   }
 
@@ -695,25 +657,22 @@ export function App() {
       const url = new URL(window.location.href);
       url.searchParams.set("session", payload.shareId);
       await navigator.clipboard?.writeText(url.toString());
-      setRunStatus("Share link copied", "ok");
     } catch (error) {
-      setRunStatus(error instanceof Error ? error.message : String(error), "error");
+      console.error(error);
     }
   }
 
   async function clearCodeCache(): Promise<void> {
     try {
       await fetch("/api/cache", { method: "DELETE" });
-      setRunStatus("Code cache cleared", "ok");
-      if (activeSourceTabId) scheduleCompilation(activeSourceTabId, activeSource, { quietStatus: true });
+      if (activeSourceTabId) scheduleCompilation(activeSourceTabId, activeSource);
     } catch (error) {
-      setRunStatus(error instanceof Error ? error.message : String(error), "error");
+      console.error(error);
     }
   }
 
   async function copySessionId(): Promise<void> {
     const id = sessionStorageId();
-    setRunStatus("Session ID copied", "ok");
     try {
       await navigator.clipboard?.writeText(id);
     } catch {
@@ -729,7 +688,6 @@ export function App() {
     const active = next.tabs.find((tab) => tab.id === next.activeTabId) ?? null;
     setImplementation(active?.implementation ?? scaffoldForSource(active?.source ?? ""));
     editorRef.current?.setValue(active?.source ?? "");
-    setRunStatus("Resetting workspace", "");
     try {
       const persisted = await replaceBackendProject(next);
       setSourceTabs(persisted.tabs);
@@ -738,10 +696,9 @@ export function App() {
       setImplementation(persistedActive?.implementation ?? scaffoldForSource(persistedActive?.source ?? ""));
       editorRef.current?.setValue(persistedActive?.source ?? "");
       await writeUserState(persisted);
-      setRunStatus("Workspace reset", "ok");
     } catch (error) {
       await writeUserState(next);
-      setRunStatus(error instanceof Error ? `Workspace reset locally: ${error.message}` : "Workspace reset locally", "error");
+      console.error(error);
     }
   }
 
@@ -873,8 +830,6 @@ export function App() {
             compiling: activeCompiling,
             runTabs,
             activeTabId: activeToolTabId,
-            runStatusText,
-            runStatusState,
             onSelectTab: setActiveToolTabId,
             onCloseRunTab: closeRunTab,
             onRunInput: sendRunInput,
