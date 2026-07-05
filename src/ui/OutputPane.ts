@@ -12,6 +12,7 @@ type OutputPaneProps = {
   implementation: string;
   implementationFocusRange: EditorRange | null;
   compileSessionId: string | null;
+  updatingExistingCode: boolean;
   compiling: boolean;
   runTabs: RunTab[];
   activeTabId: string | null;
@@ -46,6 +47,7 @@ export function OutputPane(props: OutputPaneProps) {
       }),
       e(AgentView, {
         compileSessionId: props.compileSessionId,
+        updatingExistingCode: props.updatingExistingCode,
         active: props.activeTabId === "agent-view",
       }),
       props.runTabs.map((tab) =>

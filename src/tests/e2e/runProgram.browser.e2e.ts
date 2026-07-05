@@ -459,7 +459,7 @@ describe("run program browser flow", () => {
         const sessionId = `pending-session-${++pendingSessionCounter}`;
         latestPendingSessionId = sessionId;
         pendingSessions.set(sessionId, {
-          events: [{ kind: "implementation", code: implementation }],
+          events: [],
           done: false,
         });
         await route.fulfill({
@@ -470,6 +470,7 @@ describe("run program browser flow", () => {
         await compileCanFinish;
         const session = pendingSessions.get(sessionId);
         if (session) {
+          session.events.push({ kind: "implementation", code: implementation });
           session.events.push({ kind: "done", code: implementation });
           session.done = true;
         }
@@ -512,11 +513,12 @@ describe("run program browser flow", () => {
       await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("true");
       await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Claude is still compiling this sheet.");
       await page.locator("[data-tool-tab-id='agent-view']").click();
-      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Implementation updated");
-      await expect.poll(async () => page.locator("[data-agent-status='running']").textContent()).toContain("Waiting for Claude to finish");
+      await expect.poll(async () => page.locator("[data-agent-status='running']").textContent())
+        .toContain("Agent is updating code for your file");
       await expect.poll(async () => page.locator("[data-agent-status='running'] .agent-spinner").count()).toBe(1);
 
       releaseCompile();
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Implementation updated");
       await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
       await expect.poll(async () => await runWidget.getAttribute("title")).toBe("Run main");
     } finally {
