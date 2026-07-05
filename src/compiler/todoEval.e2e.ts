@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   compileFresh,
@@ -23,6 +24,8 @@ type TodoEvalResult = {
   finalLines: number;
   finalChars: number;
   done: boolean;
+  semanticChecks: Record<string, boolean>;
+  semanticOk: boolean;
   artifactPath?: string;
   timeline: Array<{
     elapsedMs: number;
@@ -96,6 +99,9 @@ describeIfEnabled("todo ReactApp compile eval", () => {
 
       expect(result.done).toBe(true);
       expect(result.finalLines).toBeGreaterThan(0);
+      expect(result.semanticChecks).toEqual(
+        Object.fromEntries(Object.keys(result.semanticChecks).map((key) => [key, true])),
+      );
     },
     numericEnv("TODO_EVAL_TIMEOUT_MS", 900_000),
   );
@@ -106,6 +112,7 @@ function summarize(events: TimedEvent[], elapsedMs: number): TodoEvalResult {
   const finalCode = done?.kind === "done" ? done.code : "";
   const toolEvents = events.filter((event) => event.kind === "agent-tool");
   const toolCommands = new Map<string, number>();
+  const semanticChecks = todoSemanticChecks(finalCode);
 
   for (const event of toolEvents) {
     if (event.kind !== "agent-tool") continue;
@@ -125,6 +132,8 @@ function summarize(events: TimedEvent[], elapsedMs: number): TodoEvalResult {
     finalLines: lineCount(finalCode),
     finalChars: finalCode.length,
     done: done !== undefined,
+    semanticChecks,
+    semanticOk: Object.values(semanticChecks).every(Boolean),
     ...(artifactPath === undefined ? {} : { artifactPath }),
     timeline: events.map((event) => {
       if (event.kind === "agent-tool") {
@@ -169,6 +178,41 @@ function toolCommand(input: unknown): string {
   }
   const command = (input as { command?: unknown }).command;
   return typeof command === "string" && command.length > 0 ? command : "unknown";
+}
+
+function todoSemanticChecks(source: string): Record<string, boolean> {
+  const lower = source.toLowerCase();
+  return {
+    hasValidTypeScriptSyntax: typeScriptSyntaxErrors(source).length === 0,
+    hasTodoListClass: /\bclass\s+TodoList\b/.test(source),
+    hasAllSeedItems: [
+      "Buy groceries",
+      "Return clothes",
+      "Flight to Maldives",
+      "Wedding",
+    ].every((item) => source.includes(item)),
+    hasTodayAndTomorrowLabels: source.includes("Today") && source.includes("Tomorrow"),
+    hasEmptyState: lower.includes("empty") ||
+      lower.includes("!isinprogress && !isdone") ||
+      (lower.includes("transparent") && lower.includes("border")),
+    hasInProgressState: /in[- ]?progress/.test(lower),
+    hasDoneState: lower.includes("done"),
+    hasOrangeInProgressVisual: /orange|#f59|#f97316|#fb923c|rgb\(\s*249/.test(lower),
+    hasGreenDoneVisual: /green|#16a34a|#22c55e|rgb\(\s*22/.test(lower),
+    hasCheckMark: source.includes("✓") || source.includes("\\u2713"),
+    hasDatePickerBehavior: /input[^\n]+date|popover|calendar|selectedDate|selectDate|datePicker/i.test(source),
+  };
+}
+
+function typeScriptSyntaxErrors(source: string): string[] {
+  const file = ts.createSourceFile("todo-eval.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  return file.parseDiagnostics.map((diagnostic) => {
+    const position = diagnostic.start === undefined
+      ? "unknown"
+      : file.getLineAndCharacterOfPosition(diagnostic.start);
+    const location = position === "unknown" ? "unknown" : `${position.line + 1}:${position.character + 1}`;
+    return `${location} ${ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")}`;
+  });
 }
 
 function lineCount(source: string): number {
