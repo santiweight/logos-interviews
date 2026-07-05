@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import ts from "typescript";
 import type {
   ContentBlockParam,
@@ -11,6 +10,7 @@ import {
   parse,
   type CodeSheet,
 } from "./codeSheet";
+import { anthropicClient } from "./anthropicKeyService";
 
 export type SingleFileAgentInput = {
   previousSheet?: CodeSheet;
@@ -215,15 +215,14 @@ export async function* runClaudeSingleFileAgent(
 export function buildSingleFileAgentPrompt(input: SingleFileAgentInput): string {
   const compilerContext = buildWholeSheetCompletionPrompt(parse(input.nextSheet), input.currentCode);
 
-  return `You are compiling one Logos worksheet into one TypeScript implementation file.
+  return `You are updating a TypeScript implementation file to match a Logos worksheet.
 
 You can only edit the single in-memory file already provided below. There is no filesystem and no read-file tool.
-Your goal is the correct final implementation for the current worksheet, not making the smallest possible edit.
-The current worksheet is the sole source of truth. Previous worksheets and the current implementation file are only baselines for reuse.
-Before finishing, remove obsolete functions, classes, helpers, imports, UI elements, stories, workflows, runnables, and behavior that are no longer implied by the current worksheet.
+The current implementation file is a scaffold generated from the worksheet. It already has the correct structure — imports, type declarations, class and function signatures, and runnable definitions — but contains incomplete fragments (pseudo-code, natural-language descriptions, or stub bodies) that you need to replace with working TypeScript.
+Your job is to complete the incomplete parts of the scaffold while preserving its existing structure. Do not rewrite code that is already correct.
+The current worksheet is the sole source of truth. Remove obsolete functions, classes, helpers, imports, UI elements, stories, workflows, runnables, and behavior that are no longer implied by the current worksheet.
 Do not keep previous behavior merely because it still compiles. Preserve old code only when it directly implements a declaration, behavior, or dependency still present in the current worksheet.
 Prefer a sequence of focused, reviewable edits over one giant replacement. Use replace_range or replace_text to update imports, types, helpers, components, and runnable bodies in separate coherent chunks.
-This applies to the first round of codegen too: the current implementation file is a scaffold to edit incrementally, not a reason to replace the entire file in one tool call.
 Do not use replace_file as the default. Use replace_file only when the current file is mostly obsolete or when deleting stale code is clearer than incremental edits.
 Call finish only when the whole implementation matches the current worksheet.
 
@@ -281,15 +280,6 @@ export function singleFileAgentTypeScriptSyntaxErrors(source: CodeSheet): string
       const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
       return `${position.line + 1}:${position.character + 1} ${message}`;
     });
-}
-
-function anthropicClient(apiKey: string | undefined): Anthropic {
-  const resolvedApiKey = apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!resolvedApiKey) {
-    throw new Error("ANTHROPIC_API_KEY is required for Claude single-file agent");
-  }
-
-  return new Anthropic({ apiKey: resolvedApiKey });
 }
 
 function applySingleFileTool(
