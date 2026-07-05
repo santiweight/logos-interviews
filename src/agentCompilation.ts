@@ -370,6 +370,11 @@ export class AgentCompilationFramework {
 
           if (event.kind === "text" && emitProgress && options.streamTokens !== false) {
             yield { kind: "llm-token", hash: sheetHash, token: event.text };
+            yield { kind: "agent-text", text: event.text };
+          }
+
+          if (event.kind === "tool" && emitProgress) {
+            yield { kind: "agent-tool", name: event.name, input: event.input };
           }
 
           if (event.kind === "file" || event.kind === "done") {

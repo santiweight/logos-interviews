@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { anthropicClient } from "./anthropicKeyService";
 
 export type AnthropicCompleteOptions = {
   model?: string;
@@ -36,15 +36,6 @@ export async function* streamCompleteWithAnthropic(
       yield event.delta.text;
     }
   }
-}
-
-function anthropicClient(apiKey: string | undefined): Anthropic {
-  const resolvedApiKey = apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!resolvedApiKey) {
-    throw new Error("ANTHROPIC_API_KEY is required for Anthropic completion");
-  }
-
-  return new Anthropic({ apiKey: resolvedApiKey });
 }
 
 function messageParams(prompt: string, model: string | undefined) {
