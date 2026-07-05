@@ -148,35 +148,45 @@ describe("run program browser flow", () => {
       let compileRequests = 0;
       let runStartRequests = 0;
 
-      await page.route("**/api/compile", async (route) => {
+      const compileSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let sessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
         expect(route.request().method()).toBe("POST");
-        const body = route.request().postDataJSON() as { sheet?: string };
-        if (body.sheet?.trim() === source) {
+        const body = route.request().postDataJSON() as { sheetId?: string; source?: string };
+        if (body.source?.trim() === source) {
           compileRequests += 1;
         }
-        const responseImplementation = body.sheet?.trim() === source ? implementation : body.sheet ?? "";
+        const responseImplementation = body.source?.trim() === source ? implementation : body.source ?? "";
+        const sessionId = `test-session-${++sessionCounter}`;
+        compileSessions.set(sessionId, {
+          events: [
+            { kind: "implementation", code: responseImplementation },
+            { kind: "done", code: responseImplementation },
+          ],
+          done: true,
+        });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: [
-            JSON.stringify({
-              kind: "implementation",
-              implementation: responseImplementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            JSON.stringify({
-              kind: "readiness",
-              definitions: [{ name: "main", ready: true, blockingDependencies: [] }],
-            }),
-            JSON.stringify({
-              kind: "compiled",
-              implementation: responseImplementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            "",
-          ].join("\n"),
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = compileSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: (session.events.at(-1) as any)?.code ?? "" }),
         });
       });
 
@@ -311,35 +321,39 @@ describe("run program browser flow", () => {
 }`;
       let runStartRequests = 0;
 
-      await page.route("**/api/compile", async (route) => {
+      const staleReadinessSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let staleSessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
+        const sessionId = `stale-session-${++staleSessionCounter}`;
+        staleReadinessSessions.set(sessionId, {
+          events: [
+            { kind: "implementation", code: implementation },
+            { kind: "done", code: implementation },
+          ],
+          done: true,
+        });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: [
-            JSON.stringify({
-              kind: "implementation",
-              implementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            JSON.stringify({
-              kind: "readiness",
-              definitions: [{
-                name: "main",
-                ready: false,
-                reason: "implementation",
-                dependencies: [],
-                blockingDependencies: [],
-              }],
-            }),
-            JSON.stringify({
-              kind: "compiled",
-              implementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            "",
-          ].join("\n"),
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = staleReadinessSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation }),
         });
       });
 
@@ -402,21 +416,40 @@ describe("run program browser flow", () => {
         releaseCompile = resolve;
       });
 
-      await page.route("**/api/compile", async (route) => {
+      const pendingSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let pendingSessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
         compileRequests += 1;
-        await compileCanFinish;
+        const sessionId = `pending-session-${++pendingSessionCounter}`;
+        pendingSessions.set(sessionId, { events: [], done: false });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: [
-            JSON.stringify({
-              kind: "compiled",
-              implementation,
-              completedSnippets: 1,
-              totalSnippets: 1,
-            }),
-            "",
-          ].join("\n"),
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+        await compileCanFinish;
+        const session = pendingSessions.get(sessionId);
+        if (session) {
+          session.events.push({ kind: "done", code: implementation });
+          session.done = true;
+        }
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = pendingSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: session.done ? implementation : "" }),
         });
       });
 
@@ -513,12 +546,34 @@ describe("run program browser flow", () => {
           body: JSON.stringify({ ok: true, cleared: 3 }),
         });
       });
-      await page.route("**/api/compile", async (route) => {
+      const cacheSessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let cacheSessionCounter = 0;
+
+      await page.route("**/api/v2/compile", async (route) => {
         compileRequestsAfterClear += 1;
+        const sessionId = `cache-session-${++cacheSessionCounter}`;
+        cacheSessions.set(sessionId, { events: [{ kind: "done", code: "" }], done: true });
         await route.fulfill({
           status: 200,
-          contentType: "application/x-ndjson",
-          body: `${JSON.stringify({ kind: "compiled", implementation: "", completedSnippets: 0, totalSnippets: 0 })}\n`,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = cacheSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: "" }),
         });
       });
 

@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
+import { AgentView } from "./ui/AgentView";
 import {
   Badge,
   Box,
@@ -47,7 +48,9 @@ import {
   implementationMatchForIncompleteSnippet,
   implementationMatchForTarget,
   implementationTargetAtLine,
+  buildCompilationIR,
   parse,
+  renderImplementation,
   runnables,
   selectionContextAtPosition,
   splitNaturalReplacement,
@@ -113,7 +116,12 @@ type SourceTabState = {
   activeTabId: string | null;
 };
 
-type CompilationMode = "parallel" | "parallel-methods" | "sequential" | "agentic" | "agentic-methods";
+type CompilationMode =
+  | "parallel"
+  | "parallel-methods"
+  | "sequential"
+  | "agentic"
+  | "agentic-methods";
 
 type AppSettings = {
   compilationStrategy: CompilationMode;
@@ -145,7 +153,12 @@ type RunChunk = {
 
 type RunStatus =
   | { state: "running" }
-  | { state: "exited"; code: number | null; signal: string | null; error?: string };
+  | {
+      state: "exited";
+      code: number | null;
+      signal: string | null;
+      error?: string;
+    };
 
 export type LoadableSessionSourceTab = SourceTab;
 
@@ -160,7 +173,13 @@ export type LoadableSessionRunTab = {
 
 export type LoadableSessionSelection =
   | { kind: "snippet"; hash: string | null }
-  | { kind: "definition"; line: number; name: string; targetKind: "function" | "class" | "field" | "method"; className?: string }
+  | {
+      kind: "definition";
+      line: number;
+      name: string;
+      targetKind: "function" | "class" | "field" | "method";
+      className?: string;
+    }
   | { kind: "whole-file" }
   | { kind: "none" };
 
@@ -214,7 +233,8 @@ window.__logosReact = React;
 window.__logosReactCreateRoot = createRoot;
 window.__logosRadix = logosRadix;
 
-type InteractiveRunStartResponse = InteractiveTerminalRunStartResponse | InteractiveReactRunStartResponse;
+type InteractiveRunStartResponse =
+  InteractiveTerminalRunStartResponse | InteractiveReactRunStartResponse;
 
 type InteractiveTerminalRunStartResponse = {
   ok: true;
@@ -251,7 +271,8 @@ const sourceTabStateKey = "source-tabs-v2";
 const workspaceIdStorageKey = "logos-interviews-workspace-id";
 const appSettingsStorageKey = "logos-interviews-settings-v1";
 const sidebarCollapsedStorageKey = "logos-interviews-sidebar-collapsed";
-const experimentalCompilationStrategiesStorageKey = "logos.experimentalCompilationStrategies";
+const experimentalCompilationStrategiesStorageKey =
+  "logos.experimentalCompilationStrategies";
 const staleDefaultProjectIdSets = [
   [
     "starter-arithmetic",
@@ -265,17 +286,8 @@ const staleDefaultProjectIdSets = [
     "rate-limiter",
     "cart-promotions",
   ],
-  [
-    "add-multiply",
-    "natural-snippet",
-    "ascii-fractal",
-    "formula-spreadsheet",
-  ],
-  [
-    "starter-arithmetic",
-    "ascii-fractal",
-    "formula-spreadsheet",
-  ],
+  ["add-multiply", "natural-snippet", "ascii-fractal", "formula-spreadsheet"],
+  ["starter-arithmetic", "ascii-fractal", "formula-spreadsheet"],
 ];
 const legacySampleLabels = new Map<string, string[]>([
   ["annotated-maze", ["Annotated maze"]],
@@ -346,7 +358,9 @@ const articleLoadByPageId = new Map<AppPageId, Promise<ParsedArticle>>();
 function renderAppNav(): string {
   return appPages
     .map(
-      (page) => `<button class="app-nav-item" type="button" data-app-page="${page.id}" aria-current="${page.id === activePageId ? "page" : "false"}" aria-label="${escapeHtml(pageDisplayTitle(page))}" title="${escapeHtml(pageDisplayTitle(page))}">
+      (
+        page,
+      ) => `<button class="app-nav-item" type="button" data-app-page="${page.id}" aria-current="${page.id === activePageId ? "page" : "false"}" aria-label="${escapeHtml(pageDisplayTitle(page))}" title="${escapeHtml(pageDisplayTitle(page))}">
         <span>${escapeHtml(pageDisplayTitle(page))}</span>
       </button>`,
     )
@@ -357,7 +371,9 @@ function renderArticlePages(): string {
   return appPages
     .filter((page) => page.id !== "editor")
     .map(
-      (page) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-label="${escapeHtml(pageDisplayTitle(page))}"${page.id === activePageId ? "" : " hidden"}>
+      (
+        page,
+      ) => `<section id="${page.id}-page" class="app-page info-page${page.id === activePageId ? " active" : ""}" data-page-id="${page.id}" aria-label="${escapeHtml(pageDisplayTitle(page))}"${page.id === activePageId ? "" : " hidden"}>
         <div class="info-page-inner">
           <article class="article-content" data-article-content="${page.id}" data-article-path="${escapeHtml(page.articlePath ?? "")}">
             <p class="article-loading">Loading...</p>
@@ -369,13 +385,17 @@ function renderArticlePages(): string {
 }
 
 function pageDisplayTitle(page: AppPage): string {
-  return page.title ??
+  return (
+    page.title ??
     articleByPageId.get(page.id)?.title ??
     articlePathFallbackTitle(page.articlePath) ??
-    page.id;
+    page.id
+  );
 }
 
-function articlePathFallbackTitle(articlePath: string | undefined): string | null {
+function articlePathFallbackTitle(
+  articlePath: string | undefined,
+): string | null {
   if (!articlePath) {
     return null;
   }
@@ -385,15 +405,22 @@ function articlePathFallbackTitle(articlePath: string | undefined): string | nul
     return null;
   }
 
-  return filename.split("-").map((part) => {
-    return part.length === 0 ? part : `${part[0].toUpperCase()}${part.slice(1)}`;
-  }).join(" ");
+  return filename
+    .split("-")
+    .map((part) => {
+      return part.length === 0
+        ? part
+        : `${part[0].toUpperCase()}${part.slice(1)}`;
+    })
+    .join(" ");
 }
 
 function refreshPageTitles(): void {
   for (const page of appPages) {
     const title = pageDisplayTitle(page);
-    const button = appNav.querySelector<HTMLButtonElement>(`[data-app-page="${page.id}"]`);
+    const button = appNav.querySelector<HTMLButtonElement>(
+      `[data-app-page="${page.id}"]`,
+    );
     const label = button?.querySelector("span");
     if (label) {
       label.textContent = title;
@@ -401,22 +428,29 @@ function refreshPageTitles(): void {
     button?.setAttribute("title", title);
     button?.setAttribute("aria-label", title);
 
-    const section = document.querySelector<HTMLElement>(`[data-page-id="${page.id}"]`);
+    const section = document.querySelector<HTMLElement>(
+      `[data-page-id="${page.id}"]`,
+    );
     if (section) {
       section.setAttribute("aria-label", title);
     }
   }
 }
 
-function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
+function renderFeedbackControls(
+  panel: string,
+  options: { includeShare?: boolean } = {},
+): string {
   return `
     <div class="feedback-controls" data-feedback-controls="${panel}" aria-label="${panel} feedback">
       <span class="feedback-receipt" data-feedback-receipt aria-live="polite"></span>
-      ${options.includeShare
-        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share session link" title="Share link">
+      ${
+        options.includeShare
+          ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share session link" title="Share link">
           ${shareIcon}
         </button>`
-        : ""}
+          : ""
+      }
       ${options.includeShare ? `<span class="feedback-separator" aria-hidden="true"></span>` : ""}
       <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="up" aria-label="Mark ${panel} helpful" title="Helpful">
         ${thumbUpIcon}
@@ -447,7 +481,9 @@ function renderSampleGroup(group: SampleGroup): string {
   `;
 }
 
-function createTemplateGroups(groups: Array<{ label: string; sampleIds: string[] }>): SampleGroup[] {
+function createTemplateGroups(
+  groups: Array<{ label: string; sampleIds: string[] }>,
+): SampleGroup[] {
   const sampleById = new Map(samples.map((sample) => [sample.id, sample]));
   const groupedSampleIds = new Set<string>();
 
@@ -468,7 +504,9 @@ function createTemplateGroups(groups: Array<{ label: string; sampleIds: string[]
     }),
   }));
 
-  const ungroupedSample = samples.find((sample) => !groupedSampleIds.has(sample.id));
+  const ungroupedSample = samples.find(
+    (sample) => !groupedSampleIds.has(sample.id),
+  );
   if (ungroupedSample) {
     throw new Error(`Ungrouped template sample: ${ungroupedSample.id}`);
   }
@@ -587,12 +625,24 @@ app.innerHTML = `
                     aria-controls="implementation-view-panel"
                   >Implementation</button>
                 </div>
+                <div class="source-tab-shell output-tab-shell">
+                  <button
+                    id="agent-view-tab"
+                    class="source-tab output-tab"
+                    type="button"
+                    role="tab"
+                    data-tool-tab-id="agent-view"
+                    aria-selected="false"
+                    aria-controls="agent-view-panel"
+                  >Agent View</button>
+                </div>
               </div>
               <span id="run-status" class="status"></span>
               ${renderFeedbackControls("output")}
             </div>
             <div id="tool-panels" class="tool-panels">
               <div id="implementation-view-panel" class="output implementation-output tab-panel active" role="tabpanel" aria-labelledby="implementation-view-tab" aria-live="polite"></div>
+              <div id="agent-view-panel" class="output agent-view-output tab-panel" role="tabpanel" aria-labelledby="agent-view-tab" aria-live="polite"></div>
               <pre id="run-placeholder" class="output run-placeholder tab-panel" aria-live="polite">Runs will appear here.</pre>
             </div>
           </section>
@@ -605,32 +655,56 @@ app.innerHTML = `
 
 const appFrame = requiredQuery<HTMLElement>(".app-frame");
 const appNav = requiredQuery<HTMLElement>("#app-nav");
-const sidebarCollapseButton = requiredQuery<HTMLButtonElement>("#sidebar-collapse-button");
+const sidebarCollapseButton = requiredQuery<HTMLButtonElement>(
+  "#sidebar-collapse-button",
+);
 const shell = requiredQuery<HTMLElement>("#shell");
 const sourceTabsEl = requiredQuery<HTMLDivElement>("#source-tabs");
 const codePane = requiredQuery<HTMLElement>("#code-pane");
 const editorEl = requiredQuery<HTMLDivElement>("#editor");
-const codeRunResizeHandle = requiredQuery<HTMLDivElement>("#code-run-resize-handle");
+const codeRunResizeHandle = requiredQuery<HTMLDivElement>(
+  "#code-run-resize-handle",
+);
 const outputPane = requiredQuery<HTMLElement>("#output-pane");
 const toolTabsList = requiredQuery<HTMLDivElement>("#tool-tabs-list");
 const toolPanels = requiredQuery<HTMLDivElement>("#tool-panels");
-const implementationViewTab = requiredQuery<HTMLButtonElement>("#implementation-view-tab");
-const implementationViewPanel = requiredQuery<HTMLDivElement>("#implementation-view-panel");
+const implementationViewTab = requiredQuery<HTMLButtonElement>(
+  "#implementation-view-tab",
+);
+const implementationViewPanel = requiredQuery<HTMLDivElement>(
+  "#implementation-view-panel",
+);
+const agentViewTab = requiredQuery<HTMLButtonElement>("#agent-view-tab");
+const agentViewPanel = requiredQuery<HTMLDivElement>("#agent-view-panel");
 const runPlaceholder = requiredQuery<HTMLPreElement>("#run-placeholder");
 const snippetPanel = requiredQuery<HTMLElement>("#snippet-panel");
 const snippetPanelHeader = requiredQuery<HTMLElement>("#snippet-panel-header");
-const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handle");
-const snippetStatusIndicator = requiredQuery<HTMLSpanElement>("#snippet-status-indicator");
+const snippetResizeHandle = requiredQuery<HTMLDivElement>(
+  "#snippet-resize-handle",
+);
+const snippetStatusIndicator = requiredQuery<HTMLSpanElement>(
+  "#snippet-status-indicator",
+);
 const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
 const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
 const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
-const copySessionIdButton = requiredQuery<HTMLButtonElement>("#copy-session-id-button");
-const clearCodeCacheButton = requiredQuery<HTMLButtonElement>("#clear-code-cache-button");
-const resetWorkspaceButton = requiredQuery<HTMLButtonElement>("#reset-workspace-button");
-const compilationStrategySelect = requiredQuery<HTMLSelectElement>("#compilation-strategy-select");
-const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button");
+const copySessionIdButton = requiredQuery<HTMLButtonElement>(
+  "#copy-session-id-button",
+);
+const clearCodeCacheButton = requiredQuery<HTMLButtonElement>(
+  "#clear-code-cache-button",
+);
+const resetWorkspaceButton = requiredQuery<HTMLButtonElement>(
+  "#reset-workspace-button",
+);
+const compilationStrategySelect = requiredQuery<HTMLSelectElement>(
+  "#compilation-strategy-select",
+);
+const scratchFileButton = requiredQuery<HTMLButtonElement>(
+  "#scratch-file-button",
+);
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
@@ -668,6 +742,7 @@ let snippetPopupCloseTimer: ReturnType<typeof setTimeout> | null = null;
 let latestImplementationSource = seedImplementation;
 let runTabs: RunTab[] = [];
 const implementationToolTabId = "implementation-view";
+const agentViewToolTabId = "agent-view";
 let activeToolTabId: ToolTabId = implementationToolTabId;
 let activeCompilationUnsubscribe: (() => void) | null = null;
 let draggedSourceTabId: string | null = null;
@@ -789,7 +864,11 @@ class CompilationService {
     }
 
     const state = this.states.get(sheetId);
-    if (state && this.stateMatchesRequest(state, request) && state.status === "compiled") {
+    if (
+      state &&
+      this.stateMatchesRequest(state, request) &&
+      state.status === "compiled"
+    ) {
       return Promise.resolve(state);
     }
 
@@ -822,7 +901,8 @@ class CompilationService {
   }
 
   subscribe(sheetId: SheetId, listener: CompilationListener): () => void {
-    const listeners = this.listeners.get(sheetId) ?? new Set<CompilationListener>();
+    const listeners =
+      this.listeners.get(sheetId) ?? new Set<CompilationListener>();
     listeners.add(listener);
     this.listeners.set(sheetId, listeners);
     listener(this.getCompilationState(sheetId));
@@ -839,7 +919,12 @@ class CompilationService {
     this.abortJob(sheetId);
     this.states.delete(sheetId);
     const request = compilationRequestForSheet(sheetId);
-    this.emit(sheetId, request === null ? emptyCompilationState(sheetId) : initialCompilationState(request, "idle"));
+    this.emit(
+      sheetId,
+      request === null
+        ? emptyCompilationState(sheetId)
+        : initialCompilationState(request, "idle"),
+    );
     renderSourceTabs();
   }
 
@@ -851,7 +936,12 @@ class CompilationService {
 
     for (const sheetId of this.listeners.keys()) {
       const request = compilationRequestForSheet(sheetId);
-      this.emit(sheetId, request === null ? emptyCompilationState(sheetId) : initialCompilationState(request, "idle"));
+      this.emit(
+        sheetId,
+        request === null
+          ? emptyCompilationState(sheetId)
+          : initialCompilationState(request, "idle"),
+      );
     }
     renderSourceTabs();
   }
@@ -872,12 +962,23 @@ class CompilationService {
     this.setState(initialCompilationState(request, "compiling"));
   }
 
-  private async runCompile(request: CompilationRequest, controller: AbortController): Promise<CompilationState> {
+  private async runCompile(
+    request: CompilationRequest,
+    controller: AbortController,
+  ): Promise<CompilationState> {
     let state = this.getCompilationState(request.sheetId);
-    sessionCapture.track("compile_stream_started", { sheetId: request.sheetId, source: request.source }, false);
+    sessionCapture.track(
+      "compile_stream_started",
+      { sheetId: request.sheetId, source: request.source },
+      false,
+    );
 
     try {
-      for await (const event of compileViaDevApi(request.source, controller.signal, request.strategy)) {
+      for await (const event of compileViaPolling(
+        request.sheetId,
+        request.source,
+        controller.signal,
+      )) {
         if (!this.jobStillCurrent(request, controller)) {
           return this.getCompilationState(request.sheetId);
         }
@@ -891,10 +992,17 @@ class CompilationService {
         this.setState(state);
       }
 
-      sessionCapture.track("compile_stream_completed", { sheetId: request.sheetId }, true);
+      sessionCapture.track(
+        "compile_stream_completed",
+        { sheetId: request.sheetId },
+        true,
+      );
       return state;
     } catch (error) {
-      if (controller.signal.aborted || !this.jobStillCurrent(request, controller)) {
+      if (
+        controller.signal.aborted ||
+        !this.jobStillCurrent(request, controller)
+      ) {
         return this.getCompilationState(request.sheetId);
       }
 
@@ -927,19 +1035,36 @@ class CompilationService {
     }
   }
 
-  private jobStillCurrent(request: CompilationRequest, controller: AbortController): boolean {
+  private jobStillCurrent(
+    request: CompilationRequest,
+    controller: AbortController,
+  ): boolean {
     const job = this.jobs.get(request.sheetId);
-    return job?.controller === controller && this.requestMatches(job.request, request);
+    return (
+      job?.controller === controller &&
+      this.requestMatches(job.request, request)
+    );
   }
 
-  private stateMatchesRequest(state: CompilationState, request: CompilationRequest): boolean {
-    return state.sourceFingerprint === request.sourceFingerprint && state.strategy === request.strategy;
+  private stateMatchesRequest(
+    state: CompilationState,
+    request: CompilationRequest,
+  ): boolean {
+    return (
+      state.sourceFingerprint === request.sourceFingerprint &&
+      state.strategy === request.strategy
+    );
   }
 
-  private requestMatches(left: CompilationRequest, right: CompilationRequest): boolean {
-    return left.sheetId === right.sheetId &&
+  private requestMatches(
+    left: CompilationRequest,
+    right: CompilationRequest,
+  ): boolean {
+    return (
+      left.sheetId === right.sheetId &&
       left.sourceFingerprint === right.sourceFingerprint &&
-      left.strategy === right.strategy;
+      left.strategy === right.strategy
+    );
   }
 
   private setState(state: CompilationState): void {
@@ -968,7 +1093,10 @@ function getCompilationState(sheetId: SheetId): CompilationState {
   return compilationService.getCompilationState(sheetId);
 }
 
-function subscribeToCompilation(sheetId: SheetId, listener: CompilationListener): () => void {
+function subscribeToCompilation(
+  sheetId: SheetId,
+  listener: CompilationListener,
+): () => void {
   return compilationService.subscribe(sheetId, listener);
 }
 
@@ -1010,7 +1138,11 @@ monaco.editor.defineTheme("interview-light", {
     { token: "naturalSnippet", foreground: "b74716" },
     { token: "naturalSnippet.delimiter", foreground: "9b4d2e" },
     { token: "comment.logos-typescript", foreground: "6f7f68" },
-    { token: "keyword.logos-typescript", foreground: "7a5268", fontStyle: "normal" },
+    {
+      token: "keyword.logos-typescript",
+      foreground: "7a5268",
+      fontStyle: "normal",
+    },
     { token: "identifier.logos-typescript", foreground: "20242a" },
     { token: "number.logos-typescript", foreground: "3f6f6a" },
     { token: "number.hex.logos-typescript", foreground: "3f6f6a" },
@@ -1024,7 +1156,10 @@ monaco.editor.defineTheme("interview-light", {
     { token: "type.logos-typescript", foreground: "3f6f6a" },
     { token: "predefined.logos-typescript", foreground: "4f677c" },
     { token: "naturalSnippet.logos-typescript", foreground: "b74716" },
-    { token: "naturalSnippet.delimiter.logos-typescript", foreground: "9b4d2e" },
+    {
+      token: "naturalSnippet.delimiter.logos-typescript",
+      foreground: "9b4d2e",
+    },
   ],
   colors: {
     "editor.background": "#fbfaf6",
@@ -1060,8 +1195,7 @@ const editor = monaco.editor.create(editorEl, {
   language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
-  fontFamily:
-    '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
   fontSize: 14,
   lineHeight: 22,
   minimap: { enabled: false },
@@ -1092,8 +1226,7 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
-  fontFamily:
-    '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
   fontSize: 14,
   lineHeight: 22,
   minimap: { enabled: false },
@@ -1126,8 +1259,7 @@ const implementationViewEditor = monaco.editor.create(implementationViewPanel, {
   language: logosTypeScriptLanguageId,
   theme: "interview-light",
   automaticLayout: true,
-  fontFamily:
-    '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+  fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
   fontSize: 14,
   lineHeight: 22,
   minimap: { enabled: false },
@@ -1195,7 +1327,10 @@ editor.onMouseMove((event) => {
     return;
   }
 
-  const target = exactIncompleteSnippetForPosition(position.lineNumber, position.column);
+  const target = exactIncompleteSnippetForPosition(
+    position.lineNumber,
+    position.column,
+  );
   if (!target || target.kind === "natural") {
     hideSnippetPopup();
     return;
@@ -1213,12 +1348,22 @@ editor.onMouseLeave(() => {
 editor.onMouseDown((event) => {
   const lineNumber = event.target.position?.lineNumber;
 
-  if (lineNumber !== undefined && event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+  if (
+    lineNumber !== undefined &&
+    event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN
+  ) {
     const column = event.target.position?.column ?? 1;
-    const context = selectionContextAtPosition(editor.getValue(), lineNumber, column);
+    const context = selectionContextAtPosition(
+      editor.getValue(),
+      lineNumber,
+      column,
+    );
 
     if (context.kind === "snippet") {
-      const incompleteSnippet = exactIncompleteSnippetForPosition(lineNumber, column);
+      const incompleteSnippet = exactIncompleteSnippetForPosition(
+        lineNumber,
+        column,
+      );
       if (incompleteSnippet) {
         selectIncompleteSnippet(incompleteSnippet.hash, "editor_click");
         if (incompleteSnippet.kind === "natural") {
@@ -1233,7 +1378,10 @@ editor.onMouseDown((event) => {
           revealImplementationForSnippet(incompleteSnippet);
         } else {
           snippetPopupPinned = true;
-          showSnippetPopupForTarget(incompleteSnippet, editorMouseClientPoint(event));
+          showSnippetPopupForTarget(
+            incompleteSnippet,
+            editorMouseClientPoint(event),
+          );
         }
         clearEditorSelectionAt(lineNumber, column);
         return;
@@ -1286,7 +1434,11 @@ editor.onMouseDown((event) => {
 
 resetWorkspaceButton.addEventListener("click", () => {
   workspaceMenu.open = false;
-  if (!window.confirm("Reset workspace? This removes your open files and restores the default templates.")) {
+  if (
+    !window.confirm(
+      "Reset workspace? This removes your open files and restores the default templates.",
+    )
+  ) {
     sessionCapture.track("reset_workspace_cancelled", undefined, true);
     return;
   }
@@ -1313,7 +1465,8 @@ app.addEventListener("click", (event) => {
     focusTerminalInput(runPanel.dataset.runPanelId ?? "");
   }
 
-  const shareButton = target?.closest<HTMLButtonElement>("[data-share-session]") ?? null;
+  const shareButton =
+    target?.closest<HTMLButtonElement>("[data-share-session]") ?? null;
   if (shareButton) {
     void shareCurrentSessionFromButton(shareButton);
     return;
@@ -1334,7 +1487,9 @@ toolTabsList.addEventListener("click", (event) => {
     return;
   }
 
-  const closeButton = target.closest<HTMLButtonElement>("[data-close-run-tab-id]");
+  const closeButton = target.closest<HTMLButtonElement>(
+    "[data-close-run-tab-id]",
+  );
   if (closeButton) {
     closeRunTab(closeButton.dataset.closeRunTabId ?? "");
     return;
@@ -1343,7 +1498,11 @@ toolTabsList.addEventListener("click", (event) => {
   const runTabButton = target.closest<HTMLButtonElement>("[data-run-tab-id]");
   if (runTabButton) {
     setActiveTab(runTabButton.dataset.runTabId ?? null);
-    sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
+    sessionCapture.track(
+      "tab_changed",
+      { tab: "run", runTabId: runTabButton.dataset.runTabId },
+      true,
+    );
     return;
   }
 
@@ -1374,7 +1533,11 @@ appNav.addEventListener("click", (event) => {
 });
 sidebarCollapseButton.addEventListener("click", () => {
   setSidebarCollapsed(!sidebarCollapsed, { persist: true });
-  sessionCapture.track("sidebar_toggled", { collapsed: sidebarCollapsed }, true);
+  sessionCapture.track(
+    "sidebar_toggled",
+    { collapsed: sidebarCollapsed },
+    true,
+  );
 });
 codeRunResizeHandle.addEventListener("pointerdown", (event) => {
   beginCodeRunResize(event);
@@ -1432,7 +1595,8 @@ document.addEventListener("keydown", (event) => {
   const openMenu = sampleMenu.open ? sampleMenu : workspaceMenu;
   const restoreFocus =
     activeElement instanceof Element &&
-    (sampleMenu.contains(activeElement) || workspaceMenu.contains(activeElement));
+    (sampleMenu.contains(activeElement) ||
+      workspaceMenu.contains(activeElement));
 
   event.preventDefault();
   closeOpenMenus();
@@ -1483,7 +1647,10 @@ sourceTabsEl.addEventListener("click", (event) => {
 });
 sourceTabsEl.addEventListener("dragstart", (event) => {
   const target = event.target;
-  if (!(target instanceof HTMLElement) || target.closest("[data-close-tab-id]")) {
+  if (
+    !(target instanceof HTMLElement) ||
+    target.closest("[data-close-tab-id]")
+  ) {
     event.preventDefault();
     return;
   }
@@ -1524,7 +1691,8 @@ sourceTabsEl.addEventListener("dragover", (event) => {
   renderSourceTabDropSlot(slot);
 });
 sourceTabsEl.addEventListener("dragleave", (event) => {
-  const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+  const relatedTarget =
+    event.relatedTarget instanceof Node ? event.relatedTarget : null;
   if (!relatedTarget || !sourceTabsEl.contains(relatedTarget)) {
     clearSourceTabDropMarker();
   }
@@ -1562,7 +1730,11 @@ function openProject(sampleId: string): void {
 
   sampleMenu.open = false;
   openProjectTab(sample);
-  sessionCapture.track("project_opened", { sampleId: sample.id, sampleLabel: sample.label }, true);
+  sessionCapture.track(
+    "project_opened",
+    { sampleId: sample.id, sampleLabel: sample.label },
+    true,
+  );
 }
 
 function closeOpenMenus(): void {
@@ -1588,13 +1760,19 @@ function closeMenusOnOutsidePointerDown(event: PointerEvent): void {
   closeOpenMenus();
 }
 
-function setSidebarCollapsed(collapsed: boolean, options: { persist?: boolean } = {}): void {
+function setSidebarCollapsed(
+  collapsed: boolean,
+  options: { persist?: boolean } = {},
+): void {
   sidebarCollapsed = collapsed;
   appFrame.classList.toggle("sidebar-collapsed", collapsed);
 
   const action = collapsed ? "Expand sidebar" : "Collapse sidebar";
   sidebarCollapseButton.setAttribute("aria-label", action);
-  sidebarCollapseButton.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  sidebarCollapseButton.setAttribute(
+    "aria-expanded",
+    collapsed ? "false" : "true",
+  );
   sidebarCollapseButton.title = action;
 
   if (options.persist) {
@@ -1609,21 +1787,33 @@ function setSidebarCollapsed(collapsed: boolean, options: { persist?: boolean } 
   });
 }
 
-function setActivePage(pageId: AppPageId, options: { updateHash?: boolean } = {}): void {
+function setActivePage(
+  pageId: AppPageId,
+  options: { updateHash?: boolean } = {},
+): void {
   activePageId = pageId;
   document.querySelectorAll<HTMLElement>("[data-page-id]").forEach((page) => {
     const active = page.dataset.pageId === pageId;
     page.hidden = !active;
     page.classList.toggle("active", active);
   });
-  appNav.querySelectorAll<HTMLButtonElement>("[data-app-page]").forEach((button) => {
-    button.setAttribute("aria-current", button.dataset.appPage === pageId ? "page" : "false");
-  });
+  appNav
+    .querySelectorAll<HTMLButtonElement>("[data-app-page]")
+    .forEach((button) => {
+      button.setAttribute(
+        "aria-current",
+        button.dataset.appPage === pageId ? "page" : "false",
+      );
+    });
 
   if (options.updateHash) {
     const nextHash = pageId === "editor" ? "" : `#${pageId}`;
     if (window.location.hash !== nextHash) {
-      history.pushState(null, "", `${window.location.pathname}${window.location.search}${nextHash}`);
+      history.pushState(
+        null,
+        "",
+        `${window.location.pathname}${window.location.search}${nextHash}`,
+      );
     }
   }
 
@@ -1645,7 +1835,9 @@ async function loadArticlePage(pageId: AppPageId): Promise<void> {
     return;
   }
 
-  const target = document.querySelector<HTMLElement>(`[data-article-content="${pageId}"]`);
+  const target = document.querySelector<HTMLElement>(
+    `[data-article-content="${pageId}"]`,
+  );
   if (!target) {
     return;
   }
@@ -1709,20 +1901,24 @@ async function fetchArticle(page: AppPage): Promise<ParsedArticle> {
 }
 
 async function loadArticleTitles(): Promise<void> {
-  await Promise.all(appPages
-    .filter((page) => page.articlePath)
-    .map(async (page) => {
-      try {
-        await loadArticle(page);
-        refreshPageTitles();
-      } catch {
-        // The article view displays load errors when the user opens the page.
-      }
-    }));
+  await Promise.all(
+    appPages
+      .filter((page) => page.articlePath)
+      .map(async (page) => {
+        try {
+          await loadArticle(page);
+          refreshPageTitles();
+        } catch {
+          // The article view displays load errors when the user opens the page.
+        }
+      }),
+  );
 }
 
 function markdownToHtml(source: string): string {
-  const lines = parseFrontmatter(source).body.replaceAll("\r\n", "\n").split("\n");
+  const lines = parseFrontmatter(source)
+    .body.replaceAll("\r\n", "\n")
+    .split("\n");
   const html: string[] = [];
   const paragraph: string[] = [];
   let listTag: "ul" | "ol" | null = null;
@@ -1761,7 +1957,9 @@ function markdownToHtml(source: string): string {
   for (const line of lines) {
     if (codeFence) {
       if (isClosingCodeFence(line, codeFence)) {
-        html.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        html.push(
+          `<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`,
+        );
         codeLines = [];
         codeFence = null;
       } else {
@@ -1832,7 +2030,10 @@ function parseOpeningCodeFence(line: string): MarkdownCodeFence | null {
   }
 
   const sequence = match[1];
-  return { marker: sequence[0] as MarkdownCodeFence["marker"], length: sequence.length };
+  return {
+    marker: sequence[0] as MarkdownCodeFence["marker"],
+    length: sequence.length,
+  };
 }
 
 function isClosingCodeFence(line: string, fence: MarkdownCodeFence): boolean {
@@ -1844,7 +2045,10 @@ function isClosingCodeFence(line: string, fence: MarkdownCodeFence): boolean {
   return [...trimmed].every((char) => char === fence.marker);
 }
 
-function parseFrontmatter(source: string): { attributes: Map<string, string>; body: string } {
+function parseFrontmatter(source: string): {
+  attributes: Map<string, string>;
+  body: string;
+} {
   const normalized = source.replaceAll("\r\n", "\n");
   if (!normalized.startsWith("---\n")) {
     return { attributes: new Map(), body: source };
@@ -1856,10 +2060,14 @@ function parseFrontmatter(source: string): { attributes: Map<string, string>; bo
   }
 
   const rawAttributes = normalized.slice(4, endIndex).split("\n");
-  const bodyStart = normalized.startsWith("\n", endIndex + 4) ? endIndex + 5 : endIndex + 4;
+  const bodyStart = normalized.startsWith("\n", endIndex + 4)
+    ? endIndex + 5
+    : endIndex + 4;
   const attributes = new Map<string, string>();
   for (const line of rawAttributes) {
-    const match = /^([A-Za-z0-9_-]+):\s*(?:"([^"]*)"|'([^']*)'|(.+?))\s*$/.exec(line);
+    const match = /^([A-Za-z0-9_-]+):\s*(?:"([^"]*)"|'([^']*)'|(.+?))\s*$/.exec(
+      line,
+    );
     if (match) {
       attributes.set(match[1], match[2] ?? match[3] ?? match[4] ?? "");
     }
@@ -1870,9 +2078,12 @@ function parseFrontmatter(source: string): { attributes: Map<string, string>; bo
 
 function inlineMarkdown(source: string): string {
   return escapeHtml(source)
-    .replace(/\[([^\]]+)]\(([^)]+)\)/g, (_match, label: string, href: string) => {
-      return `<a href="${safeArticleHref(href)}">${label}</a>`;
-    })
+    .replace(
+      /\[([^\]]+)]\(([^)]+)\)/g,
+      (_match, label: string, href: string) => {
+        return `<a href="${safeArticleHref(href)}">${label}</a>`;
+      },
+    )
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>");
@@ -1892,7 +2103,9 @@ function pageIdFromHash(hash: string): AppPageId | null {
 }
 
 function pageIdFromValue(value: string | undefined): AppPageId | null {
-  return appPages.some((page) => page.id === value) ? (value as AppPageId) : null;
+  return appPages.some((page) => page.id === value)
+    ? (value as AppPageId)
+    : null;
 }
 
 renderSourceTabs();
@@ -1935,10 +2148,12 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   setActiveTab(runTab.id);
   renderRunTabs();
 
-  const result = await startInteractiveRunViaDevApi(source, runnable).catch((error: unknown) => ({
-    ok: false as const,
-    error: error instanceof Error ? error.message : String(error),
-  }));
+  const result = await startInteractiveRunViaDevApi(source, runnable).catch(
+    (error: unknown) => ({
+      ok: false as const,
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  );
   const currentTab = runTabById(runTab.id);
   if (!currentTab) {
     return;
@@ -1949,7 +2164,12 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
     lastRunDefinitionHash = definitionHash(source);
     setLastRunStatus("Error", "error");
     currentTab.terminalText = result.error;
-    currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
+    currentTab.status = {
+      state: "exited",
+      code: null,
+      signal: null,
+      error: result.error,
+    };
     renderRunTab(currentTab);
     updateRunStaleness();
     return;
@@ -2007,10 +2227,14 @@ async function resetWorkspace(): Promise<void> {
 
     runStatus.textContent = "Workspace reset";
     runStatus.dataset.state = "ok";
-    sessionCapture.track("reset_workspace_completed", {
-      openProjects: sourceTabs.map((tab) => tab.projectId),
-      activeProjectId: activeSourceTab()?.projectId ?? null,
-    }, true);
+    sessionCapture.track(
+      "reset_workspace_completed",
+      {
+        openProjects: sourceTabs.map((tab) => tab.projectId),
+        activeProjectId: activeSourceTab()?.projectId ?? null,
+      },
+      true,
+    );
   } catch (error) {
     runStatus.textContent = "Workspace reset failed";
     runStatus.dataset.state = "error";
@@ -2033,7 +2257,11 @@ async function clearCodeCache(): Promise<void> {
 
   try {
     const response = await fetch("/api/cache", { method: "DELETE" });
-    const payload = (await response.json()) as { ok?: boolean; cleared?: unknown; error?: string };
+    const payload = (await response.json()) as {
+      ok?: boolean;
+      cleared?: unknown;
+      error?: string;
+    };
     if (!response.ok || payload.ok !== true) {
       throw new Error(payload.error ?? "Could not clear code cache");
     }
@@ -2048,9 +2276,13 @@ async function clearCodeCache(): Promise<void> {
     scheduleCompilation(0);
     runStatus.textContent = "Code cache cleared";
     runStatus.dataset.state = "ok";
-    sessionCapture.track("code_cache_clear_completed", {
-      cleared: typeof payload.cleared === "number" ? payload.cleared : null,
-    }, true);
+    sessionCapture.track(
+      "code_cache_clear_completed",
+      {
+        cleared: typeof payload.cleared === "number" ? payload.cleared : null,
+      },
+      true,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     runStatus.textContent = "Code cache clear failed";
@@ -2068,7 +2300,11 @@ async function copyCurrentSessionId(): Promise<void> {
     await copyTextToClipboard(sessionCapture.sessionId);
     runStatus.textContent = "Session ID copied";
     runStatus.dataset.state = "ok";
-    sessionCapture.track("session_id_copied", { sessionId: sessionCapture.sessionId }, true);
+    sessionCapture.track(
+      "session_id_copied",
+      { sessionId: sessionCapture.sessionId },
+      true,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     runStatus.textContent = "Session ID copy failed";
@@ -2092,10 +2328,14 @@ function setCompilationStrategy(strategy: CompilationMode): void {
   saveAppSettings(appSettings);
   compilationStrategySelect.value = strategy;
   invalidateAllCompilations();
-  sessionCapture.track("setting_changed", {
-    setting: "compilationStrategy",
-    strategy,
-  }, true);
+  sessionCapture.track(
+    "setting_changed",
+    {
+      setting: "compilationStrategy",
+      strategy,
+    },
+    true,
+  );
   scheduleCompilation(0);
 }
 
@@ -2178,11 +2418,18 @@ function openScratchFile(): void {
   renderSourceTabs();
   scheduleSaveSourceTabs();
   updateActiveProjectMenuItem();
-  sessionCapture.track("scratch_file_opened", { tabId: tab.id, title: tab.title }, true);
+  sessionCapture.track(
+    "scratch_file_opened",
+    { tabId: tab.id, title: tab.title },
+    true,
+  );
 }
 
 function activateSourceTab(tabId: string): void {
-  if (tabId === activeSourceTabId || !sourceTabs.some((tab) => tab.id === tabId)) {
+  if (
+    tabId === activeSourceTabId ||
+    !sourceTabs.some((tab) => tab.id === tabId)
+  ) {
     return;
   }
 
@@ -2199,13 +2446,19 @@ function sourceTabDropSlot(clientX: number): SourceTabDropSlot | null {
     return null;
   }
 
-  const draggedIndex = sourceTabs.findIndex((tab) => tab.id === draggedSourceTabId);
+  const draggedIndex = sourceTabs.findIndex(
+    (tab) => tab.id === draggedSourceTabId,
+  );
   if (draggedIndex === -1) {
     return null;
   }
 
-  const shells = Array.from(sourceTabsEl.querySelectorAll<HTMLElement>("[data-source-tab-shell-id]"));
-  const remainingShells = shells.filter((shell) => shell.dataset.sourceTabShellId !== draggedSourceTabId);
+  const shells = Array.from(
+    sourceTabsEl.querySelectorAll<HTMLElement>("[data-source-tab-shell-id]"),
+  );
+  const remainingShells = shells.filter(
+    (shell) => shell.dataset.sourceTabShellId !== draggedSourceTabId,
+  );
   if (remainingShells.length === 0) {
     return null;
   }
@@ -2232,12 +2485,20 @@ function sourceTabDropSlot(clientX: number): SourceTabDropSlot | null {
   };
 }
 
-function sourceTabDropMarkerX(remainingShells: HTMLElement[], insertIndex: number): number {
+function sourceTabDropMarkerX(
+  remainingShells: HTMLElement[],
+  insertIndex: number,
+): number {
   const stripRect = sourceTabsEl.getBoundingClientRect();
-  const boundedIndex = Math.min(Math.max(insertIndex, 0), remainingShells.length);
-  const markerClientX = boundedIndex === remainingShells.length
-    ? remainingShells[remainingShells.length - 1].getBoundingClientRect().right
-    : remainingShells[boundedIndex].getBoundingClientRect().left;
+  const boundedIndex = Math.min(
+    Math.max(insertIndex, 0),
+    remainingShells.length,
+  );
+  const markerClientX =
+    boundedIndex === remainingShells.length
+      ? remainingShells[remainingShells.length - 1].getBoundingClientRect()
+          .right
+      : remainingShells[boundedIndex].getBoundingClientRect().left;
   return snapCssPixel(markerClientX - stripRect.left + sourceTabsEl.scrollLeft);
 }
 
@@ -2253,18 +2514,30 @@ function devicePixelWidth(pixelCount: number): string {
 
 function renderSourceTabSeparators(tabList: HTMLElement = sourceTabsEl): void {
   tabList.style.setProperty("--tab-hairline-width", devicePixelWidth(1));
-  tabList.closest<HTMLElement>(".source-tabs-bar")?.style.setProperty("--tab-hairline-width", devicePixelWidth(1));
-  tabList.querySelectorAll("[data-source-tab-separator]").forEach((separator) => {
-    separator.remove();
-  });
+  tabList
+    .closest<HTMLElement>(".source-tabs-bar")
+    ?.style.setProperty("--tab-hairline-width", devicePixelWidth(1));
+  tabList
+    .querySelectorAll("[data-source-tab-separator]")
+    .forEach((separator) => {
+      separator.remove();
+    });
 
-  const shells = Array.from(tabList.querySelectorAll<HTMLElement>(".source-tab-shell"));
+  const shells = Array.from(
+    tabList.querySelectorAll<HTMLElement>(".source-tab-shell"),
+  );
   if (shells.length < 2) {
     const onlyShell = shells[0];
     if (onlyShell) {
       const stripRect = tabList.getBoundingClientRect();
       const fragment = document.createDocumentFragment();
-      fragment.append(sourceTabSeparatorAt(onlyShell.getBoundingClientRect().right, stripRect, tabList));
+      fragment.append(
+        sourceTabSeparatorAt(
+          onlyShell.getBoundingClientRect().right,
+          stripRect,
+          tabList,
+        ),
+      );
       tabList.append(fragment);
     }
     return;
@@ -2275,16 +2548,32 @@ function renderSourceTabSeparators(tabList: HTMLElement = sourceTabsEl): void {
 
   for (let index = 1; index < shells.length; index += 1) {
     const shell = shells[index];
-    fragment.append(sourceTabSeparatorAt(shell.getBoundingClientRect().left, stripRect, tabList));
+    fragment.append(
+      sourceTabSeparatorAt(
+        shell.getBoundingClientRect().left,
+        stripRect,
+        tabList,
+      ),
+    );
   }
 
   const lastShell = shells[shells.length - 1];
-  fragment.append(sourceTabSeparatorAt(lastShell.getBoundingClientRect().right, stripRect, tabList));
+  fragment.append(
+    sourceTabSeparatorAt(
+      lastShell.getBoundingClientRect().right,
+      stripRect,
+      tabList,
+    ),
+  );
 
   tabList.append(fragment);
 }
 
-function sourceTabSeparatorAt(clientX: number, stripRect: DOMRect, tabList: HTMLElement): HTMLSpanElement {
+function sourceTabSeparatorAt(
+  clientX: number,
+  stripRect: DOMRect,
+  tabList: HTMLElement,
+): HTMLSpanElement {
   const separator = document.createElement("span");
   separator.className = "source-tab-separator";
   separator.dataset.sourceTabSeparator = "true";
@@ -2302,8 +2591,14 @@ function renderSourceTabDropSlot(slot: SourceTabDropSlot): void {
 
   sourceTabsEl.classList.add("source-tabs-drop-active");
   sourceTabsEl.style.setProperty("--source-tab-drop-x", `${slot.markerX}px`);
-  sourceTabsEl.style.setProperty("--source-tab-drop-width", devicePixelWidth(2));
-  sourceTabsEl.style.setProperty("--source-tab-drop-offset", `-${devicePixelWidth(1)}`);
+  sourceTabsEl.style.setProperty(
+    "--source-tab-drop-width",
+    devicePixelWidth(2),
+  );
+  sourceTabsEl.style.setProperty(
+    "--source-tab-drop-offset",
+    `-${devicePixelWidth(1)}`,
+  );
 }
 
 function clearSourceTabDropMarker(): void {
@@ -2314,7 +2609,9 @@ function clearSourceTabDropMarker(): void {
 }
 
 function transparentDragImage(): HTMLElement {
-  const existing = document.querySelector<HTMLElement>("[data-transparent-drag-image]");
+  const existing = document.querySelector<HTMLElement>(
+    "[data-transparent-drag-image]",
+  );
   if (existing) {
     return existing;
   }
@@ -2341,29 +2638,43 @@ function moveSourceTab(draggedTabId: string, insertIndex: number): void {
   syncActiveSourceTab();
   const nextTabs = [...sourceTabs];
   const [draggedTab] = nextTabs.splice(draggedIndex, 1);
-  const boundedInsertIndex = Math.min(Math.max(insertIndex, 0), nextTabs.length);
+  const boundedInsertIndex = Math.min(
+    Math.max(insertIndex, 0),
+    nextTabs.length,
+  );
   nextTabs.splice(boundedInsertIndex, 0, draggedTab);
-  if (sameStringList(nextTabs.map((tab) => tab.id), sourceTabs.map((tab) => tab.id))) {
+  if (
+    sameStringList(
+      nextTabs.map((tab) => tab.id),
+      sourceTabs.map((tab) => tab.id),
+    )
+  ) {
     return;
   }
 
   sourceTabs = nextTabs;
   renderSourceTabs();
   scheduleSaveSourceTabs();
-  sessionCapture.track("source_tab_moved", {
-    tabId: draggedTabId,
-    fromIndex: draggedIndex,
-    toIndex: boundedInsertIndex,
-  }, true);
+  sessionCapture.track(
+    "source_tab_moved",
+    {
+      tabId: draggedTabId,
+      fromIndex: draggedIndex,
+      toIndex: boundedInsertIndex,
+    },
+    true,
+  );
 }
 
 function clearSourceTabDragState(): void {
   draggedSourceTabId = null;
   sourceTabsEl.classList.remove("source-tabs-dragging");
   clearSourceTabDropMarker();
-  sourceTabsEl.querySelectorAll(".source-tab-shell-dragging").forEach((element) => {
-    element.classList.remove("source-tab-shell-dragging");
-  });
+  sourceTabsEl
+    .querySelectorAll(".source-tab-shell-dragging")
+    .forEach((element) => {
+      element.classList.remove("source-tab-shell-dragging");
+    });
 }
 
 function closeSourceTab(tabId: string): void {
@@ -2377,7 +2688,8 @@ function closeSourceTab(tabId: string): void {
   sourceTabs = sourceTabs.filter((tab) => tab.id !== tabId);
 
   if (activeSourceTabId === tabId) {
-    activeSourceTabId = sourceTabs[closingIndex]?.id ?? sourceTabs[closingIndex - 1]?.id ?? null;
+    activeSourceTabId =
+      sourceTabs[closingIndex]?.id ?? sourceTabs[closingIndex - 1]?.id ?? null;
     applyActiveSourceTab();
   } else if (!sourceTabs.some((tab) => tab.id === activeSourceTabId)) {
     activeSourceTabId = sourceTabs[0]?.id ?? null;
@@ -2392,13 +2704,15 @@ function closeSourceTab(tabId: string): void {
 function applyActiveSourceTab(): void {
   closeAllRunTabs();
   const active = activeSourceTab();
+  window.dispatchEvent(new Event("logos-active-sheet-changed"));
   applyingSourceTab = true;
   try {
     editor.setValue(active?.source ?? "");
   } finally {
     applyingSourceTab = false;
   }
-  latestImplementationSource = sheetImplementationCacheEntry(active?.id ?? "")?.implementation ?? "";
+  latestImplementationSource =
+    sheetImplementationCacheEntry(active?.id ?? "")?.implementation ?? "";
   renderImplementationView();
   lastRunLabel = "never";
   lastRunCompletedAtMs = null;
@@ -2442,19 +2756,28 @@ function setActiveCompilationSheet(sheetId: SheetId | null): void {
 
 function renderCompilationState(state: CompilationState): void {
   const active = activeSourceTab();
-  if (!active || active.id !== state.sheetId || sourceFingerprint(active.source) !== state.sourceFingerprint) {
+  if (
+    !active ||
+    active.id !== state.sheetId ||
+    sourceFingerprint(active.source) !== state.sourceFingerprint
+  ) {
     return;
   }
 
   compilationPending = state.status === "compiling";
   latestImplementationSource = visibleImplementationForState(state);
-  if (state.status === "compiled" && state.session.lastImplementation.trim().length > 0) {
+  if (
+    state.status === "compiled" &&
+    state.session.lastImplementation.trim().length > 0
+  ) {
     active.implementation = state.session.lastImplementation;
     scheduleSaveSourceTabs();
   }
   renderImplementationView();
   latestReadinessDefinitions = effectiveReadinessForState(state);
-  latestTypeCheckDiagnostics = state.diagnostics.map((diagnostic) => ({ ...diagnostic }));
+  latestTypeCheckDiagnostics = state.diagnostics.map((diagnostic) => ({
+    ...diagnostic,
+  }));
   snippetPreviewByHash = cloneSnippetPreviewMap(state.snippetPreviews);
   refreshIncompleteSnippets(active.source);
   updateTypeCheckMarkers(latestTypeCheckDiagnostics);
@@ -2480,7 +2803,10 @@ function clearVisibleCompilationState(): void {
   renderSnippetPanel();
 }
 
-function rememberActiveCompilationImplementation(implementation: string, source: string): void {
+function rememberActiveCompilationImplementation(
+  implementation: string,
+  source: string,
+): void {
   const active = activeSourceTab();
   if (!active) {
     return;
@@ -2508,7 +2834,9 @@ function rememberActiveCompilationImplementation(implementation: string, source:
   });
 }
 
-function sheetImplementationCacheEntry(sheetId: SheetId): SheetImplementationCacheEntry | null {
+function sheetImplementationCacheEntry(
+  sheetId: SheetId,
+): SheetImplementationCacheEntry | null {
   const tab = sourceTabs.find((item) => item.id === sheetId);
   if (!tab || !tab.implementation) {
     return null;
@@ -2523,13 +2851,17 @@ function sheetImplementationCacheEntry(sheetId: SheetId): SheetImplementationCac
 
 function visibleImplementationForState(state: CompilationState): string {
   if (state.status === "compiling") {
-    return state.session.draftImplementation ?? state.session.lastImplementation;
+    return (
+      state.session.draftImplementation ?? state.session.lastImplementation
+    );
   }
 
   return state.session.lastImplementation;
 }
 
-function effectiveReadinessForState(state: CompilationState): DefinitionReadiness[] {
+function effectiveReadinessForState(
+  state: CompilationState,
+): DefinitionReadiness[] {
   const implementation = visibleImplementationForState(state);
   if (implementation.trim().length === 0) {
     return state.readiness.map((definition) => ({ ...definition }));
@@ -2538,7 +2870,10 @@ function effectiveReadinessForState(state: CompilationState): DefinitionReadines
   return readinessForSource(state.source, implementation);
 }
 
-function completeCompileSession(session: CompileSession, implementation: string): CompileSession {
+function completeCompileSession(
+  session: CompileSession,
+  implementation: string,
+): CompileSession {
   return {
     ...session,
     lastImplementation: implementation,
@@ -2547,14 +2882,20 @@ function completeCompileSession(session: CompileSession, implementation: string)
   };
 }
 
-function draftCompileSession(session: CompileSession, implementation: string): CompileSession {
+function draftCompileSession(
+  session: CompileSession,
+  implementation: string,
+): CompileSession {
   return {
     ...session,
     draftImplementation: implementation,
   };
 }
 
-function streamingCompileSession(session: CompileSession, hash: string): CompileSession {
+function streamingCompileSession(
+  session: CompileSession,
+  hash: string,
+): CompileSession {
   return {
     ...session,
     streamHash: hash,
@@ -2562,7 +2903,9 @@ function streamingCompileSession(session: CompileSession, hash: string): Compile
   };
 }
 
-function compilationRequestForSheet(sheetId: SheetId): CompilationRequest | null {
+function compilationRequestForSheet(
+  sheetId: SheetId,
+): CompilationRequest | null {
   const tab = sourceTabs.find((item) => item.id === sheetId);
   if (!tab) {
     return null;
@@ -2582,7 +2925,9 @@ function initialCompilationState(
 ): CompilationState {
   const targets = incompleteSnippetTargetsForSource(request.source);
   const cached = sheetImplementationCacheEntry(request.sheetId);
-  const implementation = cached?.implementation ?? "";
+  const implementation =
+    cached?.implementation ??
+    renderImplementation(buildCompilationIR(parse(request.source)));
   return {
     sheetId: request.sheetId,
     source: request.source,
@@ -2645,7 +2990,10 @@ function reduceCompilationEvent(
     typeof event.hash === "string" &&
     event.snippet === state.source
   ) {
-    next = { ...next, session: streamingCompileSession(next.session, event.hash) };
+    next = {
+      ...next,
+      session: streamingCompileSession(next.session, event.hash),
+    };
   }
 
   if (
@@ -2654,13 +3002,25 @@ function reduceCompilationEvent(
     typeof event.implementation === "string" &&
     event.hash === next.session.streamHash
   ) {
-    next = { ...next, session: draftCompileSession(next.session, event.implementation) };
+    next = {
+      ...next,
+      session: draftCompileSession(next.session, event.implementation),
+    };
   }
 
   if (isCompleteImplementationEvent(event)) {
-    next = { ...next, session: completeCompileSession(next.session, event.implementation) };
-  } else if (event.kind === "implementation" && typeof event.implementation === "string") {
-    next = { ...next, session: draftCompileSession(next.session, event.implementation) };
+    next = {
+      ...next,
+      session: completeCompileSession(next.session, event.implementation),
+    };
+  } else if (
+    event.kind === "implementation" &&
+    typeof event.implementation === "string"
+  ) {
+    next = {
+      ...next,
+      session: draftCompileSession(next.session, event.implementation),
+    };
   }
 
   if (event.kind === "readiness" && Array.isArray(event.definitions)) {
@@ -2685,9 +3045,10 @@ function reduceCompilationEvent(
   }
 
   if (event.kind === "compiled") {
-    const completedImplementation = typeof event.implementation === "string"
-      ? event.implementation
-      : next.session.lastImplementation;
+    const completedImplementation =
+      typeof event.implementation === "string"
+        ? event.implementation
+        : next.session.lastImplementation;
     next = {
       ...next,
       status: "compiled",
@@ -2750,7 +3111,9 @@ function reduceSnippetPreviewEvent(
 function cloneSnippetPreviewMap(
   previews: Map<SnippetHash, SnippetPreviewState>,
 ): Map<SnippetHash, SnippetPreviewState> {
-  return new Map(Array.from(previews, ([hash, preview]) => [hash, { ...preview }]));
+  return new Map(
+    Array.from(previews, ([hash, preview]) => [hash, { ...preview }]),
+  );
 }
 
 function sourceFingerprint(source: string): SourceFingerprint {
@@ -2767,10 +3130,11 @@ function renderSourceTabs(): void {
     return;
   }
 
-  sourceTabsEl.innerHTML = sourceTabs.map((tab) => {
-    const selected = tab.id === activeSourceTabId;
-    const compiling = getCompilationState(tab.id).status === "compiling";
-    return `<div
+  sourceTabsEl.innerHTML = sourceTabs
+    .map((tab) => {
+      const selected = tab.id === activeSourceTabId;
+      const compiling = getCompilationState(tab.id).status === "compiling";
+      return `<div
       class="source-tab-shell"
       role="presentation"
       draggable="true"
@@ -2785,8 +3149,9 @@ function renderSourceTabs(): void {
       >
         ${escapeHtml(tab.title)}
       </button>
-      ${compiling
-        ? `<button
+      ${
+        compiling
+          ? `<button
           class="source-tab-compiling-indicator"
           type="button"
           tabindex="-1"
@@ -2794,7 +3159,8 @@ function renderSourceTabs(): void {
           aria-disabled="true"
           title="Compiling"
         ></button>`
-        : ""}
+          : ""
+      }
       <button
         class="source-tab-close"
         type="button"
@@ -2802,7 +3168,8 @@ function renderSourceTabs(): void {
         data-close-tab-id="${escapeHtml(tab.id)}"
       >&times;</button>
     </div>`;
-  }).join("");
+    })
+    .join("");
   renderSourceTabSeparators();
 }
 
@@ -2818,7 +3185,9 @@ function updateActiveProjectMenuItem(): void {
 }
 
 function nextScratchFileTitle(): string {
-  const scratchCount = sourceTabs.filter((tab) => tab.projectId === "scratch").length;
+  const scratchCount = sourceTabs.filter(
+    (tab) => tab.projectId === "scratch",
+  ).length;
   return scratchCount === 0 ? "Scratch" : `Scratch ${scratchCount + 1}`;
 }
 
@@ -2876,13 +3245,15 @@ function defaultSourceTabState(): SourceTabState {
   const tabs = defaultProjectIds.flatMap((projectId) => {
     const sample = samples.find((item) => item.id === projectId);
     return sample
-      ? [{
-          id: createSourceTabId(sample.id),
-          projectId: sample.id,
-          title: sample.label,
-          source: sample.code,
-          implementation: null,
-        }]
+      ? [
+          {
+            id: createSourceTabId(sample.id),
+            projectId: sample.id,
+            title: sample.label,
+            source: sample.code,
+            implementation: null,
+          },
+        ]
       : [];
   });
 
@@ -2899,7 +3270,7 @@ function normalizeSourceTabState(state: SourceTabState): SourceTabState {
 
   const activeTabId = state.tabs.some((tab) => tab.id === state.activeTabId)
     ? state.activeTabId
-    : state.tabs[0]?.id ?? null;
+    : (state.tabs[0]?.id ?? null);
 
   return {
     tabs: state.tabs.map((tab) => ({
@@ -2912,11 +3283,19 @@ function normalizeSourceTabState(state: SourceTabState): SourceTabState {
 
 function isStaleDefaultSourceTabState(state: SourceTabState): boolean {
   const projectIds = state.tabs.map((tab) => tab.projectId);
-  if (!staleDefaultProjectIdSets.some((staleProjectIds) => sameStringList(projectIds, staleProjectIds))) {
+  if (
+    !staleDefaultProjectIdSets.some((staleProjectIds) =>
+      sameStringList(projectIds, staleProjectIds),
+    )
+  ) {
     return false;
   }
 
-  if (projectIds.some((projectId) => samples.every((sample) => sample.id !== projectId))) {
+  if (
+    projectIds.some((projectId) =>
+      samples.every((sample) => sample.id !== projectId),
+    )
+  ) {
     return true;
   }
 
@@ -2924,14 +3303,18 @@ function isStaleDefaultSourceTabState(state: SourceTabState): boolean {
     const sample = samples.find((item) => item.id === tab.projectId);
     return (
       sample !== undefined &&
-      (tab.title === sample.label || (legacySampleLabels.get(sample.id) ?? []).includes(tab.title)) &&
+      (tab.title === sample.label ||
+        (legacySampleLabels.get(sample.id) ?? []).includes(tab.title)) &&
       tab.source === sample.code
     );
   });
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function isSourceTabState(value: unknown): value is SourceTabState {
@@ -2943,19 +3326,18 @@ function isSourceTabState(value: unknown): value is SourceTabState {
   return (
     Array.isArray(state.tabs) &&
     (typeof state.activeTabId === "string" || state.activeTabId === null) &&
-    state.tabs.every((tab) => (
-      typeof tab === "object" &&
-      tab !== null &&
-      typeof tab.id === "string" &&
-      typeof tab.projectId === "string" &&
-      typeof tab.title === "string" &&
-      typeof tab.source === "string" &&
-      (
-        tab.implementation === undefined ||
-        tab.implementation === null ||
-        typeof tab.implementation === "string"
-      )
-    ))
+    state.tabs.every(
+      (tab) =>
+        typeof tab === "object" &&
+        tab !== null &&
+        typeof tab.id === "string" &&
+        typeof tab.projectId === "string" &&
+        typeof tab.title === "string" &&
+        typeof tab.source === "string" &&
+        (tab.implementation === undefined ||
+          tab.implementation === null ||
+          typeof tab.implementation === "string"),
+    )
   );
 }
 
@@ -2973,7 +3355,8 @@ async function readUserState(): Promise<unknown> {
     const transaction = db.transaction(sourceTabStoreName, "readonly");
     const store = transaction.objectStore(sourceTabStoreName);
     const request = store.get(sourceTabStateKey);
-    request.onerror = () => reject(request.error ?? new Error("Could not read source tab state"));
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not read source tab state"));
     request.onsuccess = () => resolve(request.result);
     transaction.oncomplete = () => db.close();
     transaction.onerror = () => {
@@ -2989,7 +3372,8 @@ async function writeUserState(state: SourceTabState): Promise<void> {
     const transaction = db.transaction(sourceTabStoreName, "readwrite");
     const store = transaction.objectStore(sourceTabStoreName);
     const request = store.put(state, sourceTabStateKey);
-    request.onerror = () => reject(request.error ?? new Error("Could not save source tab state"));
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not save source tab state"));
     transaction.oncomplete = () => {
       db.close();
       resolve();
@@ -3007,14 +3391,17 @@ async function clearUserState(): Promise<void> {
     const transaction = db.transaction(sourceTabStoreName, "readwrite");
     const store = transaction.objectStore(sourceTabStoreName);
     const request = store.delete(sourceTabStateKey);
-    request.onerror = () => reject(request.error ?? new Error("Could not reset source tab state"));
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not reset source tab state"));
     transaction.oncomplete = () => {
       db.close();
       resolve();
     };
     transaction.onerror = () => {
       db.close();
-      reject(transaction.error ?? new Error("Could not reset source tab state"));
+      reject(
+        transaction.error ?? new Error("Could not reset source tab state"),
+      );
     };
   });
 }
@@ -3022,7 +3409,8 @@ async function clearUserState(): Promise<void> {
 function openUserDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(sourceTabDbName, sourceTabDbVersion);
-    request.onerror = () => reject(request.error ?? new Error("Could not open user database"));
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not open user database"));
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(sourceTabStoreName)) {
@@ -3033,7 +3421,10 @@ function openUserDatabase(): Promise<IDBDatabase> {
   });
 }
 
-function readinessForSource(source: string, implementation = ""): DefinitionReadiness[] {
+function readinessForSource(
+  source: string,
+  implementation = "",
+): DefinitionReadiness[] {
   try {
     const parsed = parse(source);
     if (implementation.trim().length === 0) {
@@ -3053,10 +3444,12 @@ function readinessForSource(source: string, implementation = ""): DefinitionRead
 function definitionHash(source: string): string {
   try {
     const parsed = parse(source);
-    return hashString(JSON.stringify({
-      definitions: definitionBlocks(parsed.source),
-      runnables: parsed.runnables,
-    }));
+    return hashString(
+      JSON.stringify({
+        definitions: definitionBlocks(parsed.source),
+        runnables: parsed.runnables,
+      }),
+    );
   } catch {
     return hashString(source);
   }
@@ -3098,9 +3491,16 @@ function hashString(source: string): string {
 
 function updateRunStaleness(source = editor.getValue()): void {
   lastRunLabel = lastRunAgeLabel();
-  const stale = lastRunDefinitionHash !== null && definitionHash(source) !== lastRunDefinitionHash;
+  const stale =
+    lastRunDefinitionHash !== null &&
+    definitionHash(source) !== lastRunDefinitionHash;
 
-  if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error" || runStatus.dataset.state === "stale")) {
+  if (
+    stale &&
+    (runStatus.dataset.state === "ok" ||
+      runStatus.dataset.state === "error" ||
+      runStatus.dataset.state === "stale")
+  ) {
     runStatus.textContent = "Changes available: re-run";
     runStatus.dataset.state = "stale";
     return;
@@ -3140,14 +3540,17 @@ function refreshIncompleteSnippets(source: string): void {
 
     return byLine;
   }, new Map<number, IncompleteSnippetTarget[]>());
-  incompleteSnippetByHash = new Map(targets.map((target) => [target.hash, target]));
+  incompleteSnippetByHash = new Map(
+    targets.map((target) => [target.hash, target]),
+  );
   snippetPreviewByHash = nextPreviewByHash;
   selectedDefinitionTarget = refreshedDefinitionTarget(source);
 
   if (
     selectedDefinitionTarget === null &&
     !selectedWholeFileImplementation &&
-    (selectedSnippetHash === null || !incompleteSnippetByHash.has(selectedSnippetHash))
+    (selectedSnippetHash === null ||
+      !incompleteSnippetByHash.has(selectedSnippetHash))
   ) {
     selectedSnippetHash = targets[0]?.hash ?? null;
   } else if (selectedDefinitionTarget !== null) {
@@ -3161,14 +3564,17 @@ function refreshIncompleteSnippets(source: string): void {
   renderSnippetPanel();
 }
 
-function incompleteSnippetTargetsForSource(source: string): IncompleteSnippetTarget[] {
+function incompleteSnippetTargetsForSource(
+  source: string,
+): IncompleteSnippetTarget[] {
   try {
     const parsed = parse(source);
     const compilerHashes = completionSnippetHashes(parsed);
     return parsed.incompleteSnippets.map((snippet, index) => {
       const range = snippetRange(source, snippet);
       return {
-        hash: compilerHashes[index] ?? hashCompletionInput(parsed, snippet.snippet),
+        hash:
+          compilerHashes[index] ?? hashCompletionInput(parsed, snippet.snippet),
         startLine: range.startLine,
         startColumn: range.startColumn,
         endLine: range.endLine,
@@ -3183,7 +3589,10 @@ function incompleteSnippetTargetsForSource(source: string): IncompleteSnippetTar
   }
 }
 
-function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "auto"): void {
+function selectIncompleteSnippet(
+  hash: SnippetHash,
+  source: "editor_click" | "auto",
+): void {
   if (!incompleteSnippetByHash.has(hash)) {
     return;
   }
@@ -3195,11 +3604,15 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
   renderSnippetPanel();
-  sessionCapture.track("incomplete_snippet_selected", {
-    hash,
-    source,
-    label: incompleteSnippetByHash.get(hash)?.label ?? null,
-  }, true);
+  sessionCapture.track(
+    "incomplete_snippet_selected",
+    {
+      hash,
+      source,
+      label: incompleteSnippetByHash.get(hash)?.label ?? null,
+    },
+    true,
+  );
 }
 
 function selectDefinitionImplementation(target: ImplementationTarget): void {
@@ -3210,11 +3623,15 @@ function selectDefinitionImplementation(target: ImplementationTarget): void {
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
   renderSnippetPanel();
-  sessionCapture.track("definition_implementation_selected", {
-    kind: target.kind,
-    name: target.name,
-    line: target.line,
-  }, true);
+  sessionCapture.track(
+    "definition_implementation_selected",
+    {
+      kind: target.kind,
+      name: target.name,
+      line: target.line,
+    },
+    true,
+  );
 }
 
 function selectWholeFileImplementation(lineNumber: number): void {
@@ -3225,17 +3642,26 @@ function selectWholeFileImplementation(lineNumber: number): void {
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
   renderSnippetPanel();
-  sessionCapture.track("whole_file_implementation_selected", {
-    line: lineNumber,
-  }, true);
+  sessionCapture.track(
+    "whole_file_implementation_selected",
+    {
+      line: lineNumber,
+    },
+    true,
+  );
 }
 
-function refreshedDefinitionTarget(source: string): ImplementationTarget | null {
+function refreshedDefinitionTarget(
+  source: string,
+): ImplementationTarget | null {
   if (selectedDefinitionTarget === null) {
     return null;
   }
 
-  const refreshed = implementationTargetForLine(selectedDefinitionTarget.line, source);
+  const refreshed = implementationTargetForLine(
+    selectedDefinitionTarget.line,
+    source,
+  );
   if (
     refreshed === null ||
     refreshed.kind !== selectedDefinitionTarget.kind ||
@@ -3249,27 +3675,30 @@ function refreshedDefinitionTarget(source: string): ImplementationTarget | null 
 }
 
 function updateIncompleteSnippetDecorations(): void {
-  const decorations = Array.from(incompleteSnippetByHash.values()).flatMap((target) => {
-    const decorationRanges = [
-      new monaco.Range(
-        target.startLine,
-        target.startColumn,
-        target.endLine,
-        target.endColumn,
-      ),
-    ];
+  const decorations = Array.from(incompleteSnippetByHash.values()).flatMap(
+    (target) => {
+      const decorationRanges = [
+        new monaco.Range(
+          target.startLine,
+          target.startColumn,
+          target.endLine,
+          target.endColumn,
+        ),
+      ];
 
-    return decorationRanges.map((range) => ({
-      range,
-      options: {
-        isWholeLine: false,
-        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-        className: undefined,
-        marginClassName: undefined,
-        inlineClassName: snippetInlineClassName(target),
-      },
-    }));
-  });
+      return decorationRanges.map((range) => ({
+        range,
+        options: {
+          isWholeLine: false,
+          stickiness:
+            monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+          className: undefined,
+          marginClassName: undefined,
+          inlineClassName: snippetInlineClassName(target),
+        },
+      }));
+    },
+  );
 
   incompleteSnippetDecorations = editor.deltaDecorations(
     incompleteSnippetDecorations,
@@ -3277,7 +3706,9 @@ function updateIncompleteSnippetDecorations(): void {
   );
 }
 
-function snippetInlineClassName(target: IncompleteSnippetTarget): string | undefined {
+function snippetInlineClassName(
+  target: IncompleteSnippetTarget,
+): string | undefined {
   const classes: string[] = [];
 
   if (target.hash === snippetGuideHash || target.hash === selectedSnippetHash) {
@@ -3287,30 +3718,35 @@ function snippetInlineClassName(target: IncompleteSnippetTarget): string | undef
   return classes.length === 0 ? undefined : classes.join(" ");
 }
 
-
-
 function updateSelectedDefinitionDecorations(): void {
   const target = selectedDefinitionTarget;
-  const range = target === null || selectedWholeFileImplementation
-    ? null
-    : sourceDefinitionHighlightRange(target);
+  const range =
+    target === null || selectedWholeFileImplementation
+      ? null
+      : sourceDefinitionHighlightRange(target);
   selectedDefinitionDecorations = editor.deltaDecorations(
     selectedDefinitionDecorations,
     range === null
       ? []
-      : [{
-          range,
-          options: {
-            isWholeLine: false,
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-            inlineClassName: "snippet-source-inline-selected",
-            marginClassName: undefined,
+      : [
+          {
+            range,
+            options: {
+              isWholeLine: false,
+              stickiness:
+                monaco.editor.TrackedRangeStickiness
+                  .NeverGrowsWhenTypingAtEdges,
+              inlineClassName: "snippet-source-inline-selected",
+              marginClassName: undefined,
+            },
           },
-        }],
+        ],
   );
 }
 
-function sourceDefinitionHighlightRange(target: ImplementationTarget): monaco.Range | null {
+function sourceDefinitionHighlightRange(
+  target: ImplementationTarget,
+): monaco.Range | null {
   const line = editor.getModel()?.getLineContent(target.line) ?? "";
   const startColumn = (line.match(/^\s*/)?.[0].length ?? 0) + 1;
   const highlightLength = firstLineLength(target.source.trimStart());
@@ -3327,28 +3763,34 @@ function sourceDefinitionHighlightRange(target: ImplementationTarget): monaco.Ra
 }
 
 function updateImplementationSnippetDecorations(): monaco.Range | null {
-  const snippetTarget = selectedSnippetHash === null
-    ? null
-    : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
-  const range = snippetTarget !== null
-    ? implementationRangeForSnippet(snippetTarget)
-    : selectedDefinitionTarget !== null
-    ? implementationRangeForDefinition(selectedDefinitionTarget)
-    : null;
+  const snippetTarget =
+    selectedSnippetHash === null
+      ? null
+      : (incompleteSnippetByHash.get(selectedSnippetHash) ?? null);
+  const range =
+    snippetTarget !== null
+      ? implementationRangeForSnippet(snippetTarget)
+      : selectedDefinitionTarget !== null
+        ? implementationRangeForDefinition(selectedDefinitionTarget)
+        : null;
 
   implementationSnippetDecorations = implementationViewEditor.deltaDecorations(
     implementationSnippetDecorations,
     range === null
       ? []
-      : [{
-          range,
-          options: {
-            isWholeLine: false,
-            stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-            className: "snippet-source-inline-selected",
-            inlineClassName: "snippet-source-inline-selected",
+      : [
+          {
+            range,
+            options: {
+              isWholeLine: false,
+              stickiness:
+                monaco.editor.TrackedRangeStickiness
+                  .NeverGrowsWhenTypingAtEdges,
+              className: "snippet-source-inline-selected",
+              inlineClassName: "snippet-source-inline-selected",
+            },
           },
-        }],
+        ],
   );
 
   return range;
@@ -3382,7 +3824,10 @@ function revealImplementationForDefinition(target: ImplementationTarget): void {
   navigateImplementationRangeIfNeeded(range, monaco.editor.ScrollType.Smooth);
 }
 
-function navigateImplementationRangeIfNeeded(range: monaco.Range, scrollType: monaco.editor.ScrollType): void {
+function navigateImplementationRangeIfNeeded(
+  range: monaco.Range,
+  scrollType: monaco.editor.ScrollType,
+): void {
   if (implementationRangeHasFullyVisibleLine(range)) {
     return;
   }
@@ -3398,21 +3843,36 @@ function implementationRangeHasFullyVisibleLine(range: monaco.Range): boolean {
   }
 
   const lineCount = model.getLineCount();
-  const startLineNumber = Math.max(1, Math.min(range.startLineNumber, lineCount));
+  const startLineNumber = Math.max(
+    1,
+    Math.min(range.startLineNumber, lineCount),
+  );
   const endLineNumber = Math.max(
     startLineNumber,
-    Math.min(range.endColumn <= 1 && range.endLineNumber > startLineNumber
-      ? range.endLineNumber - 1
-      : range.endLineNumber, lineCount),
+    Math.min(
+      range.endColumn <= 1 && range.endLineNumber > startLineNumber
+        ? range.endLineNumber - 1
+        : range.endLineNumber,
+      lineCount,
+    ),
   );
   const viewportTop = implementationViewEditor.getScrollTop();
-  const viewportBottom = viewportTop + implementationViewEditor.getLayoutInfo().height;
+  const viewportBottom =
+    viewportTop + implementationViewEditor.getLayoutInfo().height;
   const tolerance = 0.5;
 
-  for (let lineNumber = startLineNumber; lineNumber <= endLineNumber; lineNumber += 1) {
+  for (
+    let lineNumber = startLineNumber;
+    lineNumber <= endLineNumber;
+    lineNumber += 1
+  ) {
     const lineTop = implementationViewEditor.getTopForLineNumber(lineNumber);
-    const lineBottom = implementationViewEditor.getBottomForLineNumber(lineNumber);
-    if (lineTop >= viewportTop - tolerance && lineBottom <= viewportBottom + tolerance) {
+    const lineBottom =
+      implementationViewEditor.getBottomForLineNumber(lineNumber);
+    if (
+      lineTop >= viewportTop - tolerance &&
+      lineBottom <= viewportBottom + tolerance
+    ) {
       return true;
     }
   }
@@ -3420,7 +3880,9 @@ function implementationRangeHasFullyVisibleLine(range: monaco.Range): boolean {
   return false;
 }
 
-function implementationRangeForDefinition(target: ImplementationTarget): monaco.Range | null {
+function implementationRangeForDefinition(
+  target: ImplementationTarget,
+): monaco.Range | null {
   const implementation = implementationViewText();
   const match = implementationMatchForTarget(implementation, target);
   if (
@@ -3435,7 +3897,9 @@ function implementationRangeForDefinition(target: ImplementationTarget): monaco.
   return implementationOffsetRangeToMonacoRange(implementation, match.range);
 }
 
-function implementationRangeForSnippet(target: IncompleteSnippetTarget): monaco.Range | null {
+function implementationRangeForSnippet(
+  target: IncompleteSnippetTarget,
+): monaco.Range | null {
   const implementation = implementationViewText();
   const match = implementationMatchForIncompleteSnippet(
     editor.getValue(),
@@ -3480,8 +3944,14 @@ function renderSnippetPanel(): void {
   if (selectedDefinitionTarget !== null) {
     const text =
       directPreviewForDefinitionTarget(selectedDefinitionTarget) ??
-      implementationBlockForTarget(previewImplementationSource(), selectedDefinitionTarget) ??
-      implementationBlockForTarget(latestImplementationSource, selectedDefinitionTarget) ??
+      implementationBlockForTarget(
+        previewImplementationSource(),
+        selectedDefinitionTarget,
+      ) ??
+      implementationBlockForTarget(
+        latestImplementationSource,
+        selectedDefinitionTarget,
+      ) ??
       selectedDefinitionTarget.source;
 
     setSnippetPanelTitle(
@@ -3498,9 +3968,10 @@ function renderSnippetPanel(): void {
     return;
   }
 
-  const target = selectedSnippetHash === null
-    ? null
-    : incompleteSnippetByHash.get(selectedSnippetHash) ?? null;
+  const target =
+    selectedSnippetHash === null
+      ? null
+      : (incompleteSnippetByHash.get(selectedSnippetHash) ?? null);
 
   if (!target) {
     setSnippetPanelTitle(null, null);
@@ -3509,9 +3980,10 @@ function renderSnippetPanel(): void {
   }
 
   const preview = snippetPreviewByHash.get(target.hash);
-  const inferredImplementation = preview?.implementation === undefined || preview.implementation === null
-    ? inferredImplementationForSnippet(target)
-    : null;
+  const inferredImplementation =
+    preview?.implementation === undefined || preview.implementation === null
+      ? inferredImplementationForSnippet(target)
+      : null;
   const text =
     preview?.implementation ??
     (preview?.streamed.length ? preview.streamed : null) ??
@@ -3523,7 +3995,10 @@ function renderSnippetPanel(): void {
   setSnippetPreviewSource(text);
 }
 
-function showSnippetPopupForTarget(target: IncompleteSnippetTarget, point: { x: number; y: number }): void {
+function showSnippetPopupForTarget(
+  target: IncompleteSnippetTarget,
+  point: { x: number; y: number },
+): void {
   clearSnippetPopupCloseTimer();
   selectedDefinitionTarget = null;
   selectedWholeFileImplementation = false;
@@ -3543,7 +4018,9 @@ function showSnippetPopupForTarget(target: IncompleteSnippetTarget, point: { x: 
 
 function clearEditorSelectionAt(lineNumber: number, column: number): void {
   requestAnimationFrame(() => {
-    editor.setSelection(new monaco.Selection(lineNumber, column, lineNumber, column));
+    editor.setSelection(
+      new monaco.Selection(lineNumber, column, lineNumber, column),
+    );
   });
 }
 
@@ -3561,8 +4038,14 @@ function hideSnippetPopup(): void {
 function positionSnippetPopup(point: { x: number; y: number }): void {
   const width = Math.min(520, window.innerWidth - 24);
   const height = Math.min(360, window.innerHeight - 24);
-  const left = Math.min(Math.max(12, point.x + 14), window.innerWidth - width - 12);
-  const top = Math.min(Math.max(12, point.y + 14), window.innerHeight - height - 12);
+  const left = Math.min(
+    Math.max(12, point.x + 14),
+    window.innerWidth - width - 12,
+  );
+  const top = Math.min(
+    Math.max(12, point.y + 14),
+    window.innerHeight - height - 12,
+  );
 
   snippetPanel.style.left = `${Math.round(left)}px`;
   snippetPanel.style.top = `${Math.round(top)}px`;
@@ -3574,7 +4057,11 @@ function scheduleSnippetPopupClose(): void {
   clearSnippetPopupCloseTimer();
   snippetPopupCloseTimer = setTimeout(() => {
     snippetPopupCloseTimer = null;
-    if (!snippetPopupPinned && !snippetPopupHoveringPanel && !snippetPopupDragging) {
+    if (
+      !snippetPopupPinned &&
+      !snippetPopupHoveringPanel &&
+      !snippetPopupDragging
+    ) {
       hideSnippetPopup();
     }
   }, 120);
@@ -3604,7 +4091,10 @@ function beginSnippetPopupDrag(event: PointerEvent): void {
   const offsetY = event.clientY - rect.top;
 
   const onPointerMove = (moveEvent: PointerEvent): void => {
-    moveSnippetPopupTo(moveEvent.clientX - offsetX, moveEvent.clientY - offsetY);
+    moveSnippetPopupTo(
+      moveEvent.clientX - offsetX,
+      moveEvent.clientY - offsetY,
+    );
   };
 
   const onPointerUp = (upEvent: PointerEvent): void => {
@@ -3622,25 +4112,40 @@ function beginSnippetPopupDrag(event: PointerEvent): void {
 
 function moveSnippetPopupTo(left: number, top: number): void {
   const rect = snippetPanel.getBoundingClientRect();
-  const nextLeft = Math.min(Math.max(12, left), window.innerWidth - rect.width - 12);
-  const nextTop = Math.min(Math.max(12, top), window.innerHeight - rect.height - 12);
+  const nextLeft = Math.min(
+    Math.max(12, left),
+    window.innerWidth - rect.width - 12,
+  );
+  const nextTop = Math.min(
+    Math.max(12, top),
+    window.innerHeight - rect.height - 12,
+  );
   snippetPanel.style.left = `${Math.round(nextLeft)}px`;
   snippetPanel.style.top = `${Math.round(nextTop)}px`;
 }
 
-function editorMouseClientPoint(event: monaco.editor.IEditorMouseEvent): { x: number; y: number } {
+function editorMouseClientPoint(event: monaco.editor.IEditorMouseEvent): {
+  x: number;
+  y: number;
+} {
   return {
     x: event.event.browserEvent.clientX,
     y: event.event.browserEvent.clientY,
   };
 }
 
-function directPreviewForDefinitionTarget(target: ImplementationTarget): string | null {
-  const snippet = Array.from(incompleteSnippetByHash.values()).find((candidate) => {
-    return candidate.kind === target.kind &&
-      candidate.label === target.name &&
-      candidate.startLine === target.line;
-  });
+function directPreviewForDefinitionTarget(
+  target: ImplementationTarget,
+): string | null {
+  const snippet = Array.from(incompleteSnippetByHash.values()).find(
+    (candidate) => {
+      return (
+        candidate.kind === target.kind &&
+        candidate.label === target.name &&
+        candidate.startLine === target.line
+      );
+    },
+  );
 
   return snippet === undefined ? null : previewReplacementForSnippet(snippet);
 }
@@ -3657,16 +4162,34 @@ function previewImplementationSource(): string {
         return null;
       }
 
-      const start = editorPositionToOffset(lineStarts, target.startLine, target.startColumn);
-      const renderedReplacement = previewRenderedReplacement(source, start, target, replacement, imports, seenImports);
+      const start = editorPositionToOffset(
+        lineStarts,
+        target.startLine,
+        target.startColumn,
+      );
+      const renderedReplacement = previewRenderedReplacement(
+        source,
+        start,
+        target,
+        replacement,
+        imports,
+        seenImports,
+      );
 
       return {
         start,
-        end: editorPositionToOffset(lineStarts, target.endLine, target.endColumn),
+        end: editorPositionToOffset(
+          lineStarts,
+          target.endLine,
+          target.endColumn,
+        ),
         replacement: renderedReplacement,
       };
     })
-    .filter((item): item is { start: number; end: number; replacement: string } => item !== null)
+    .filter(
+      (item): item is { start: number; end: number; replacement: string } =>
+        item !== null,
+    )
     .sort((left, right) => right.start - left.start);
 
   if (replacements.length === 0) {
@@ -3705,7 +4228,10 @@ function previewRenderedReplacement(
     }
   }
 
-  return indentNaturalReplacement(splitReplacement.body, indentationBeforeOffset(source, start));
+  return indentNaturalReplacement(
+    splitReplacement.body,
+    indentationBeforeOffset(source, start),
+  );
 }
 
 function indentationBeforeOffset(source: string, offset: number): string {
@@ -3713,17 +4239,23 @@ function indentationBeforeOffset(source: string, offset: number): string {
   return source.slice(lineStart, offset).match(/^\s*/)?.[0] ?? "";
 }
 
-function previewReplacementForSnippet(target: IncompleteSnippetTarget): string | null {
+function previewReplacementForSnippet(
+  target: IncompleteSnippetTarget,
+): string | null {
   const preview = snippetPreviewByHash.get(target.hash);
   if (!preview) {
     return null;
   }
 
-  return preview.implementation ??
-    (preview.streamed.length > 0 ? preview.streamed : null);
+  return (
+    preview.implementation ??
+    (preview.streamed.length > 0 ? preview.streamed : null)
+  );
 }
 
-function inferredImplementationForSnippet(target: IncompleteSnippetTarget): string | null {
+function inferredImplementationForSnippet(
+  target: IncompleteSnippetTarget,
+): string | null {
   return implementationForIncompleteSnippet(
     editor.getValue(),
     previewImplementationSource(),
@@ -3736,7 +4268,9 @@ function inferredImplementationForSnippet(target: IncompleteSnippetTarget): stri
   );
 }
 
-function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPanelStatus {
+function snippetPanelStatus(
+  preview: SnippetPreviewState | undefined,
+): SnippetPanelStatus {
   if (preview?.status === "complete" || preview?.status === "cached") {
     return preview.status;
   }
@@ -3748,28 +4282,38 @@ function snippetPanelStatus(preview: SnippetPreviewState | undefined): SnippetPa
   return null;
 }
 
-function definitionPanelStatus(target: ImplementationTarget): SnippetPanelStatus {
+function definitionPanelStatus(
+  target: ImplementationTarget,
+): SnippetPanelStatus {
   if (compilationPending) {
     return "generating";
   }
 
-  const matchingReadiness = latestReadinessDefinitions.filter((definition) => (
+  const matchingReadiness = latestReadinessDefinitions.filter((definition) =>
     target.kind === "function"
       ? definition.kind === "function" && definition.name === target.name
       : target.kind === "method"
-      ? definition.kind === "method" && definition.name === `${target.className}.${target.name}`
-      : definition.kind === "method" && definition.name.startsWith(`${target.name}.`)
-  ));
+        ? definition.kind === "method" &&
+          definition.name === `${target.className}.${target.name}`
+        : definition.kind === "method" &&
+          definition.name.startsWith(`${target.name}.`),
+  );
 
   if (matchingReadiness.length === 0) {
     return null;
   }
 
-  return matchingReadiness.every((definition) => definition.ready) ? "complete" : null;
+  return matchingReadiness.every((definition) => definition.ready)
+    ? "complete"
+    : null;
 }
 
-function setSnippetPanelTitle(label: string | null, status: SnippetPanelStatus): void {
-  snippetTitle.textContent = label === null ? "Implementation" : `Implementation: ${label}`;
+function setSnippetPanelTitle(
+  label: string | null,
+  status: SnippetPanelStatus,
+): void {
+  snippetTitle.textContent =
+    label === null ? "Implementation" : `Implementation: ${label}`;
   snippetTitle.title = snippetTitle.textContent;
   snippetStatusIndicator.dataset.state = status ?? "hidden";
   snippetStatusIndicator.title = snippetStatusTitle(status);
@@ -3794,7 +4338,9 @@ function setSnippetPreviewSource(source: string): void {
   }
 }
 
-function attachBlockIndentGuideOverlay(targetEditor: monaco.editor.IStandaloneCodeEditor): void {
+function attachBlockIndentGuideOverlay(
+  targetEditor: monaco.editor.IStandaloneCodeEditor,
+): void {
   const overlay = document.createElement("div");
   overlay.className = "block-indent-guide-overlay";
   targetEditor.getContainerDomNode().append(overlay);
@@ -3857,7 +4403,8 @@ function indentGuideBlocks(
   model: monaco.editor.ITextModel,
   tabSize: number,
 ): Array<{ level: number; startLine: number; endLine: number }> {
-  const blocks: Array<{ level: number; startLine: number; endLine: number }> = [];
+  const blocks: Array<{ level: number; startLine: number; endLine: number }> =
+    [];
   const activeStarts = new Map<number, number>();
   let previousContentLine: number | null = null;
   let previousLevel = 0;
@@ -3877,7 +4424,11 @@ function indentGuideBlocks(
     }
 
     if (previousContentLine !== null && level > previousLevel) {
-      for (let activeLevel = previousLevel + 1; activeLevel <= level; activeLevel += 1) {
+      for (
+        let activeLevel = previousLevel + 1;
+        activeLevel <= level;
+        activeLevel += 1
+      ) {
         if (!activeStarts.has(activeLevel)) {
           activeStarts.set(activeLevel, previousContentLine);
         }
@@ -3917,7 +4468,13 @@ function appendIndentGuideBlock({
   scrollTop: number;
   endpointInset: number;
 }): void {
-  const anchorLine = indentGuideAnchorLine(model, level, startLine, endLine, tabSize);
+  const anchorLine = indentGuideAnchorLine(
+    model,
+    level,
+    startLine,
+    endLine,
+    tabSize,
+  );
   const guideColumn = Math.max(1, level * tabSize);
   const visiblePosition = targetEditor.getScrolledVisiblePosition({
     lineNumber: anchorLine,
@@ -3928,13 +4485,9 @@ function appendIndentGuideBlock({
   }
 
   const top =
-    targetEditor.getTopForLineNumber(startLine) -
-    scrollTop +
-    endpointInset;
+    targetEditor.getTopForLineNumber(startLine) - scrollTop + endpointInset;
   const bottom =
-    targetEditor.getBottomForLineNumber(endLine) -
-    scrollTop -
-    endpointInset;
+    targetEditor.getBottomForLineNumber(endLine) - scrollTop - endpointInset;
   const height = Math.max(0, bottom - top);
   if (height <= 0) {
     return;
@@ -3993,7 +4546,10 @@ function registerLogosTypeScriptLanguage(): void {
     aliases: ["Logos TypeScript", "logos-typescript"],
     mimetypes: ["text/x-logos-typescript"],
   });
-  monaco.languages.setLanguageConfiguration(logosTypeScriptLanguageId, typeScriptLanguageConfiguration);
+  monaco.languages.setLanguageConfiguration(
+    logosTypeScriptLanguageId,
+    typeScriptLanguageConfiguration,
+  );
   monaco.languages.setMonarchTokensProvider(logosTypeScriptLanguageId, {
     ...typeScriptLanguage,
     tokenPostfix: ".logos-typescript",
@@ -4014,11 +4570,18 @@ function registerLogosTypeScriptLanguage(): void {
   });
 }
 
-function installEditorTypingAssist(targetEditor: monaco.editor.IStandaloneCodeEditor): void {
+function installEditorTypingAssist(
+  targetEditor: monaco.editor.IStandaloneCodeEditor,
+): void {
   let applyingTypingAssist = false;
 
   targetEditor.onDidChangeModelContent((event) => {
-    if (applyingTypingAssist || event.isUndoing || event.isRedoing || event.isFlush) {
+    if (
+      applyingTypingAssist ||
+      event.isUndoing ||
+      event.isRedoing ||
+      event.isFlush
+    ) {
       return;
     }
 
@@ -4065,13 +4628,17 @@ function installEditorTypingAssist(targetEditor: monaco.editor.IStandaloneCodeEd
 }
 
 function installMonacoShortcutGuard(target: HTMLElement): void {
-  target.addEventListener("keydown", (event) => {
-    if (shouldMonacoHandleKeydown(event)) {
-      return;
-    }
+  target.addEventListener(
+    "keydown",
+    (event) => {
+      if (shouldMonacoHandleKeydown(event)) {
+        return;
+      }
 
-    event.stopImmediatePropagation();
-  }, { capture: true });
+      event.stopImmediatePropagation();
+    },
+    { capture: true },
+  );
 }
 
 function shouldMonacoHandleKeydown(event: KeyboardEvent): boolean {
@@ -4107,7 +4674,9 @@ function expandOpeningTripleBacktick(
   void position;
 }
 
-function insertAssistedNewLine(targetEditor: monaco.editor.IStandaloneCodeEditor): boolean {
+function insertAssistedNewLine(
+  targetEditor: monaco.editor.IStandaloneCodeEditor,
+): boolean {
   const model = targetEditor.getModel();
   const position = targetEditor.getPosition();
   const selection = targetEditor.getSelection();
@@ -4125,7 +4694,10 @@ function insertAssistedNewLine(targetEditor: monaco.editor.IStandaloneCodeEditor
   return true;
 }
 
-function insertTextAtCursor(targetEditor: monaco.editor.IStandaloneCodeEditor, text: string): void {
+function insertTextAtCursor(
+  targetEditor: monaco.editor.IStandaloneCodeEditor,
+  text: string,
+): void {
   const selection = targetEditor.getSelection();
   if (!selection) {
     return;
@@ -4133,17 +4705,20 @@ function insertTextAtCursor(targetEditor: monaco.editor.IStandaloneCodeEditor, t
 
   const endLineNumber = selection.startLineNumber + text.split("\n").length - 1;
   const lastLine = text.split("\n").at(-1) ?? "";
-  const endColumn = endLineNumber === selection.startLineNumber
-    ? selection.startColumn + text.length
-    : lastLine.length + 1;
+  const endColumn =
+    endLineNumber === selection.startLineNumber
+      ? selection.startColumn + text.length
+      : lastLine.length + 1;
 
   targetEditor.executeEdits(
     "logos-newline-assist",
-    [{
-      range: selection,
-      text,
-      forceMoveMarkers: true,
-    }],
+    [
+      {
+        range: selection,
+        text,
+        forceMoveMarkers: true,
+      },
+    ],
     [new monaco.Selection(endLineNumber, endColumn, endLineNumber, endColumn)],
   );
 }
@@ -4164,7 +4739,9 @@ function incompleteSnippetLabel(snippet: IncompleteSnippet): string {
     return inner.length > 0 ? inner : "Logos snippet";
   }
 
-  const functionMatch = firstLine.match(/^(?:async\s+)?(?:def|fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  const functionMatch = firstLine.match(
+    /^(?:async\s+)?(?:def|fn|function)\s+([A-Za-z_][A-Za-z0-9_]*)/,
+  );
   if (functionMatch) {
     return functionMatch[1];
   }
@@ -4188,9 +4765,7 @@ function naturalSnippetLabelText(snippet: string): string {
     return "";
   }
 
-  const previewLines = lines
-    .slice(0, 2)
-    .map((line) => truncateText(line, 28));
+  const previewLines = lines.slice(0, 2).map((line) => truncateText(line, 28));
   const suffix = lines.length > previewLines.length ? "..." : "";
   return truncateLabel(`${previewLines.join(", ")}${suffix}`);
 }
@@ -4201,10 +4776,13 @@ function exactIncompleteSnippetForPosition(
 ): IncompleteSnippetTarget | null {
   const snippets = incompleteSnippetsByLine.get(lineNumber) ?? [];
   const lineMaxColumn = editor.getModel()?.getLineMaxColumn(lineNumber);
-  return snippetPopupTargetForClick(snippets, lineNumber, column, lineMaxColumn);
+  return snippetPopupTargetForClick(
+    snippets,
+    lineNumber,
+    column,
+    lineMaxColumn,
+  );
 }
-
-
 
 function implementationTargetForLine(
   lineNumber: number,
@@ -4221,28 +4799,40 @@ function firstLineLength(source: string): number {
   return source.split("\n")[0]?.length ?? source.length;
 }
 
-function snippetRange(source: string, snippet: IncompleteSnippet): {
+function snippetRange(
+  source: string,
+  snippet: IncompleteSnippet,
+): {
   startLine: number;
   startColumn: number;
   endLine: number;
   endColumn: number;
 } {
   if (snippet.range) {
-    return offsetRangeToEditorRange(source, snippet.range.start, snippet.range.end);
+    return offsetRangeToEditorRange(
+      source,
+      snippet.range.start,
+      snippet.range.end,
+    );
   }
 
   const lines = snippet.snippet.split("\n");
   const startLine = snippet.line;
   const startColumn = snippet.column ?? 1;
   const endLine = startLine + lines.length - 1;
-  const endColumn = lines.length === 1
-    ? startColumn + firstLineLength(snippet.snippet)
-    : (lines.at(-1)?.length ?? 0) + 1;
+  const endColumn =
+    lines.length === 1
+      ? startColumn + firstLineLength(snippet.snippet)
+      : (lines.at(-1)?.length ?? 0) + 1;
 
   return { startLine, startColumn, endLine, endColumn };
 }
 
-function offsetRangeToEditorRange(source: string, start: number, end: number): {
+function offsetRangeToEditorRange(
+  source: string,
+  start: number,
+  end: number,
+): {
   startLine: number;
   startColumn: number;
   endLine: number;
@@ -4272,12 +4862,19 @@ function sourceLineStartOffsets(source: string): number[] {
   return starts;
 }
 
-function editorPositionToOffset(lineStarts: number[], line: number, column: number): number {
+function editorPositionToOffset(
+  lineStarts: number[],
+  line: number,
+  column: number,
+): number {
   const lineStart = lineStarts[line - 1] ?? 0;
   return lineStart + Math.max(0, column - 1);
 }
 
-function offsetToEditorPosition(lineStarts: number[], offset: number): { line: number; column: number } {
+function offsetToEditorPosition(
+  lineStarts: number[],
+  offset: number,
+): { line: number; column: number } {
   let low = 0;
   let high = lineStarts.length - 1;
 
@@ -4302,7 +4899,9 @@ function truncateLabel(label: string): string {
 }
 
 function truncateText(text: string, maxLength: number): string {
-  return text.length <= maxLength ? text : `${text.slice(0, Math.max(0, maxLength - 3))}...`;
+  return text.length <= maxLength
+    ? text
+    : `${text.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function beginCodeRunResize(event: PointerEvent): void {
@@ -4392,17 +4991,24 @@ function setSnippetPanelHeight(height: number): void {
 function updateReadinessDecorations(definitions: DefinitionReadiness[]): void {
   latestReadinessDefinitions = definitions;
   const runnableStates = runnableStatesFor(editor.getValue(), definitions);
-  const runnableLines = new Set(runnableStates.map((runnable) => runnable.line));
-  const decorations = aggregatedReadinessDecorations(definitions, runnableLines)
-    .map((item) => ({
-      range: new monaco.Range(item.line, 1, item.line, 1),
-      options: {
-        glyphMarginClassName: "not-ready-glyph-spinner",
-        hoverMessage: { value: item.hoverMessage },
-      },
-    }));
+  const runnableLines = new Set(
+    runnableStates.map((runnable) => runnable.line),
+  );
+  const decorations = aggregatedReadinessDecorations(
+    definitions,
+    runnableLines,
+  ).map((item) => ({
+    range: new monaco.Range(item.line, 1, item.line, 1),
+    options: {
+      glyphMarginClassName: "not-ready-glyph-spinner",
+      hoverMessage: { value: item.hoverMessage },
+    },
+  }));
 
-  readinessDecorations = editor.deltaDecorations(readinessDecorations, decorations);
+  readinessDecorations = editor.deltaDecorations(
+    readinessDecorations,
+    decorations,
+  );
   updateRunnableDecorations(runnableStates);
   updateToolbarRunState(runnableStates);
   renderSnippetPanel();
@@ -4417,7 +5023,9 @@ function aggregatedReadinessDecorations(
   definitions: DefinitionReadiness[],
   runnableLines: Set<number>,
 ): ReadinessDecoration[] {
-  const pending = definitions.filter((definition) => !definition.ready && !runnableLines.has(definition.line));
+  const pending = definitions.filter(
+    (definition) => !definition.ready && !runnableLines.has(definition.line),
+  );
   const pendingMethodsByClass = new Map<string, DefinitionReadiness[]>();
 
   for (const definition of pending) {
@@ -4432,13 +5040,18 @@ function aggregatedReadinessDecorations(
     ]);
   }
 
-  const aggregatedClassLines = classLinesForAggregatedMethods(pendingMethodsByClass);
+  const aggregatedClassLines = classLinesForAggregatedMethods(
+    pendingMethodsByClass,
+  );
   const aggregatedClassNames = new Set(aggregatedClassLines.keys());
 
   return [
     ...Array.from(aggregatedClassLines, ([className, line]) => ({
       line,
-      hoverMessage: aggregatedClassHoverMessage(className, pendingMethodsByClass.get(className) ?? []),
+      hoverMessage: aggregatedClassHoverMessage(
+        className,
+        pendingMethodsByClass.get(className) ?? [],
+      ),
     })),
     ...pending.flatMap((definition) => {
       const className = classNameForMethodDefinition(definition);
@@ -4446,10 +5059,12 @@ function aggregatedReadinessDecorations(
         return [];
       }
 
-      return [{
-        line: definition.line,
-        hoverMessage: definitionHoverMessage(definition),
-      }];
+      return [
+        {
+          line: definition.line,
+          hoverMessage: definitionHoverMessage(definition),
+        },
+      ];
     }),
   ].sort((left, right) => left.line - right.line);
 }
@@ -4467,7 +5082,9 @@ function classLinesForAggregatedMethods(
     return new Map();
   }
 
-  const classLineByName = new Map(classDecls.map((decl) => [decl.name, decl.line]));
+  const classLineByName = new Map(
+    classDecls.map((decl) => [decl.name, decl.line]),
+  );
   const aggregated = new Map<string, number>();
 
   for (const [className, methods] of pendingMethodsByClass) {
@@ -4480,7 +5097,9 @@ function classLinesForAggregatedMethods(
   return aggregated;
 }
 
-function classNameForMethodDefinition(definition: DefinitionReadiness): string | null {
+function classNameForMethodDefinition(
+  definition: DefinitionReadiness,
+): string | null {
   if (definition.kind !== "method") {
     return null;
   }
@@ -4495,7 +5114,10 @@ function definitionHoverMessage(definition: DefinitionReadiness): string {
     : `${definition.name} is waiting for ${definition.blockingDependencies.join(", ")}.`;
 }
 
-function aggregatedClassHoverMessage(className: string, methods: DefinitionReadiness[]): string {
+function aggregatedClassHoverMessage(
+  className: string,
+  methods: DefinitionReadiness[],
+): string {
   const methodNames = methods.map((method) => method.name).join(", ");
   return `${className} has ${methods.length} pending methods: ${methodNames}.`;
 }
@@ -4504,7 +5126,9 @@ function runnableStatesFor(
   source: string,
   definitions: DefinitionReadiness[],
 ): Array<RunnableState & { line: number }> {
-  const readinessByName = new Map(definitions.map((definition) => [definition.name, definition]));
+  const readinessByName = new Map(
+    definitions.map((definition) => [definition.name, definition]),
+  );
 
   return runnables(source).map((runnable) => {
     const readiness = readinessByName.get(runnable.name);
@@ -4519,7 +5143,9 @@ function runnableStatesFor(
   });
 }
 
-function updateRunnableDecorations(runnablesState: Array<RunnableState & { line: number }>): void {
+function updateRunnableDecorations(
+  runnablesState: Array<RunnableState & { line: number }>,
+): void {
   runnableStateByLine = new Map(
     runnablesState.map((runnable) => [
       runnable.line,
@@ -4548,7 +5174,9 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
   updateRunnableRunWidgets(runnablesState);
 }
 
-function updateRunnableRunWidgets(runnablesState: Array<RunnableState & { line: number }>): void {
+function updateRunnableRunWidgets(
+  runnablesState: Array<RunnableState & { line: number }>,
+): void {
   for (const widget of runnableRunWidgets.values()) {
     editor.removeContentWidget(widget);
   }
@@ -4571,7 +5199,9 @@ function createRunnableRunWidget(
     : "runnable-run-widget runnable-run-widget-disabled";
   node.type = "button";
   node.textContent = `▶ Run ${runnableDisplayName(runnable.name)}`;
-  node.title = runnable.ready ? `Run ${runnable.name}` : disabledRunnableHoverMessage(runnable);
+  node.title = runnable.ready
+    ? `Run ${runnable.name}`
+    : disabledRunnableHoverMessage(runnable);
   node.dataset.ready = runnable.ready ? "true" : "false";
   node.setAttribute("aria-disabled", runnable.ready ? "false" : "true");
   node.addEventListener("mousedown", (event) => {
@@ -4605,7 +5235,9 @@ function createRunnableRunWidget(
 }
 
 function runnableDisplayName(name: string): string {
-  return name.length === 0 ? name : `${name[0]?.toUpperCase() ?? ""}${name.slice(1)}`;
+  return name.length === 0
+    ? name
+    : `${name[0]?.toUpperCase() ?? ""}${name.slice(1)}`;
 }
 
 function disabledRunnableHoverMessage(runnable: RunnableState): string {
@@ -4620,7 +5252,9 @@ function disabledRunnableHoverMessage(runnable: RunnableState): string {
   return `${runnable.name} is waiting for its implementation.`;
 }
 
-function updateToolbarRunState(runnablesState: Array<RunnableState & { line: number }>): void {
+function updateToolbarRunState(
+  runnablesState: Array<RunnableState & { line: number }>,
+): void {
   void runnablesState;
 }
 
@@ -4649,7 +5283,10 @@ function lastRunAgeLabel(nowMs = Date.now()): string {
     return lastRunLabel === "never" ? "never" : "previously";
   }
 
-  const elapsedSeconds = Math.max(0, Math.floor((nowMs - lastRunCompletedAtMs) / 1000));
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((nowMs - lastRunCompletedAtMs) / 1000),
+  );
   if (elapsedSeconds < 10) {
     return "just now";
   }
@@ -4694,7 +5331,11 @@ function runStatusStateFromPrefix(prefix: string): string {
   return prefix.startsWith("Ran ") ? "ok" : "error";
 }
 
-function createRunTab(runnable: Runnable, source: string, sourceHash: string): RunTab {
+function createRunTab(
+  runnable: Runnable,
+  source: string,
+  sourceHash: string,
+): RunTab {
   const tab: RunTab = {
     id: createRunTabId(runnable),
     runnable,
@@ -4721,16 +5362,25 @@ function createRunTab(runnable: Runnable, source: string, sourceHash: string): R
 }
 
 function renderRunTabs(): void {
-  for (const shell of Array.from(toolTabsList.querySelectorAll("[data-run-tab-shell-id]"))) {
+  for (const shell of Array.from(
+    toolTabsList.querySelectorAll("[data-run-tab-shell-id]"),
+  )) {
     shell.remove();
   }
 
   const implementationActive = activeToolTabId === implementationToolTabId;
   implementationViewTab.classList.toggle("active", implementationActive);
-  implementationViewTab.setAttribute("aria-selected", String(implementationActive));
+  implementationViewTab.setAttribute(
+    "aria-selected",
+    String(implementationActive),
+  );
   implementationViewPanel.classList.toggle("active", implementationActive);
   renderImplementationView();
 
+  const agentViewActive = activeToolTabId === agentViewToolTabId;
+  agentViewTab.classList.toggle("active", agentViewActive);
+  agentViewTab.setAttribute("aria-selected", String(agentViewActive));
+  agentViewPanel.classList.toggle("active", agentViewActive);
   for (const tab of runTabs) {
     const shell = document.createElement("div");
     shell.className = "source-tab-shell output-tab-shell";
@@ -4759,7 +5409,9 @@ function renderRunTabs(): void {
   renderSourceTabSeparators(toolTabsList);
 
   const activeIds = new Set(runTabs.map((tab) => tab.id));
-  for (const panel of Array.from(toolPanels.querySelectorAll<HTMLElement>("[data-run-panel-id]"))) {
+  for (const panel of Array.from(
+    toolPanels.querySelectorAll<HTMLElement>("[data-run-panel-id]"),
+  )) {
     if (!activeIds.has(panel.dataset.runPanelId ?? "")) {
       const tab = runTabs.find((item) => item.id === panel.dataset.runPanelId);
       if (tab) {
@@ -4809,7 +5461,9 @@ function renderRunTab(tab: RunTab): void {
   }
 
   const xtermHost = panel.querySelector<HTMLElement>("[data-run-xterm-id]");
-  const reactHost = panel.querySelector<HTMLElement>("[data-react-run-host-id]");
+  const reactHost = panel.querySelector<HTMLElement>(
+    "[data-react-run-host-id]",
+  );
   const running = tab.status?.state === "running";
 
   panel.classList.toggle("active", activeToolTabId === tab.id);
@@ -4899,7 +5553,9 @@ function fitRunTabTerminal(tab: RunTab): void {
       tab.terminalCols = cols;
       tab.terminalRows = rows;
       if (tab.sessionId) {
-        void sendInteractiveRunResizeViaDevApi(tab.sessionId, cols, rows).catch(() => undefined);
+        void sendInteractiveRunResizeViaDevApi(tab.sessionId, cols, rows).catch(
+          () => undefined,
+        );
       }
     }
   } catch {
@@ -4931,13 +5587,18 @@ function renderReactApp(tab: RunTab, host: HTMLElement): void {
     tab.reactRoot = createRoot(mount);
   }
 
-  tab.reactRoot.render(React.createElement(ReactAppFrame, {
-    appCode,
-    runnable: tab.runnable,
-  }));
+  tab.reactRoot.render(
+    React.createElement(ReactAppFrame, {
+      appCode,
+      runnable: tab.runnable,
+    }),
+  );
 }
 
-function ReactAppFrame(props: { appCode: string; runnable: Runnable }): React.ReactElement {
+function ReactAppFrame(props: {
+  appCode: string;
+  runnable: Runnable;
+}): React.ReactElement {
   const iframeRef = React.useRef<HTMLIFrameElement | null>(null);
   const [iframeBody, setIframeBody] = React.useState<HTMLElement | null>(null);
 
@@ -4972,21 +5633,29 @@ ${styleTagContent(radixThemesCss)}
 
   let element: React.ReactNode = null;
   try {
-    const run = new Function("React", "radix", `${props.appCode}\nreturn ${props.runnable}();`);
+    const run = new Function(
+      "React",
+      "radix",
+      `${props.appCode}\nreturn ${props.runnable}();`,
+    );
     element = run(React, logosRadix) as React.ReactNode;
   } catch (error) {
-    element = React.createElement("pre", {
-      style: {
-        boxSizing: "border-box",
-        minHeight: "100vh",
-        margin: 0,
-        padding: 16,
-        color: "#991b1b",
-        background: "#fef2f2",
-        whiteSpace: "pre-wrap",
-        font: "13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    element = React.createElement(
+      "pre",
+      {
+        style: {
+          boxSizing: "border-box",
+          minHeight: "100vh",
+          margin: 0,
+          padding: 16,
+          color: "#991b1b",
+          background: "#fef2f2",
+          whiteSpace: "pre-wrap",
+          font: "13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+        },
       },
-    }, error instanceof Error && error.stack ? error.stack : String(error));
+      error instanceof Error && error.stack ? error.stack : String(error),
+    );
   }
 
   return React.createElement(
@@ -4998,19 +5667,41 @@ ${styleTagContent(radixThemesCss)}
       title: `Run ${props.runnable}`,
     }),
     iframeBody
-      ? createPortal(React.createElement(Theme, { appearance: "light", accentColor: "blue", grayColor: "slate" }, element), iframeBody)
+      ? createPortal(
+          React.createElement(
+            Theme,
+            { appearance: "light", accentColor: "blue", grayColor: "slate" },
+            element,
+          ),
+          iframeBody,
+        )
       : null,
   );
 }
+
+function AgentViewWrapper() {
+  const [sheetId, setSheetId] = React.useState(activeSourceTabId);
+  React.useEffect(() => {
+    const handler = () => setSheetId(activeSourceTabId);
+    window.addEventListener("logos-active-sheet-changed", handler);
+    return () => window.removeEventListener("logos-active-sheet-changed", handler);
+  }, []);
+  return React.createElement(AgentView, { sheetId });
+}
+
+const agentViewRoot = createRoot(agentViewPanel);
+agentViewRoot.render(React.createElement(AgentViewWrapper));
 
 function styleTagContent(css: string): string {
   return css.replace(/<\/style/gi, "<\\/style");
 }
 
 function terminalFontFamily(): string {
-  return getComputedStyle(document.documentElement)
-    .getPropertyValue("--terminal-font")
-    .trim() || "monospace";
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--terminal-font")
+      .trim() || "monospace"
+  );
 }
 
 function disposeRunTabTerminal(tab: RunTab): void {
@@ -5036,19 +5727,24 @@ function renderImplementationView(): void {
   }
   const selectedRange = updateImplementationSnippetDecorations();
   if (selectedRange !== null && activeToolTabId === implementationToolTabId) {
-    navigateImplementationRangeIfNeeded(selectedRange, monaco.editor.ScrollType.Immediate);
+    navigateImplementationRangeIfNeeded(
+      selectedRange,
+      monaco.editor.ScrollType.Immediate,
+    );
     return;
   }
 
-  implementationViewEditor.setScrollTop(implementationViewEditor.getScrollHeight());
+  implementationViewEditor.setScrollTop(
+    implementationViewEditor.getScrollHeight(),
+  );
 }
 
 function implementationViewText(): string {
   return latestImplementationSource.trim().length > 0
     ? latestImplementationSource
     : compilationPending
-    ? "Code is being generated..."
-    : "No implementation yet.";
+      ? "Code is being generated..."
+      : "No implementation yet.";
 }
 
 function appendTerminalChunks(tab: RunTab, chunks: RunChunk[]): void {
@@ -5069,21 +5765,30 @@ function focusTerminalInput(runTabId: string): void {
   tab.terminal?.focus();
 }
 
-async function sendRawTerminalInput(runTabId: string, input: string): Promise<void> {
+async function sendRawTerminalInput(
+  runTabId: string,
+  input: string,
+): Promise<void> {
   const tab = runTabById(runTabId);
   if (!tab?.sessionId || tab.status?.state !== "running") {
     return;
   }
 
-  sessionCapture.track("run_raw_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
+  sessionCapture.track(
+    "run_raw_input_submitted",
+    { input, runTabId, runnable: tab.runnable },
+    true,
+  );
 
   try {
     await sendInteractiveRunInputViaDevApi(tab.sessionId, input);
   } catch (error) {
-    appendTerminalChunks(tab, [{
-      stream: "stderr",
-      text: `\r\n${error instanceof Error ? error.message : String(error)}\r\n`,
-    }]);
+    appendTerminalChunks(tab, [
+      {
+        stream: "stderr",
+        text: `\r\n${error instanceof Error ? error.message : String(error)}\r\n`,
+      },
+    ]);
     tab.status = { state: "exited", code: null, signal: null };
     renderRunTab(tab);
   }
@@ -5114,17 +5819,19 @@ async function pollRunTab(runTabId: string): Promise<void> {
     return;
   }
 
-  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(async (error: unknown) => {
-    if (error instanceof RunSessionNotFoundError) {
-      await recoverMissingRunSession(runTabId);
-      return null;
-    }
+  const result = await pollInteractiveRunViaDevApi(tab.sessionId).catch(
+    async (error: unknown) => {
+      if (error instanceof RunSessionNotFoundError) {
+        await recoverMissingRunSession(runTabId);
+        return null;
+      }
 
-    return {
-      ok: false as const,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  });
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    },
+  );
   if (result === null) {
     return;
   }
@@ -5134,18 +5841,28 @@ async function pollRunTab(runTabId: string): Promise<void> {
   }
 
   if (!result.ok) {
-    currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
+    currentTab.status = {
+      state: "exited",
+      code: null,
+      signal: null,
+      error: result.error,
+    };
     markLastRunCompleted();
     lastRunDefinitionHash = currentTab.sourceHash;
     setLastRunStatus("Error", "error");
-    appendTerminalChunks(currentTab, [{ stream: "stderr", text: `\n${result.error}\n` }]);
+    appendTerminalChunks(currentTab, [
+      { stream: "stderr", text: `\n${result.error}\n` },
+    ]);
     updateRunStaleness();
     renderRunTabs();
     return;
   }
 
   currentTab.implementation = result.implementation;
-  rememberActiveCompilationImplementation(result.implementation, currentTab.source);
+  rememberActiveCompilationImplementation(
+    result.implementation,
+    currentTab.source,
+  );
   renderSnippetPanel();
   appendTerminalChunks(currentTab, result.chunks);
 
@@ -5170,7 +5887,10 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   runStatus.dataset.state = "";
   renderRunTab(tab);
 
-  const result = await startInteractiveRunViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
+  const result = await startInteractiveRunViaDevApi(
+    tab.source,
+    tab.runnable,
+  ).catch((error: unknown) => ({
     ok: false as const,
     error: error instanceof Error ? error.message : String(error),
   }));
@@ -5180,18 +5900,28 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   }
 
   if (!result.ok) {
-    currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
+    currentTab.status = {
+      state: "exited",
+      code: null,
+      signal: null,
+      error: result.error,
+    };
     markLastRunCompleted();
     lastRunDefinitionHash = currentTab.sourceHash;
     setLastRunStatus("Error", "error");
-    appendTerminalChunks(currentTab, [{ stream: "stderr", text: result.error }]);
+    appendTerminalChunks(currentTab, [
+      { stream: "stderr", text: result.error },
+    ]);
     updateRunStaleness();
     return;
   }
 
   currentTab.implementation = result.implementation;
   currentTab.status = result.status;
-  rememberActiveCompilationImplementation(result.implementation, currentTab.source);
+  rememberActiveCompilationImplementation(
+    result.implementation,
+    currentTab.source,
+  );
   renderSnippetPanel();
   if (result.kind === "react") {
     currentTab.renderMode = "react";
@@ -5213,7 +5943,11 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
   finishInteractiveRun(currentTab, result.status, result.implementation);
 }
 
-function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: string): void {
+function finishInteractiveRun(
+  tab: RunTab,
+  status: RunStatus,
+  implementation: string,
+): void {
   tab.status = status;
   tab.implementation = implementation;
   rememberActiveCompilationImplementation(implementation, tab.source);
@@ -5232,11 +5966,18 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
     const stopped = status.state === "exited" && status.signal === "SIGTERM";
     setLastRunStatus(stopped ? "Stopped" : "Error", "error");
     if (status.state === "exited" && status.error) {
-      appendTerminalChunks(tab, [{ stream: "stderr", text: `\n${status.error}\n` }]);
+      appendTerminalChunks(tab, [
+        { stream: "stderr", text: `\n${status.error}\n` },
+      ]);
     }
     sessionCapture.track(
       "run_failed",
-      { runnable: tab.runnable, output: tab.terminalText, implementation, status },
+      {
+        runnable: tab.runnable,
+        output: tab.terminalText,
+        implementation,
+        status,
+      },
       true,
     );
   }
@@ -5262,7 +6003,8 @@ function closeRunTab(runTabId: string): void {
   runTabs = runTabs.filter((item) => item.id !== runTabId);
 
   if (activeToolTabId === runTabId) {
-    activeToolTabId = runTabs[index]?.id ?? runTabs[index - 1]?.id ?? implementationToolTabId;
+    activeToolTabId =
+      runTabs[index]?.id ?? runTabs[index - 1]?.id ?? implementationToolTabId;
   }
   renderRunTabs();
   setActiveTab(activeToolTabId);
@@ -5304,7 +6046,9 @@ function createRunTabId(runnable: Runnable): string {
   return `run-${runnable.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void> {
+async function submitFeedbackFromButton(
+  button: HTMLButtonElement,
+): Promise<void> {
   const panel = button.dataset.feedbackPanel;
   const rating = button.dataset.feedbackRating;
   if (!panel || (rating !== "up" && rating !== "down") || button.disabled) {
@@ -5313,9 +6057,12 @@ async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void
 
   const controls = button.closest<HTMLElement>("[data-feedback-controls]");
   const buttons = controls
-    ? Array.from(controls.querySelectorAll<HTMLButtonElement>("[data-feedback-rating]"))
+    ? Array.from(
+        controls.querySelectorAll<HTMLButtonElement>("[data-feedback-rating]"),
+      )
     : [button];
-  const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
+  const receipt =
+    controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
   clearFeedbackResetTimer(controls);
   buttons.forEach((item) => {
     item.disabled = true;
@@ -5367,13 +6114,16 @@ async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void
   }
 }
 
-async function shareCurrentSessionFromButton(button: HTMLButtonElement): Promise<void> {
+async function shareCurrentSessionFromButton(
+  button: HTMLButtonElement,
+): Promise<void> {
   if (button.disabled) {
     return;
   }
 
   const controls = button.closest<HTMLElement>("[data-feedback-controls]");
-  const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
+  const receipt =
+    controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
   clearFeedbackResetTimer(controls);
   button.disabled = true;
   button.dataset.state = "sending";
@@ -5411,7 +6161,11 @@ async function shareCurrentSessionFromButton(button: HTMLButtonElement): Promise
       feedbackResetTimers.set(controls, resetTimer);
     }
 
-    sessionCapture.track("share_session_created", { shareId: result.shareId, url: shareUrl }, true);
+    sessionCapture.track(
+      "share_session_created",
+      { shareId: result.shareId, url: shareUrl },
+      true,
+    );
   } catch (error) {
     button.disabled = false;
     button.dataset.state = "error";
@@ -5423,7 +6177,9 @@ async function shareCurrentSessionFromButton(button: HTMLButtonElement): Promise
   }
 }
 
-function clearFeedbackResetTimer(controls: HTMLElement | null | undefined): void {
+function clearFeedbackResetTimer(
+  controls: HTMLElement | null | undefined,
+): void {
   if (!controls) {
     return;
   }
@@ -5460,14 +6216,21 @@ async function sendFeedbackViaDevApi(
     error?: string;
   };
 
-  if (!response.ok || payload.ok !== true || typeof payload.feedbackId !== "string") {
+  if (
+    !response.ok ||
+    payload.ok !== true ||
+    typeof payload.feedbackId !== "string"
+  ) {
     throw new Error(payload.error ?? "Feedback request failed");
   }
 
   return { ok: true, feedbackId: payload.feedbackId };
 }
 
-async function sendSharedSessionViaDevApi(): Promise<{ ok: true; shareId: string }> {
+async function sendSharedSessionViaDevApi(): Promise<{
+  ok: true;
+  shareId: string;
+}> {
   const response = await fetch("/api/shared-sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5479,7 +6242,11 @@ async function sendSharedSessionViaDevApi(): Promise<{ ok: true; shareId: string
     error?: string;
   };
 
-  if (!response.ok || payload.ok !== true || typeof payload.shareId !== "string") {
+  if (
+    !response.ok ||
+    payload.ok !== true ||
+    typeof payload.shareId !== "string"
+  ) {
     throw new Error(payload.error ?? "Share request failed");
   }
 
@@ -5557,12 +6324,21 @@ async function startInteractiveRunViaDevApi(
     body: payload,
   });
 
-  if (!response.ok || payload.ok !== true || typeof payload.runnable !== "string" || !isRunStatus(payload.status) || typeof payload.implementation !== "string") {
+  if (
+    !response.ok ||
+    payload.ok !== true ||
+    typeof payload.runnable !== "string" ||
+    !isRunStatus(payload.status) ||
+    typeof payload.implementation !== "string"
+  ) {
     throw new Error(payload.error ?? "Run request failed");
   }
 
   if (payload.kind === "react") {
-    if (typeof payload.runId !== "string" || typeof payload.appCode !== "string") {
+    if (
+      typeof payload.runId !== "string" ||
+      typeof payload.appCode !== "string"
+    ) {
       throw new Error(payload.error ?? "React run request failed");
     }
 
@@ -5592,7 +6368,10 @@ async function startInteractiveRunViaDevApi(
   };
 }
 
-async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string): Promise<void> {
+async function sendInteractiveRunInputViaDevApi(
+  sessionId: string,
+  input: string,
+): Promise<void> {
   sessionCapture.track("api_request", {
     method: "POST",
     path: "/api/run/input",
@@ -5616,7 +6395,11 @@ async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string
   }
 }
 
-async function sendInteractiveRunResizeViaDevApi(sessionId: string, cols: number, rows: number): Promise<void> {
+async function sendInteractiveRunResizeViaDevApi(
+  sessionId: string,
+  cols: number,
+  rows: number,
+): Promise<void> {
   const body = { sessionId, cols, rows };
   sessionCapture.track("api_request", {
     method: "POST",
@@ -5667,8 +6450,13 @@ async function pollInteractiveRunViaDevApi(
     !isRunStatus(payload.status) ||
     typeof payload.implementation !== "string"
   ) {
-    if (response.status === 404 && payload.errorCode === "run_session_not_found") {
-      throw new RunSessionNotFoundError(payload.error ?? "Run session not found");
+    if (
+      response.status === 404 &&
+      payload.errorCode === "run_session_not_found"
+    ) {
+      throw new RunSessionNotFoundError(
+        payload.error ?? "Run session not found",
+      );
     }
 
     throw new Error(payload.error ?? "Run poll failed");
@@ -5726,10 +6514,11 @@ function isRunStatus(value: unknown): value is RunStatus {
   }
 
   const status = value as RunStatus;
-  return status.state === "running" || (
-    status.state === "exited" &&
-    (typeof status.code === "number" || status.code === null) &&
-    (typeof status.signal === "string" || status.signal === null)
+  return (
+    status.state === "running" ||
+    (status.state === "exited" &&
+      (typeof status.code === "number" || status.code === null) &&
+      (typeof status.signal === "string" || status.signal === null))
   );
 }
 
@@ -5749,37 +6538,40 @@ function escapeHtml(source: string): string {
     .replaceAll("'", "&#039;");
 }
 
-type CompileWireEvent =
-  | {
-      kind: string;
-      hash?: string;
-      snippet?: string;
-      token?: string;
-      implementation?: string;
-      completedSnippets?: number;
-      totalSnippets?: number;
-      error?: string;
-      definitions?: DefinitionReadiness[];
-      diagnostics?: TypeCheckDiagnostic[];
-    };
+type CompileWireEvent = {
+  kind: string;
+  hash?: string;
+  snippet?: string;
+  token?: string;
+  text?: string;
+  name?: string;
+  input?: unknown;
+  implementation?: string;
+  completedSnippets?: number;
+  totalSnippets?: number;
+  error?: string;
+  definitions?: DefinitionReadiness[];
+  diagnostics?: TypeCheckDiagnostic[];
+};
 
-function isCompleteImplementationEvent(event: CompileWireEvent): event is CompileWireEvent & {
+function isCompleteImplementationEvent(
+  event: CompileWireEvent,
+): event is CompileWireEvent & {
   implementation: string;
   completedSnippets: number;
   totalSnippets: number;
 } {
   return (
-    event.kind === "implementation" &&
-    typeof event.implementation === "string" &&
-    typeof event.completedSnippets === "number" &&
-    typeof event.totalSnippets === "number" &&
-    event.completedSnippets >= event.totalSnippets
-  ) || (
-    event.kind === "compiled" &&
-    typeof event.implementation === "string" &&
-    typeof event.completedSnippets === "number" &&
-    typeof event.totalSnippets === "number" &&
-    event.completedSnippets >= event.totalSnippets
+    (event.kind === "implementation" &&
+      typeof event.implementation === "string" &&
+      typeof event.completedSnippets === "number" &&
+      typeof event.totalSnippets === "number" &&
+      event.completedSnippets >= event.totalSnippets) ||
+    (event.kind === "compiled" &&
+      typeof event.implementation === "string" &&
+      typeof event.completedSnippets === "number" &&
+      typeof event.totalSnippets === "number" &&
+      event.completedSnippets >= event.totalSnippets)
   );
 }
 
@@ -5853,10 +6645,66 @@ async function* compileViaDevApi(
   }
 }
 
+async function* compileViaPolling(
+  sheetId: string,
+  sheet: string,
+  signal: AbortSignal,
+): AsyncIterable<CompileWireEvent> {
+  const startResponse = await fetch("/api/v2/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheetId, source: sheet }),
+    signal,
+  });
+
+  if (!startResponse.ok) {
+    throw new Error("Compile request failed");
+  }
+
+  const { sessionId } = await startResponse.json();
+  if (!sessionId) return;
+
+  let after = 0;
+  while (!signal.aborted) {
+    const pollResponse = await fetch(`/api/v2/session?id=${encodeURIComponent(sessionId)}&after=${after}`, { signal });
+    if (!pollResponse.ok) break;
+
+    const { events, done, total } = await pollResponse.json();
+    for (const raw of events) {
+      yield compilerEventToWireEvent(raw);
+    }
+    after = total;
+
+    if (done) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+function compilerEventToWireEvent(event: Record<string, unknown>): CompileWireEvent {
+  switch (event.kind) {
+    case "scaffold":
+    case "implementation":
+      return { kind: "implementation", implementation: event.code as string, completedSnippets: 0, totalSnippets: 1 };
+    case "done":
+      return { kind: "compiled", implementation: event.code as string, completedSnippets: 1, totalSnippets: 1 };
+    case "agent-text":
+      return { kind: "agent-text", text: event.text as string };
+    case "agent-tool":
+      return { kind: "agent-tool", name: event.tool as string, input: event.input };
+    case "error":
+      return { kind: "error", error: event.message as string };
+    default:
+      return event as CompileWireEvent;
+  }
+}
+
 function setActiveTab(tab: ToolTabId): void {
-  activeToolTabId = tab === implementationToolTabId || (tab && runTabById(tab))
-    ? tab
-    : implementationToolTabId;
+  activeToolTabId =
+    tab === implementationToolTabId ||
+    tab === agentViewToolTabId ||
+    (tab && runTabById(tab))
+      ? tab
+      : implementationToolTabId;
   renderRunTabs();
 }
 
@@ -5873,12 +6721,13 @@ export function createLoadableSession(): LoadableSession {
     activeSourceTabId,
     editor: {
       value: editor.getValue(),
-      cursor: position === null
-        ? null
-        : {
-            lineNumber: position.lineNumber,
-            column: position.column,
-          },
+      cursor:
+        position === null
+          ? null
+          : {
+              lineNumber: position.lineNumber,
+              column: position.column,
+            },
       scrollTop: editor.getScrollTop(),
       scrollLeft: editor.getScrollLeft(),
     },
@@ -5944,23 +6793,37 @@ export async function loadSession(session: LoadableSession): Promise<void> {
 
     const active = activeSourceTab();
     editor.setValue(active?.source ?? session.editor.value);
-    latestImplementationSource = active?.implementation ??
+    latestImplementationSource =
+      active?.implementation ??
       session.compilation.latestImplementationSource ??
       "";
     if (active && latestImplementationSource.trim().length > 0) {
       active.implementation = latestImplementationSource;
     }
     renderImplementationView();
-    compileVersion = Math.max(compileVersion + 1, session.compilation.compileVersion);
-    lastRunCompletedAtMs = typeof session.run.lastRunCompletedAtMs === "number"
-      ? session.run.lastRunCompletedAtMs
-      : null;
-    lastRunLabel = lastRunCompletedAtMs === null
-      ? (session.run.lastRunLabel === "never" ? "never" : "previously")
-      : lastRunAgeLabel();
-    lastRunStatusPrefix = session.run.lastRunStatusPrefix ?? runStatusPrefixFromText(session.run.lastRunStatusText);
-    lastRunStatusState = session.run.lastRunStatusState ?? runStatusStateFromPrefix(lastRunStatusPrefix);
-    lastRunStatusText = lastRunStatusPrefix ? `${lastRunStatusPrefix} · last run ${lastRunLabel}` : "";
+    compileVersion = Math.max(
+      compileVersion + 1,
+      session.compilation.compileVersion,
+    );
+    lastRunCompletedAtMs =
+      typeof session.run.lastRunCompletedAtMs === "number"
+        ? session.run.lastRunCompletedAtMs
+        : null;
+    lastRunLabel =
+      lastRunCompletedAtMs === null
+        ? session.run.lastRunLabel === "never"
+          ? "never"
+          : "previously"
+        : lastRunAgeLabel();
+    lastRunStatusPrefix =
+      session.run.lastRunStatusPrefix ??
+      runStatusPrefixFromText(session.run.lastRunStatusText);
+    lastRunStatusState =
+      session.run.lastRunStatusState ??
+      runStatusStateFromPrefix(lastRunStatusPrefix);
+    lastRunStatusText = lastRunStatusPrefix
+      ? `${lastRunStatusPrefix} · last run ${lastRunLabel}`
+      : "";
     lastRunDefinitionHash = session.run.lastRunDefinitionHash;
     runStatus.textContent = lastRunStatusText || session.run.runStatus.text;
     runStatus.dataset.state = lastRunStatusState;
@@ -5978,11 +6841,12 @@ export async function loadSession(session: LoadableSession): Promise<void> {
         reactAppCode: null,
         reactRoot: null,
         sourceHash: tab.sourceHash,
-        terminalText: tab.terminalText.length > 0
-          ? tab.terminalText
-          : status?.state === "exited" && status.error
-          ? `${status.error}\r\n`
-          : "",
+        terminalText:
+          tab.terminalText.length > 0
+            ? tab.terminalText
+            : status?.state === "exited" && status.error
+              ? `${status.error}\r\n`
+              : "",
         terminalRenderedLength: 0,
         terminalCols: null,
         terminalRows: null,
@@ -5994,27 +6858,36 @@ export async function loadSession(session: LoadableSession): Promise<void> {
         pollTimer: null,
       };
     });
-    activeToolTabId = session.run.activeToolTabId === implementationToolTabId
-      ? implementationToolTabId
-      : runTabs.some((tab) => tab.id === session.run.activeToolTabId)
-      ? session.run.activeToolTabId
-      : implementationToolTabId;
+    activeToolTabId =
+      session.run.activeToolTabId === implementationToolTabId
+        ? implementationToolTabId
+        : runTabs.some((tab) => tab.id === session.run.activeToolTabId)
+          ? session.run.activeToolTabId
+          : implementationToolTabId;
 
     renderSourceTabs();
     renderRunTabs();
     updateEditorAvailability();
     updateActiveProjectMenuItem();
     updateTypeCheckMarkers([]);
-    updateReadinessDecorations(readinessForSource(editor.getValue(), latestImplementationSource));
+    updateReadinessDecorations(
+      readinessForSource(editor.getValue(), latestImplementationSource),
+    );
     updateRunStaleness(editor.getValue());
     refreshIncompleteSnippets(editor.getValue());
     if (active) {
       const request = compilationRequestForSheet(active.id);
       if (request) {
-        const restoredCompilationState = initialCompilationState(request, "compiled");
+        const restoredCompilationState = initialCompilationState(
+          request,
+          "compiled",
+        );
         rememberCompilationState({
           ...restoredCompilationState,
-          session: completeCompileSession(restoredCompilationState.session, latestImplementationSource),
+          session: completeCompileSession(
+            restoredCompilationState.session,
+            latestImplementationSource,
+          ),
           readiness: latestReadinessDefinitions,
           diagnostics: latestTypeCheckDiagnostics,
           snippetPreviews: cloneSnippetPreviewMap(snippetPreviewByHash),
@@ -6035,11 +6908,15 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     editor.setScrollLeft(session.editor.scrollLeft);
     scheduleSaveSourceTabs();
 
-    sessionCapture.track("load_session", {
-      restoredSessionId: session.sessionId,
-      workspaceId: session.workspaceId,
-      capturedAt: session.capturedAt,
-    }, true);
+    sessionCapture.track(
+      "load_session",
+      {
+        restoredSessionId: session.sessionId,
+        workspaceId: session.workspaceId,
+        capturedAt: session.capturedAt,
+      },
+      true,
+    );
   } finally {
     isLoadingSession = false;
   }
@@ -6059,19 +6936,31 @@ async function loadSharedSessionFromUrl(): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     runStatus.textContent = `Could not load shared session: ${message}`;
     runStatus.dataset.state = "error";
-    sessionCapture.track("shared_session_load_failed", { shareId, error: message }, true);
+    sessionCapture.track(
+      "shared_session_load_failed",
+      { shareId, error: message },
+      true,
+    );
   }
 }
 
-async function fetchSharedSessionViaDevApi(shareId: string): Promise<LoadableSession> {
-  const response = await fetch(`/api/shared-sessions/${encodeURIComponent(shareId)}`);
+async function fetchSharedSessionViaDevApi(
+  shareId: string,
+): Promise<LoadableSession> {
+  const response = await fetch(
+    `/api/shared-sessions/${encodeURIComponent(shareId)}`,
+  );
   const payload = (await response.json()) as {
     ok?: boolean;
     loadableSession?: unknown;
     error?: string;
   };
 
-  if (!response.ok || payload.ok !== true || !isLoadableSession(payload.loadableSession)) {
+  if (
+    !response.ok ||
+    payload.ok !== true ||
+    !isLoadableSession(payload.loadableSession)
+  ) {
     throw new Error(payload.error ?? "Shared session request failed");
   }
 
@@ -6085,7 +6974,9 @@ function currentLoadableSelection(): LoadableSessionSelection {
       line: selectedDefinitionTarget.line,
       name: selectedDefinitionTarget.name,
       targetKind: selectedDefinitionTarget.kind,
-      ...(selectedDefinitionTarget.className === undefined ? {} : { className: selectedDefinitionTarget.className }),
+      ...(selectedDefinitionTarget.className === undefined
+        ? {}
+        : { className: selectedDefinitionTarget.className }),
     };
   }
 
@@ -6105,12 +6996,19 @@ function restoreLoadableSelection(selection: LoadableSessionSelection): void {
   selectedWholeFileImplementation = false;
   selectedSnippetHash = null;
 
-  if (selection.kind === "snippet" && selection.hash && incompleteSnippetByHash.has(selection.hash)) {
+  if (
+    selection.kind === "snippet" &&
+    selection.hash &&
+    incompleteSnippetByHash.has(selection.hash)
+  ) {
     selectedSnippetHash = selection.hash;
   } else if (selection.kind === "whole-file") {
     selectedWholeFileImplementation = true;
   } else if (selection.kind === "definition") {
-    const target = implementationTargetAtLine(editor.getValue(), selection.line);
+    const target = implementationTargetAtLine(
+      editor.getValue(),
+      selection.line,
+    );
     if (
       target !== null &&
       target.kind === selection.targetKind &&
@@ -6134,7 +7032,8 @@ function restoredRunStatus(status: RunStatus | null): RunStatus | null {
     state: "exited",
     code: null,
     signal: null,
-    error: "Run was in progress when the session was captured and was not resumed.",
+    error:
+      "Run was in progress when the session was captured and was not resumed.",
   };
 }
 
@@ -6150,7 +7049,10 @@ function isLoadableSession(value: unknown): value is LoadableSession {
     typeof session.sessionId === "string" &&
     typeof session.workspaceId === "string" &&
     Array.isArray(session.sourceTabs) &&
-    isSourceTabState({ tabs: session.sourceTabs, activeTabId: session.activeSourceTabId }) &&
+    isSourceTabState({
+      tabs: session.sourceTabs,
+      activeTabId: session.activeSourceTabId,
+    }) &&
     typeof session.editor === "object" &&
     session.editor !== null &&
     typeof session.editor.value === "string" &&
@@ -6167,7 +7069,9 @@ function isLoadableSession(value: unknown): value is LoadableSession {
   );
 }
 
-function isLoadableSessionSelection(value: unknown): value is LoadableSessionSelection {
+function isLoadableSessionSelection(
+  value: unknown,
+): value is LoadableSessionSelection {
   if (typeof value !== "object" || value === null) {
     return false;
   }
@@ -6176,19 +7080,17 @@ function isLoadableSessionSelection(value: unknown): value is LoadableSessionSel
   return (
     selection.kind === "none" ||
     selection.kind === "whole-file" ||
-    (selection.kind === "snippet" && (typeof selection.hash === "string" || selection.hash === null)) ||
-    (
-      selection.kind === "definition" &&
+    (selection.kind === "snippet" &&
+      (typeof selection.hash === "string" || selection.hash === null)) ||
+    (selection.kind === "definition" &&
       typeof selection.line === "number" &&
       typeof selection.name === "string" &&
-      (
-        selection.targetKind === "function" ||
+      (selection.targetKind === "function" ||
         selection.targetKind === "class" ||
         selection.targetKind === "field" ||
-        selection.targetKind === "method"
-      ) &&
-      (selection.className === undefined || typeof selection.className === "string")
-    )
+        selection.targetKind === "method") &&
+      (selection.className === undefined ||
+        typeof selection.className === "string"))
   );
 }
 
@@ -6199,9 +7101,10 @@ function getOrCreateWorkspaceId(): string {
       return existing;
     }
 
-    const next = typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const next =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     window.localStorage.setItem(workspaceIdStorageKey, next);
     return next;
   } catch {
@@ -6227,7 +7130,10 @@ function loadAppSettings(): AppSettings {
 
 function saveAppSettings(settings: AppSettings): void {
   try {
-    window.localStorage.setItem(appSettingsStorageKey, JSON.stringify(settings));
+    window.localStorage.setItem(
+      appSettingsStorageKey,
+      JSON.stringify(settings),
+    );
   } catch (error) {
     console.error("Failed to save settings", error);
   }
@@ -6243,7 +7149,10 @@ function loadSidebarCollapsed(): boolean {
 
 function saveSidebarCollapsed(collapsed: boolean): void {
   try {
-    window.localStorage.setItem(sidebarCollapsedStorageKey, collapsed ? "true" : "false");
+    window.localStorage.setItem(
+      sidebarCollapsedStorageKey,
+      collapsed ? "true" : "false",
+    );
   } catch (error) {
     console.error("Failed to save sidebar state", error);
   }
@@ -6261,22 +7170,29 @@ function renderCompilationStrategyOptions(selected: CompilationMode): string {
     { value: "sequential", label: "Sequential" },
     { value: "agentic", label: "Agentic" },
   ];
-  const experimentalOptions: Array<{ value: CompilationMode; label: string }> = [
-    { value: "parallel-methods", label: "Parallel methods" },
-    { value: "agentic-methods", label: "Agentic methods" },
-  ];
+  const experimentalOptions: Array<{ value: CompilationMode; label: string }> =
+    [
+      { value: "parallel-methods", label: "Parallel methods" },
+      { value: "agentic-methods", label: "Agentic methods" },
+    ];
   const options = shouldShowExperimentalCompilationStrategies(selected)
     ? [...stableOptions, ...experimentalOptions]
     : stableOptions;
-  return options.map((option) => {
-    return `<option value="${option.value}"${selected === option.value ? " selected" : ""}>${option.label}</option>`;
-  }).join("");
+  return options
+    .map((option) => {
+      return `<option value="${option.value}"${selected === option.value ? " selected" : ""}>${option.label}</option>`;
+    })
+    .join("");
 }
 
-function shouldShowExperimentalCompilationStrategies(selected: CompilationMode): boolean {
-  return isExperimentalCompilationMode(selected) || window.localStorage.getItem(
-    experimentalCompilationStrategiesStorageKey,
-  ) === "true";
+function shouldShowExperimentalCompilationStrategies(
+  selected: CompilationMode,
+): boolean {
+  return (
+    isExperimentalCompilationMode(selected) ||
+    window.localStorage.getItem(experimentalCompilationStrategiesStorageKey) ===
+      "true"
+  );
 }
 
 function compilationMode(value: unknown): CompilationMode {
@@ -6349,7 +7265,9 @@ function appSnapshot(): JsonObject {
         text: runStatus.textContent ?? "",
         state: runStatus.dataset.state ?? "",
       },
-      runStale: lastRunDefinitionHash !== null && definitionHash(editor.getValue()) !== lastRunDefinitionHash,
+      runStale:
+        lastRunDefinitionHash !== null &&
+        definitionHash(editor.getValue()) !== lastRunDefinitionHash,
       output: runTabById(activeToolTabId)?.terminalText ?? "",
       runTabs: runTabs.map((tab) => ({
         id: tab.id,
@@ -6358,13 +7276,15 @@ function appSnapshot(): JsonObject {
         output: tab.terminalText,
       })),
       implementation: latestImplementationSource,
-      selectedSnippet: selectedSnippetHash === null
-        ? null
-        : {
-            hash: selectedSnippetHash,
-            label: incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
-            preview: snippetPreviewEditor.getValue(),
-          },
+      selectedSnippet:
+        selectedSnippetHash === null
+          ? null
+          : {
+              hash: selectedSnippetHash,
+              label:
+                incompleteSnippetByHash.get(selectedSnippetHash)?.label ?? null,
+              preview: snippetPreviewEditor.getValue(),
+            },
       activePageId,
     },
   };
@@ -6376,7 +7296,11 @@ function activeSampleItem(): HTMLButtonElement | null {
     return null;
   }
 
-  return sampleMenuItems.find((item) => item.dataset.sampleId === active.projectId) ?? null;
+  return (
+    sampleMenuItems.find(
+      (item) => item.dataset.sampleId === active.projectId,
+    ) ?? null
+  );
 }
 
 function requiredQuery<T extends Element>(selector: string): T {

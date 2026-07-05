@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { completeWithAnthropic, streamCompleteWithAnthropic } from "./anthropicComplete";
+import { requireAnthropicApiKey } from "./anthropicKeyService";
 import { runClaudeSingleFileAgent } from "./claudeSingleFileAgent";
 import { createGlobalCodeCache } from "./codeCache";
 import { handleCompileStream } from "./compileStream";
@@ -14,11 +15,13 @@ import { handleSessionEvents } from "./sessionCapture";
 import { handleSharedSessions } from "./sharedSessions";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
+requireAnthropicApiKey();
+
 const codeCache: CodeCache = createGlobalCodeCache();
 const agentCompilation = new AgentCompilationFramework({
   cache: codeCache,
   complete: streamCompleteWithAnthropic,
-  fileAgent: anthropicApiKeyConfigured() ? runClaudeSingleFileAgent : undefined,
+  fileAgent: runClaudeSingleFileAgent,
 });
 const interactiveRunApi = createInteractiveRunApi({
   cache: codeCache,
@@ -27,10 +30,6 @@ const interactiveRunApi = createInteractiveRunApi({
 });
 const port = Number(process.env.PORT ?? 8080);
 const distDir = resolve(fileURLToPath(new URL("../dist", import.meta.url)));
-
-function anthropicApiKeyConfigured(): boolean {
-  return typeof process.env.ANTHROPIC_API_KEY === "string" && process.env.ANTHROPIC_API_KEY.length > 0;
-}
 
 const server = createServer(async (req, res) => {
   try {
