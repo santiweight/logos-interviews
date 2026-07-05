@@ -10,8 +10,8 @@ import {
   type ImplementationTarget,
   type SnippetHash,
   UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
-} from "../codeSheet";
-import { snippetPopupTargetForClick } from "../snippetHitTest";
+} from "../domain/codeSheet";
+import { snippetPopupTargetForClick } from "./snippetHitTest";
 import type { LoadableSessionSelection } from "./types";
 
 export type EditorRange = {
