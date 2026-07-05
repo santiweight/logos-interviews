@@ -8,13 +8,31 @@ export type LogosApiOptions = {
 export function createLogosApi(service: LogosService, options: LogosApiOptions = { defaultSheets: [] }) {
   return {
     async handleDefaultProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
-      if (req.method !== "GET") {
-        sendJson(res, 405, { ok: false, error: "Method not allowed" });
+      if (req.method === "GET") {
+        const sheets = service.initializeDefaultProject(options.defaultSheets);
+        sendJson(res, 200, { ok: true, sheets, activeSheetId: sheets[0]?.id ?? null });
         return;
       }
 
-      const sheets = service.initializeDefaultProject(options.defaultSheets);
-      sendJson(res, 200, { ok: true, sheets, activeSheetId: sheets[0]?.id ?? null });
+      if (req.method === "PUT") {
+        const body = await readJson(req);
+        const sheets = sourceSheetsFromBody(body);
+        if (!sheets) {
+          sendJson(res, 400, { ok: false, error: "Missing sheets" });
+          return;
+        }
+
+        const nextSheets = service.replaceDefaultProject(sheets);
+        const activeSheetId = typeof body.activeSheetId === "string" &&
+          nextSheets.some((sheet) => sheet.id === body.activeSheetId)
+          ? body.activeSheetId
+          : nextSheets[0]?.id ?? null;
+        sendJson(res, 200, { ok: true, sheets: nextSheets, activeSheetId });
+        return;
+      }
+
+      sendJson(res, 405, { ok: false, error: "Method not allowed" });
+      return;
     },
 
     async handleNewSheet(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -108,7 +126,7 @@ export function createLogosApi(service: LogosService, options: LogosApiOptions =
     },
 
     async handleSheetState(req: IncomingMessage, res: ServerResponse): Promise<void> {
-      if (req.method !== "GET") {
+      if (req.method !== "GET" && req.method !== "DELETE") {
         sendJson(res, 405, { ok: false, error: "Method not allowed" });
         return;
       }
@@ -121,6 +139,12 @@ export function createLogosApi(service: LogosService, options: LogosApiOptions =
         return;
       }
 
+      if (req.method === "DELETE") {
+        const deleted = service.deleteSheet(sheetId);
+        sendJson(res, 200, { ok: true, deleted });
+        return;
+      }
+
       sendJson(res, 200, { ok: true, ...service.sheetState(sheetId) });
     },
 
@@ -129,6 +153,34 @@ export function createLogosApi(service: LogosService, options: LogosApiOptions =
       sendJson(res, 200, { ok: true });
     },
   };
+}
+
+function sourceSheetsFromBody(body: Record<string, unknown>): NewSheetInput[] | null {
+  if (!Array.isArray(body.sheets)) return null;
+  const seen = new Set<string>();
+  const sheets: NewSheetInput[] = [];
+  for (const item of body.sheets) {
+    if (typeof item !== "object" || item === null) return null;
+    const sheet = item as Partial<Record<keyof NewSheetInput, unknown>>;
+    if (
+      typeof sheet.id !== "string" ||
+      sheet.id.length === 0 ||
+      typeof sheet.projectId !== "string" ||
+      typeof sheet.title !== "string" ||
+      typeof sheet.source !== "string" ||
+      seen.has(sheet.id)
+    ) {
+      return null;
+    }
+    seen.add(sheet.id);
+    sheets.push({
+      id: sheet.id,
+      projectId: sheet.projectId,
+      title: sheet.title,
+      source: sheet.source,
+    });
+  }
+  return sheets;
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
