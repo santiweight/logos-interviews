@@ -310,23 +310,6 @@ const sidebarToggleIcon = `
     <path d="M12.5 5.5 8 10l4.5 4.5" />
   </svg>
 `;
-const thumbUpIcon = `
-  <svg class="feedback-icon" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M6.2 15.2h6.7c.8 0 1.5-.5 1.7-1.3L15.7 9c.2-.9-.5-1.7-1.4-1.7h-3.1V4.1c0-.9-1.2-1.2-1.6-.4L6.2 10z" />
-  </svg>
-`;
-const thumbDownIcon = `
-  <svg class="feedback-icon" viewBox="0 0 20 20" aria-hidden="true">
-    <path d="M6.2 4.8h6.7c.8 0 1.5.5 1.7 1.3l1.1 4.9c.2.9-.5 1.7-1.4 1.7h-3.1v3.2c0 .9-1.2 1.2-1.6.4l-3.4-6.3z" />
-  </svg>
-`;
-const shareIcon = `
-  <svg class="feedback-icon share-icon" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-  </svg>
-`;
-const feedbackResetTimers = new WeakMap<HTMLElement, number>();
 const templateGroups = createTemplateGroups(sampleTemplateGroups);
 type ParsedArticle = {
   title: string | null;
@@ -399,26 +382,6 @@ function refreshPageTitles(): void {
       section.setAttribute("aria-label", title);
     }
   }
-}
-
-function renderFeedbackControls(panel: string, options: { includeShare?: boolean } = {}): string {
-  return `
-    <div class="feedback-controls" data-feedback-controls="${panel}" aria-label="${panel} feedback">
-      <span class="feedback-receipt" data-feedback-receipt aria-live="polite"></span>
-      ${options.includeShare
-        ? `<button class="feedback-button share-button" type="button" data-share-session aria-label="Share session link" title="Share link">
-          ${shareIcon}
-        </button>`
-        : ""}
-      ${options.includeShare ? `<span class="feedback-separator" aria-hidden="true"></span>` : ""}
-      <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="up" aria-label="Mark ${panel} helpful" title="Helpful">
-        ${thumbUpIcon}
-      </button>
-      <button class="feedback-button" type="button" data-feedback-panel="${panel}" data-feedback-rating="down" aria-label="Mark ${panel} not helpful" title="Not helpful">
-        ${thumbDownIcon}
-      </button>
-    </div>
-  `;
 }
 
 function renderSampleGroup(group: SampleGroup): string {
@@ -536,9 +499,6 @@ app.innerHTML = `
               </details>
             </div>
             <div id="editor" class="editor" aria-label="Code editor"></div>
-            <div class="code-feedback-overlay">
-              ${renderFeedbackControls("code", { includeShare: true })}
-            </div>
             <section id="snippet-panel" class="snippet-panel" aria-label="Selected implementation preview" aria-hidden="true" hidden>
               <div
                 id="snippet-resize-handle"
@@ -551,7 +511,6 @@ app.innerHTML = `
               <header id="snippet-panel-header" class="snippet-panel-header">
                 <span id="snippet-status-indicator" class="snippet-status-indicator" aria-hidden="true"></span>
                 <h2 id="snippet-title">Compilation View</h2>
-                ${renderFeedbackControls("compilation")}
               </header>
               <div id="snippet-preview" class="snippet-preview" aria-label="Compilation preview"></div>
             </section>
@@ -581,7 +540,6 @@ app.innerHTML = `
                   >Implementation</button>
                 </div>
               </div>
-              ${renderFeedbackControls("output")}
             </div>
             <div id="tool-panels" class="tool-panels">
               <div id="implementation-view-panel" class="output implementation-output tab-panel active" role="tabpanel" aria-labelledby="implementation-view-tab" aria-live="polite"></div>
@@ -1293,21 +1251,6 @@ app.addEventListener("click", (event) => {
   if (runPanel) {
     focusTerminalInput(runPanel.dataset.runPanelId ?? "");
   }
-
-  const shareButton = target?.closest<HTMLButtonElement>("[data-share-session]") ?? null;
-  if (shareButton) {
-    void shareCurrentSessionFromButton(shareButton);
-    return;
-  }
-
-  const button = target
-    ? target.closest<HTMLButtonElement>("[data-feedback-rating]")
-    : null;
-  if (!button) {
-    return;
-  }
-
-  void submitFeedbackFromButton(button);
 });
 toolTabsList.addEventListener("click", (event) => {
   const target = event.target;
@@ -2797,7 +2740,6 @@ async function hydrateSourceTabsFromDatabase(): Promise<void> {
 
 async function bootWorkspace(): Promise<void> {
   await hydrateSourceTabsFromDatabase();
-  await loadSharedSessionFromUrl();
 }
 
 async function loadSourceTabState(): Promise<SourceTabState> {
@@ -5147,195 +5089,6 @@ function createRunTabId(runnable: Runnable): string {
   return `run-${runnable.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-async function submitFeedbackFromButton(button: HTMLButtonElement): Promise<void> {
-  const panel = button.dataset.feedbackPanel;
-  const rating = button.dataset.feedbackRating;
-  if (!panel || (rating !== "up" && rating !== "down") || button.disabled) {
-    return;
-  }
-
-  const controls = button.closest<HTMLElement>("[data-feedback-controls]");
-  const buttons = controls
-    ? Array.from(controls.querySelectorAll<HTMLButtonElement>("[data-feedback-rating]"))
-    : [button];
-  const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
-  clearFeedbackResetTimer(controls);
-  buttons.forEach((item) => {
-    item.disabled = true;
-    item.dataset.state = item === button ? "sent" : "";
-  });
-
-  sessionCapture.track("feedback_submitted", { panel, rating }, true);
-
-  try {
-    const result = await sendFeedbackViaDevApi(panel, rating);
-    buttons.forEach((item) => {
-      item.disabled = false;
-      item.dataset.state = item === button ? "sent" : "";
-    });
-    button.dataset.state = "sent";
-    button.title = `Feedback sent: ${result.feedbackId}`;
-    if (receipt) {
-      receipt.textContent = "Feedback received";
-      receipt.dataset.state = "sent";
-    }
-    const resetTimer = window.setTimeout(() => {
-      buttons.forEach((item) => {
-        item.dataset.state = "";
-      });
-      if (receipt) {
-        receipt.textContent = "";
-        receipt.dataset.state = "";
-      }
-      if (controls) {
-        feedbackResetTimers.delete(controls);
-      }
-    }, 3600);
-    if (controls) {
-      feedbackResetTimers.set(controls, resetTimer);
-    }
-  } catch (error) {
-    buttons.forEach((item) => {
-      item.disabled = false;
-      if (item !== button) {
-        item.dataset.state = "";
-      }
-    });
-    button.dataset.state = "error";
-    button.title = error instanceof Error ? error.message : "Feedback failed";
-    if (receipt) {
-      receipt.textContent = "Feedback failed";
-      receipt.dataset.state = "error";
-    }
-  }
-}
-
-async function shareCurrentSessionFromButton(button: HTMLButtonElement): Promise<void> {
-  if (button.disabled) {
-    return;
-  }
-
-  const controls = button.closest<HTMLElement>("[data-feedback-controls]");
-  const receipt = controls?.querySelector<HTMLElement>("[data-feedback-receipt]") ?? null;
-  clearFeedbackResetTimer(controls);
-  button.disabled = true;
-  button.dataset.state = "sending";
-  if (receipt) {
-    receipt.textContent = "Sharing";
-    receipt.dataset.state = "sending";
-  }
-
-  sessionCapture.track("share_session_requested", undefined, true);
-
-  try {
-    const result = await sendSharedSessionViaDevApi();
-    const shareUrl = shareUrlForId(result.shareId);
-    await copyTextToClipboard(shareUrl);
-    button.disabled = false;
-    button.dataset.state = "sent";
-    button.title = "Share link copied";
-    if (receipt) {
-      receipt.textContent = "Link copied";
-      receipt.dataset.state = "sent";
-    }
-
-    const resetTimer = window.setTimeout(() => {
-      button.dataset.state = "";
-      button.title = "Share";
-      if (receipt) {
-        receipt.textContent = "";
-        receipt.dataset.state = "";
-      }
-      if (controls) {
-        feedbackResetTimers.delete(controls);
-      }
-    }, 3600);
-    if (controls) {
-      feedbackResetTimers.set(controls, resetTimer);
-    }
-
-    sessionCapture.track("share_session_created", { shareId: result.shareId, url: shareUrl }, true);
-  } catch (error) {
-    button.disabled = false;
-    button.dataset.state = "error";
-    button.title = error instanceof Error ? error.message : "Share failed";
-    if (receipt) {
-      receipt.textContent = "Share failed";
-      receipt.dataset.state = "error";
-    }
-  }
-}
-
-function clearFeedbackResetTimer(controls: HTMLElement | null | undefined): void {
-  if (!controls) {
-    return;
-  }
-
-  const existingTimer = feedbackResetTimers.get(controls);
-  if (existingTimer !== undefined) {
-    window.clearTimeout(existingTimer);
-    feedbackResetTimers.delete(controls);
-  }
-}
-
-async function sendFeedbackViaDevApi(
-  panel: string,
-  rating: "up" | "down",
-): Promise<{ ok: true; feedbackId: string }> {
-  const loadableSession = createLoadableSession();
-  const body = {
-    sessionId: sessionCapture.sessionId,
-    panel,
-    rating,
-    url: window.location.href,
-    loadableSession,
-    state: appSnapshot(),
-  };
-
-  const response = await fetch("/api/feedback", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const payload = (await response.json()) as {
-    ok?: boolean;
-    feedbackId?: string;
-    error?: string;
-  };
-
-  if (!response.ok || payload.ok !== true || typeof payload.feedbackId !== "string") {
-    throw new Error(payload.error ?? "Feedback request failed");
-  }
-
-  return { ok: true, feedbackId: payload.feedbackId };
-}
-
-async function sendSharedSessionViaDevApi(): Promise<{ ok: true; shareId: string }> {
-  const response = await fetch("/api/shared-sessions", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ loadableSession: createLoadableSession() }),
-  });
-  const payload = (await response.json()) as {
-    ok?: boolean;
-    shareId?: string;
-    error?: string;
-  };
-
-  if (!response.ok || payload.ok !== true || typeof payload.shareId !== "string") {
-    throw new Error(payload.error ?? "Share request failed");
-  }
-
-  return { ok: true, shareId: payload.shareId };
-}
-
-function shareUrlForId(shareId: string): string {
-  const url = new URL(window.location.href);
-  url.searchParams.set("session", shareId);
-  url.hash = "";
-  return url.toString();
-}
-
 async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard) {
     try {
@@ -5863,37 +5616,6 @@ export async function loadSession(session: LoadableSession): Promise<void> {
   } finally {
     isLoadingSession = false;
   }
-}
-
-async function loadSharedSessionFromUrl(): Promise<void> {
-  const shareId = new URLSearchParams(window.location.search).get("session");
-  if (!shareId) {
-    return;
-  }
-
-  try {
-    const session = await fetchSharedSessionViaDevApi(shareId);
-    await loadSession(session);
-    sessionCapture.track("shared_session_loaded", { shareId }, true);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    sessionCapture.track("shared_session_load_failed", { shareId, error: message }, true);
-  }
-}
-
-async function fetchSharedSessionViaDevApi(shareId: string): Promise<LoadableSession> {
-  const response = await fetch(`/api/shared-sessions/${encodeURIComponent(shareId)}`);
-  const payload = (await response.json()) as {
-    ok?: boolean;
-    loadableSession?: unknown;
-    error?: string;
-  };
-
-  if (!response.ok || payload.ok !== true || !isLoadableSession(payload.loadableSession)) {
-    throw new Error(payload.error ?? "Shared session request failed");
-  }
-
-  return payload.loadableSession;
 }
 
 function currentLoadableSelection(): LoadableSessionSelection {

@@ -8,7 +8,7 @@ import {
   type ObjectStorageConfig,
 } from "./objectStorage";
 
-type CaptureKind = "session-events" | "session-index" | "feedback";
+type CaptureKind = "session-events" | "session-index";
 
 type CaptureObjectStorageConfig = ObjectStorageConfig & {
   prefix: string;
@@ -117,25 +117,6 @@ export async function listSessionCaptureSummariesWithLimit(
   return summarizeSessionCaptureRecords(records).slice(0, maxSessions);
 }
 
-export async function writeFeedbackCaptureRecord(
-  record: Record<string, unknown>,
-): Promise<void> {
-  const body = `${JSON.stringify(record)}\n`;
-  const storageConfig = captureObjectStorageConfig("feedback");
-  if (storageConfig) {
-    await putCaptureObject(storageConfig, body, "application/x-ndjson");
-    return;
-  }
-
-  const logDir = resolve(
-    process.env.FEEDBACK_CAPTURE_DIR ??
-      process.env.SESSION_CAPTURE_DIR ??
-      "logs",
-  );
-  await mkdir(logDir, { recursive: true });
-  await appendFile(resolve(logDir, "feedback.jsonl"), body, "utf8");
-}
-
 function captureObjectStorageConfig(kind: CaptureKind): CaptureObjectStorageConfig | null {
   const config = objectStorageConfig();
   if (!config) {
@@ -150,9 +131,6 @@ function captureObjectStorageConfig(kind: CaptureKind): CaptureObjectStorageConf
 
 function captureObjectPrefix(kind: CaptureKind): string {
   const basePrefix = "session-capture";
-  if (kind === "feedback") {
-    return joinPrefix(basePrefix, "feedback");
-  }
   if (kind === "session-index") {
     return joinPrefix(basePrefix, "session-index");
   }

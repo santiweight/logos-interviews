@@ -109,7 +109,6 @@ export function App() {
       const active = state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0] ?? null;
       setImplementation(active?.implementation ?? scaffoldForSource(active?.source ?? ""));
       editorRef.current?.setValue(active?.source ?? "");
-      await loadSharedSessionFromUrl();
     }
   }, []);
 
@@ -631,37 +630,6 @@ export function App() {
     await writeUserState({ tabs: tabsWithImplementation, activeTabId: active?.id ?? null });
   }
 
-  async function loadSharedSessionFromUrl(): Promise<void> {
-    const shareId = new URLSearchParams(window.location.search).get("session");
-    if (!shareId) return;
-    try {
-      const response = await fetch(`/api/shared-sessions/${encodeURIComponent(shareId)}`);
-      const payload = await response.json() as { loadableSession?: LoadableSession; ok?: boolean; error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "Shared session request failed");
-      if (!payload.loadableSession) throw new Error("Shared session response is missing session data");
-      await loadSession(payload.loadableSession);
-    } catch (error) {
-      console.error(error);
-    }
-  }
-
-  async function shareSession(): Promise<void> {
-    try {
-      const response = await fetch("/api/shared-sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ loadableSession: createLoadableSession() }),
-      });
-      const payload = await response.json() as { ok?: boolean; shareId?: string; error?: string };
-      if (!response.ok || !payload.shareId) throw new Error(payload.error ?? "Could not share session");
-      const url = new URL(window.location.href);
-      url.searchParams.set("session", payload.shareId);
-      await navigator.clipboard?.writeText(url.toString());
-    } catch (error) {
-      console.error(error);
-    }
-  }
-
   async function clearCodeCache(): Promise<void> {
     try {
       await fetch("/api/cache", { method: "DELETE" });
@@ -803,18 +771,6 @@ export function App() {
                 closeDetails("#workspace-menu");
               },
             }),
-            e("div", { className: "code-feedback-overlay" },
-              e("div", { className: "feedback-controls", "data-feedback-controls": "code" },
-                e("button", {
-                  className: "feedback-button share-button",
-                  type: "button",
-                  "data-share-session": true,
-                  "aria-label": "Share session link",
-                  title: "Share link",
-                  onClick: () => void shareSession(),
-                }, "Share"),
-              ),
-            ),
           ),
           e("div", {
             id: "code-run-resize-handle",
@@ -834,7 +790,6 @@ export function App() {
             onCloseRunTab: closeRunTab,
             onRunInput: sendRunInput,
             onRunResize: sendRunResize,
-            onShareSession: () => void shareSession(),
           }),
         ),
       ),
