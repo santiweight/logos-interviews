@@ -3,12 +3,14 @@ import { AgentView } from "./AgentView";
 import { ImplementationView } from "./ImplementationView";
 import { OutputTabBar } from "./OutputTabBar";
 import { RunPanel } from "./RunPanel";
+import type { EditorRange } from "./implementationFocus";
 import type { RunTab } from "./types";
 
 const e = React.createElement;
 
 type OutputPaneProps = {
   implementation: string;
+  implementationFocusRange: EditorRange | null;
   compileSessionId: string | null;
   compiling: boolean;
   runTabs: RunTab[];
@@ -38,6 +40,7 @@ export function OutputPane(props: OutputPaneProps) {
       { id: "tool-panels", className: "tool-panels" },
       e(ImplementationView, {
         implementation: props.implementation,
+        focusRange: props.implementationFocusRange,
         compiling: props.compiling,
         active: props.activeTabId === "implementation-view",
       }),
