@@ -1173,18 +1173,18 @@ describe("run program browser flow", () => {
       const page = await context.newPage();
       const source = Array.from({ length: 45 }, (_item, index) => {
         const name = `item_${index + 1}`;
-        return `def ${name}():\n  return ${index + 1}`;
+        return `function ${name}(): number {\n  return ${index + 1};\n}`;
       }).join("\n");
 
       await page.goto(baseUrl);
       await waitForSessionHelpers(page);
       await loadSource(page, source, "Visible Implementation Navigation");
 
-      await page.locator("#editor .view-line").filter({ hasText: "def item_12" }).click();
-      await expect.poll(async () => visibleImplementationLines(page)).toContain("def item_12():");
+      await page.locator("#editor .view-line").filter({ hasText: "function item_3" }).click();
+      await expect.poll(async () => visibleImplementationLines(page)).toContain("function item_3(): number {");
 
       const before = await visibleImplementationLines(page);
-      await page.locator("#editor .view-line").filter({ hasText: "def item_14" }).click();
+      await page.locator("#editor .view-line").filter({ hasText: "function item_4" }).click();
       await page.waitForTimeout(250);
       await expect.poll(async () => visibleImplementationLines(page)).toEqual(before);
     } finally {

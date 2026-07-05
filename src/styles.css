@@ -1503,6 +1503,18 @@ h2 {
   transform-origin: center;
 }
 
+.runnable-run-zone {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 2px 0;
+}
+
+.monaco-editor .view-zones {
+  z-index: 1;
+}
+
 .runnable-run-widget {
   display: flex;
   align-items: center;
