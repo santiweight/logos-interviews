@@ -78,6 +78,7 @@ export function App() {
 
   const editorRef = React.useRef<CodeEditorHandle | null>(null);
   const compileTimerRef = React.useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const compileControllerRef = React.useRef(new Map<string, AbortController>());
   const compileSessionRef = React.useRef(new Map<string, CompileSessionState>());
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const hydratedRef = React.useRef(false);
@@ -248,6 +249,7 @@ export function App() {
   }, []);
 
   const closeSheet = React.useCallback((sheetId: string) => {
+    stopSheetCompilation(sheetId);
     setSourceTabs((tabs) => {
       const index = tabs.findIndex((tab) => tab.id === sheetId);
       const nextTabs = tabs.filter((tab) => tab.id !== sheetId);
@@ -259,6 +261,7 @@ export function App() {
       }
       return nextTabs;
     });
+    void deleteBackendSheet(sheetId);
   }, [activeSourceTabId]);
 
   const startRun = React.useCallback((runnable: Runnable) => {
@@ -319,9 +322,14 @@ export function App() {
     }
     const existingTimer = compileTimerRef.current.get(sheetId);
     if (existingTimer) clearTimeout(existingTimer);
+    compileControllerRef.current.get(sheetId)?.abort();
+    const controller = new AbortController();
+    compileControllerRef.current.set(sheetId, controller);
     const timer = setTimeout(() => {
       compileTimerRef.current.delete(sheetId);
-      void updateSheetAndPoll(sheetId, source, options);
+      if (!controller.signal.aborted) {
+        void updateSheetAndPoll(sheetId, source, controller, options);
+      }
     }, 250);
     compileTimerRef.current.set(sheetId, timer);
   }
@@ -329,10 +337,10 @@ export function App() {
   async function updateSheetAndPoll(
     sheetId: string,
     source: string,
+    controller: AbortController,
     options: { quietStatus?: boolean } = {},
   ): Promise<void> {
     compileSessionRef.current.get(sheetId)?.controller.abort();
-    const controller = new AbortController();
     try {
       const start = await fetch("/api/v2/compile", {
         method: "POST",
@@ -359,6 +367,10 @@ export function App() {
         if (activeSourceTabIdRef.current === sheetId) {
           setRunStatus(message, "error");
         }
+      }
+    } finally {
+      if (compileControllerRef.current.get(sheetId) === controller) {
+        compileControllerRef.current.delete(sheetId);
       }
     }
   }
@@ -556,10 +568,6 @@ export function App() {
     }
   }
 
-  async function createBackendSheets(tabs: SourceTab[]): Promise<void> {
-    await Promise.all(tabs.map((tab) => createBackendSheet(tab, { poll: false })));
-  }
-
   function createLoadableSession(): LoadableSession {
     const snapshot = editorRef.current?.snapshot() ?? {
       value: activeSource,
@@ -606,14 +614,7 @@ export function App() {
 
   async function loadSession(session: LoadableSession): Promise<void> {
     explicitSessionLoadedRef.current = true;
-    for (const timer of compileTimerRef.current.values()) {
-      clearTimeout(timer);
-    }
-    compileTimerRef.current.clear();
-    for (const compileSession of compileSessionRef.current.values()) {
-      compileSession.controller.abort();
-    }
-    compileSessionRef.current.clear();
+    stopAllSheetCompilations();
     const tabs = session.sourceTabs.length > 0 ? session.sourceTabs : defaultSourceTabState().tabs;
     const activeId = session.activeSourceTabId ?? tabs[0]?.id ?? null;
     const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0] ?? null;
@@ -721,14 +722,59 @@ export function App() {
   }
 
   async function resetWorkspace(): Promise<void> {
+    stopAllSheetCompilations();
     const next = defaultSourceTabState();
     setSourceTabs(next.tabs);
     setActiveSourceTabId(next.activeTabId);
     const active = next.tabs.find((tab) => tab.id === next.activeTabId) ?? null;
     setImplementation(active?.implementation ?? scaffoldForSource(active?.source ?? ""));
     editorRef.current?.setValue(active?.source ?? "");
-    void createBackendSheets(next.tabs);
-    await writeUserState(next);
+    setRunStatus("Resetting workspace", "");
+    try {
+      const persisted = await replaceBackendProject(next);
+      setSourceTabs(persisted.tabs);
+      setActiveSourceTabId(persisted.activeTabId);
+      const persistedActive = persisted.tabs.find((tab) => tab.id === persisted.activeTabId) ?? null;
+      setImplementation(persistedActive?.implementation ?? scaffoldForSource(persistedActive?.source ?? ""));
+      editorRef.current?.setValue(persistedActive?.source ?? "");
+      await writeUserState(persisted);
+      setRunStatus("Workspace reset", "ok");
+    } catch (error) {
+      await writeUserState(next);
+      setRunStatus(error instanceof Error ? `Workspace reset locally: ${error.message}` : "Workspace reset locally", "error");
+    }
+  }
+
+  function stopSheetCompilation(sheetId: string): void {
+    const timer = compileTimerRef.current.get(sheetId);
+    if (timer) clearTimeout(timer);
+    compileTimerRef.current.delete(sheetId);
+    compileControllerRef.current.get(sheetId)?.abort();
+    compileControllerRef.current.delete(sheetId);
+    compileSessionRef.current.get(sheetId)?.controller.abort();
+    compileSessionRef.current.delete(sheetId);
+    setCompilingSheetIds((ids) => {
+      if (!ids.has(sheetId)) return ids;
+      const next = new Set(ids);
+      next.delete(sheetId);
+      return next;
+    });
+  }
+
+  function stopAllSheetCompilations(): void {
+    for (const timer of compileTimerRef.current.values()) {
+      clearTimeout(timer);
+    }
+    compileTimerRef.current.clear();
+    for (const controller of compileControllerRef.current.values()) {
+      controller.abort();
+    }
+    compileControllerRef.current.clear();
+    for (const compileSession of compileSessionRef.current.values()) {
+      compileSession.controller.abort();
+    }
+    compileSessionRef.current.clear();
+    setCompilingSheetIds(new Set());
   }
 
   function changeCompilationStrategy(strategy: CompilationMode) {
@@ -921,6 +967,38 @@ async function loadDefaultProjectFromBackend(): Promise<SourceTabState> {
   }
 }
 
+async function replaceBackendProject(state: SourceTabState): Promise<SourceTabState> {
+  const response = await fetch("/api/v2/project/default", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sheets: state.tabs.map(sourceTabToBackendInput),
+      activeSheetId: state.activeTabId,
+    }),
+  });
+  const payload = await response.json() as {
+    ok?: boolean;
+    sheets?: BackendSheet[];
+    activeSheetId?: string | null;
+    error?: string;
+  };
+  if (!response.ok || payload.ok !== true || !Array.isArray(payload.sheets)) {
+    throw new Error(payload.error ?? "Could not reset backend project");
+  }
+
+  const tabs = payload.sheets.map(sourceTabFromBackendSheet);
+  return { tabs, activeTabId: payload.activeSheetId ?? tabs[0]?.id ?? null };
+}
+
+async function deleteBackendSheet(sheetId: string): Promise<void> {
+  try {
+    const response = await fetch(`/api/v2/sheet?id=${encodeURIComponent(sheetId)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error("Could not delete backend sheet");
+  } catch {
+    // Keep tab closing responsive; reset can still replace backend state if a delete fails.
+  }
+}
+
 function sourceTabFromBackendSheet(sheet: BackendSheet): SourceTab {
   return {
     id: sheet.id,
@@ -930,6 +1008,15 @@ function sourceTabFromBackendSheet(sheet: BackendSheet): SourceTab {
     implementation: sheet.implementation ?? scaffoldForSource(sheet.source),
     implSheetId: sheet.implSheetId ?? null,
     compileSessionId: sheet.currentSessionId ?? sheet.compileSessionId ?? null,
+  };
+}
+
+function sourceTabToBackendInput(tab: SourceTab): Pick<SourceTab, "id" | "projectId" | "title" | "source"> {
+  return {
+    id: tab.id,
+    projectId: tab.projectId,
+    title: tab.title,
+    source: tab.source,
   };
 }
 

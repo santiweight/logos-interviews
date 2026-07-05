@@ -40,6 +40,7 @@ export class LogosService {
   private readonly sessions = new Map<CompileSessionId, CompileSession>();
   private readonly compilingSessionIds = new Set<CompileSessionId>();
   private readonly watchedSheetIds = new Set<LogosSheetId>();
+  private defaultProjectInitialized = false;
   private sessionCounter = 0;
 
   constructor(options: LogosServiceOptions) {
@@ -47,11 +48,21 @@ export class LogosService {
   }
 
   initializeDefaultProject(sheets: NewSheetInput[]): SheetState[] {
-    if (this.sheets.size === 0) {
+    if (!this.defaultProjectInitialized) {
       for (const sheet of sheets) {
         this.newSheet(sheet);
         this.watchSheet(sheet.id);
       }
+      this.defaultProjectInitialized = true;
+    }
+    return this.allSheets();
+  }
+
+  replaceDefaultProject(sheets: NewSheetInput[]): SheetState[] {
+    this.clearSheets();
+    this.defaultProjectInitialized = true;
+    for (const sheet of sheets) {
+      this.newSheet(sheet);
     }
     return this.allSheets();
   }
@@ -97,6 +108,16 @@ export class LogosService {
 
   unwatchSheet(sheetId: LogosSheetId): void {
     this.watchedSheetIds.delete(sheetId);
+  }
+
+  deleteSheet(sheetId: LogosSheetId): boolean {
+    const existing = this.sheets.get(sheetId);
+    this.watchedSheetIds.delete(sheetId);
+    if (existing?.currentSessionId) {
+      this.sessions.delete(existing.currentSessionId);
+      this.compilingSessionIds.delete(existing.currentSessionId);
+    }
+    return this.sheets.delete(sheetId);
   }
 
   private ensureCompiled(sheetId: LogosSheetId): CompileSessionId | null {
@@ -196,6 +217,11 @@ export class LogosService {
   }
 
   clear(): void {
+    this.clearSheets();
+    this.defaultProjectInitialized = false;
+  }
+
+  private clearSheets(): void {
     this.sheets.clear();
     this.sessions.clear();
     this.compilingSessionIds.clear();
