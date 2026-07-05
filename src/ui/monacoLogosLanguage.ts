@@ -108,6 +108,10 @@ export function defineInterviewLightTheme(): void {
       "editorBracketHighlight.unexpectedBracket.foreground": "#aca59b",
       "editorIndentGuide.background1": "#e2ddd4",
       "editorIndentGuide.activeBackground1": "#adc0d6",
+      "scrollbar.shadow": "#00000000",
+      "scrollbarSlider.background": "#5b606933",
+      "scrollbarSlider.hoverBackground": "#5b60694d",
+      "scrollbarSlider.activeBackground": "#5b606966",
     },
   });
 }

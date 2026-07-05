@@ -67,6 +67,7 @@ import {
   type SampleGroup,
   type SampleProgram,
 } from "./samples";
+import { iframeScrollbarCss, sleekMonacoScrollbar } from "./ui/scrollbars";
 import type { TypeCheckDiagnostic } from "./typeCheck";
 
 globalThis.MonacoEnvironment = {
@@ -991,6 +992,10 @@ monaco.editor.defineTheme("interview-light", {
     "editorBracketHighlight.unexpectedBracket.foreground": "#aca59b",
     "editorIndentGuide.background1": "#e2ddd4",
     "editorIndentGuide.activeBackground1": "#adc0d6",
+    "scrollbar.shadow": "#00000000",
+    "scrollbarSlider.background": "#5b606933",
+    "scrollbarSlider.hoverBackground": "#5b60694d",
+    "scrollbarSlider.activeBackground": "#5b606966",
   },
 });
 
@@ -1011,12 +1016,15 @@ const editor = monaco.editor.create(editorEl, {
   overviewRulerLanes: 0,
   scrollBeyondLastLine: false,
   renderLineHighlight: "none",
+  wordWrap: "on",
+  wrappingIndent: "same",
   tabSize: 2,
   insertSpaces: true,
   glyphMargin: true,
   lineNumbers: "off",
   lineNumbersMinChars: 0,
   lineDecorationsWidth: 8,
+  scrollbar: sleekMonacoScrollbar,
   folding: false,
   matchBrackets: "never",
   occurrencesHighlight: "off",
@@ -1043,12 +1051,15 @@ const snippetPreviewEditor = monaco.editor.create(snippetPreview, {
   overviewRulerLanes: 0,
   scrollBeyondLastLine: false,
   renderLineHighlight: "none",
+  wordWrap: "on",
+  wrappingIndent: "same",
   tabSize: 2,
   insertSpaces: true,
   glyphMargin: true,
   lineNumbers: "off",
   lineNumbersMinChars: 0,
   lineDecorationsWidth: 8,
+  scrollbar: sleekMonacoScrollbar,
   folding: false,
   readOnly: true,
   domReadOnly: true,
@@ -1083,6 +1094,7 @@ const implementationViewEditor = monaco.editor.create(implementationViewPanel, {
   lineNumbers: "off",
   lineNumbersMinChars: 0,
   lineDecorationsWidth: 8,
+  scrollbar: sleekMonacoScrollbar,
   folding: false,
   readOnly: true,
   domReadOnly: true,
@@ -4762,6 +4774,7 @@ body {
 body > * {
   min-height: 100%;
 }
+${styleTagContent(iframeScrollbarCss)}
 ${styleTagContent(radixThemesCss)}
 </style></head><body></body></html>`);
     doc.close();

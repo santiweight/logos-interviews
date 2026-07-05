@@ -10,6 +10,7 @@ import {
 } from "../codeSheet";
 import { logosTypeScriptLanguageId } from "./monacoLogosLanguage";
 import { installMonacoShortcutGuard } from "./monacoShortcutGuard";
+import { sleekMonacoScrollbar } from "./scrollbars";
 import type { EditorSnapshot } from "./types";
 
 const e = React.createElement;
@@ -99,8 +100,12 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
         fontSize: 14,
         lineHeight: 22,
         minimap: { enabled: false },
+        scrollBeyondLastLine: false,
+        wordWrap: "on",
+        wrappingIndent: "same",
         glyphMargin: true,
         lineNumbers: "off",
+        scrollbar: sleekMonacoScrollbar,
         folding: false,
         matchBrackets: "never",
         occurrencesHighlight: "off",
