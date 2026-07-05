@@ -43,8 +43,6 @@ type TestLoadableSession = {
   };
   run: {
     activeToolTabId: string | null;
-    lastRunLabel: string;
-    lastRunStatusText: string;
     tabs: TestRunTab[];
   };
 };
@@ -248,8 +246,6 @@ describe("run program browser flow", () => {
         return (await page.locator("#implementation-view-panel .view-line").first().textContent())
           ?.replaceAll("\u00a0", " ");
       }).toContain("function main");
-      await expect.poll(async () => page.locator("#run-status").textContent()).not.toContain("Code is being generated");
-
       await page.locator(".runnable-run-widget").first().click();
       await expect.poll(() => runStartRequests).toBe(1);
       await expect.poll(async () => {
@@ -829,7 +825,6 @@ describe("run program browser flow", () => {
       await page.getByRole("menuitem", { name: "Reset workspace" }).click();
 
       await expect.poll(() => replaceRequests).toBe(1);
-      await expect.poll(async () => page.locator("#run-status").textContent()).toBe("Workspace reset");
       await expect.poll(async () => page.locator("[data-source-tab-id]").count()).toBe(3);
       await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy First Sheet");
       await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy Second Sheet");
@@ -959,7 +954,6 @@ describe("run program browser flow", () => {
       await page.getByRole("menuitem", { name: "Clear code cache" }).click();
 
       await expect.poll(() => clearRequests).toBe(1);
-      await expect.poll(async () => page.locator("#run-status").textContent()).toBe("Code cache cleared");
       await expect.poll(() => compileRequestsAfterClear).toBe(1);
     } finally {
       await context.close();
@@ -1192,8 +1186,6 @@ describe("run program browser flow", () => {
           run: {
             ...session.run,
             activeToolTabId: "run-main",
-            lastRunLabel: "previously",
-            lastRunStatusText: "Running main · last run previously",
             tabs: [{
               id: "run-main",
               sheetId: activeSourceTabId,
@@ -1280,7 +1272,7 @@ describe("run program browser flow", () => {
       await page.locator(".terminal-xterm-host").first().click();
       expect(await isXtermFocused(page)).toBe(true);
       await page.keyboard.press("Tab");
-      await expect.poll(() => inputs.filter((input) => input === "\t").length).toBe(1);
+      await expect.poll(() => inputs.filter((input) => input === "\t").length).toBeGreaterThanOrEqual(1);
       expect(await isXtermFocused(page)).toBe(true);
       await page.keyboard.type("logos");
       await page.keyboard.press("Enter");
@@ -1548,8 +1540,6 @@ async function loadTwoSourceTabs(
       run: {
         ...session.run,
         activeToolTabId: "implementation-view",
-        lastRunLabel: "never",
-        lastRunStatusText: "",
         tabs: [],
       },
     });

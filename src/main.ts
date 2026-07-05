@@ -184,13 +184,6 @@ export type LoadableSession = {
   };
   run: {
     activeToolTabId: string | null;
-    lastRunLabel: string;
-    lastRunStatusText: string;
-    lastRunCompletedAtMs?: number | null;
-    lastRunStatusPrefix?: string;
-    lastRunStatusState?: string;
-    lastRunDefinitionHash: string | null;
-    runStatus: { text: string; state: string };
     tabs: LoadableSessionRunTab[];
   };
   agent: {
@@ -588,7 +581,6 @@ app.innerHTML = `
                   >Implementation</button>
                 </div>
               </div>
-              <span id="run-status" class="status"></span>
               ${renderFeedbackControls("output")}
             </div>
             <div id="tool-panels" class="tool-panels">
@@ -623,7 +615,6 @@ const snippetResizeHandle = requiredQuery<HTMLDivElement>("#snippet-resize-handl
 const snippetStatusIndicator = requiredQuery<HTMLSpanElement>("#snippet-status-indicator");
 const snippetTitle = requiredQuery<HTMLHeadingElement>("#snippet-title");
 const snippetPreview = requiredQuery<HTMLDivElement>("#snippet-preview");
-const runStatus = requiredQuery<HTMLSpanElement>("#run-status");
 const sampleMenu = requiredQuery<HTMLDetailsElement>("#sample-menu");
 const workspaceMenu = requiredQuery<HTMLDetailsElement>("#workspace-menu");
 const copySessionIdButton = requiredQuery<HTMLButtonElement>("#copy-session-id-button");
@@ -634,12 +625,6 @@ const scratchFileButton = requiredQuery<HTMLButtonElement>("#scratch-file-button
 const sampleMenuItems = Array.from(
   document.querySelectorAll<HTMLButtonElement>(".sample-menu-item"),
 );
-let lastRunLabel = "never";
-let lastRunStatusText = "";
-let lastRunCompletedAtMs: number | null = null;
-let lastRunStatusPrefix = "";
-let lastRunStatusState = "";
-let lastRunDefinitionHash: string | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 let compileVersion = 0;
 let sourceTabSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1274,10 +1259,6 @@ editor.onMouseDown((event) => {
   );
 
   if (!runnable.ready) {
-    runStatus.textContent = compilationPending
-      ? "Dependencies still compiling"
-      : `${runnable.name} is blocked`;
-    runStatus.dataset.state = "error";
     return;
   }
 
@@ -1914,24 +1895,16 @@ shellResizeObserver.observe(codePane);
 shellResizeObserver.observe(outputPane);
 shellResizeObserver.observe(sourceTabsEl);
 shellResizeObserver.observe(toolTabsList);
-window.setInterval(() => {
-  updateRunStaleness();
-}, 1000);
-
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
   const runnable = requestedRunnable ?? firstRunnable(source);
   if (!runnable) {
     sessionCapture.track("run_blocked", { reason: "no_runnable" }, true);
-    runStatus.textContent = `No runnable · last run ${lastRunAgeLabel()}`;
-    runStatus.dataset.state = "error";
     return;
   }
 
   const runTab = createRunTab(runnable, source, definitionHash(source));
   sessionCapture.track("run_requested", { runnable, source }, true);
-  runStatus.textContent = `Running ${runnable} · last run ${lastRunAgeLabel()}`;
-  runStatus.dataset.state = "";
   setActiveTab(runTab.id);
   renderRunTabs();
 
@@ -1945,13 +1918,9 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   }
 
   if (!result.ok) {
-    markLastRunCompleted();
-    lastRunDefinitionHash = definitionHash(source);
-    setLastRunStatus("Error", "error");
     currentTab.terminalText = result.error;
     currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
     renderRunTab(currentTab);
-    updateRunStaleness();
     return;
   }
 
@@ -1983,8 +1952,6 @@ async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
 
 async function resetWorkspace(): Promise<void> {
   resetWorkspaceButton.disabled = true;
-  runStatus.textContent = "Resetting workspace";
-  runStatus.dataset.state = "";
 
   try {
     if (sourceTabSaveTimer) {
@@ -2005,15 +1972,11 @@ async function resetWorkspace(): Promise<void> {
     renderSourceTabs();
     scheduleSaveSourceTabs();
 
-    runStatus.textContent = "Workspace reset";
-    runStatus.dataset.state = "ok";
     sessionCapture.track("reset_workspace_completed", {
       openProjects: sourceTabs.map((tab) => tab.projectId),
       activeProjectId: activeSourceTab()?.projectId ?? null,
     }, true);
   } catch (error) {
-    runStatus.textContent = "Workspace reset failed";
-    runStatus.dataset.state = "error";
     sessionCapture.track(
       "reset_workspace_failed",
       { error: error instanceof Error ? error.message : String(error) },
@@ -2026,8 +1989,6 @@ async function resetWorkspace(): Promise<void> {
 
 async function clearCodeCache(): Promise<void> {
   clearCodeCacheButton.disabled = true;
-  runStatus.textContent = "Clearing code cache";
-  runStatus.dataset.state = "";
   cancelScheduledCompilation();
   invalidateAllCompilations();
 
@@ -2046,15 +2007,11 @@ async function clearCodeCache(): Promise<void> {
     renderImplementationView();
     scheduleSaveSourceTabs();
     scheduleCompilation(0);
-    runStatus.textContent = "Code cache cleared";
-    runStatus.dataset.state = "ok";
     sessionCapture.track("code_cache_clear_completed", {
       cleared: typeof payload.cleared === "number" ? payload.cleared : null,
     }, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    runStatus.textContent = "Code cache clear failed";
-    runStatus.dataset.state = "error";
     sessionCapture.track("code_cache_clear_failed", { error: message }, true);
   } finally {
     clearCodeCacheButton.disabled = false;
@@ -2066,13 +2023,9 @@ async function copyCurrentSessionId(): Promise<void> {
 
   try {
     await copyTextToClipboard(sessionCapture.sessionId);
-    runStatus.textContent = "Session ID copied";
-    runStatus.dataset.state = "ok";
     sessionCapture.track("session_id_copied", { sessionId: sessionCapture.sessionId }, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    runStatus.textContent = "Session ID copy failed";
-    runStatus.dataset.state = "error";
     sessionCapture.track("session_id_copy_failed", { error: message }, true);
   } finally {
     copySessionIdButton.disabled = false;
@@ -2123,7 +2076,6 @@ function scheduleCompilation(delayMs: number): void {
   }
 
   compilationService.markCompiling(sheetId);
-  updateRunStaleness(editor.getValue());
   updateEditorAvailability();
 
   if (compileTimer) {
@@ -2400,15 +2352,6 @@ function applyActiveSourceTab(): void {
   }
   latestImplementationSource = sheetImplementationCacheEntry(active?.id ?? "")?.implementation ?? "";
   renderImplementationView();
-  lastRunLabel = "never";
-  lastRunCompletedAtMs = null;
-  lastRunStatusPrefix = "";
-  lastRunStatusState = "";
-  lastRunStatusText = active ? "" : "No open file";
-  lastRunDefinitionHash = null;
-  runStatus.textContent = lastRunStatusText;
-  runStatus.dataset.state = active ? "" : "error";
-  updateRunStaleness(active?.source ?? "");
   setActiveCompilationSheet(active?.id ?? null);
   setActiveTab(null);
   updateEditorAvailability();
@@ -3094,28 +3037,6 @@ function hashString(source: string): string {
   }
 
   return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-function updateRunStaleness(source = editor.getValue()): void {
-  lastRunLabel = lastRunAgeLabel();
-  const stale = lastRunDefinitionHash !== null && definitionHash(source) !== lastRunDefinitionHash;
-
-  if (stale && (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error" || runStatus.dataset.state === "stale")) {
-    runStatus.textContent = "Changes available: re-run";
-    runStatus.dataset.state = "stale";
-    return;
-  }
-
-  if (!stale && runStatus.dataset.state === "stale") {
-    refreshLastRunStatus();
-  } else if (
-    !stale &&
-    lastRunStatusPrefix &&
-    runStatus.textContent === lastRunStatusText &&
-    (runStatus.dataset.state === "ok" || runStatus.dataset.state === "error")
-  ) {
-    refreshLastRunStatus();
-  }
 }
 
 function refreshIncompleteSnippets(source: string): void {
@@ -4585,10 +4506,6 @@ function createRunnableRunWidget(
   });
   node.addEventListener("click", () => {
     if (!runnable.ready) {
-      runStatus.textContent = runnable.compiling
-        ? "Claude is still compiling this sheet"
-        : `${runnable.name} is blocked`;
-      runStatus.dataset.state = "error";
       return;
     }
 
@@ -4632,61 +4549,6 @@ function updateTypeCheckMarkers(diagnostics: TypeCheckDiagnostic[]): void {
 
 function firstRunnable(source: string): Runnable | null {
   return runnables(source)[0]?.name ?? null;
-}
-
-function markLastRunCompleted(): void {
-  lastRunCompletedAtMs = Date.now();
-  lastRunLabel = lastRunAgeLabel();
-}
-
-function lastRunAgeLabel(nowMs = Date.now()): string {
-  if (lastRunCompletedAtMs === null) {
-    return lastRunLabel === "never" ? "never" : "previously";
-  }
-
-  const elapsedSeconds = Math.max(0, Math.floor((nowMs - lastRunCompletedAtMs) / 1000));
-  if (elapsedSeconds < 10) {
-    return "just now";
-  }
-
-  if (elapsedSeconds < 60) {
-    return `${elapsedSeconds} ${elapsedSeconds === 1 ? "second" : "seconds"} ago`;
-  }
-
-  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-  return `${elapsedMinutes} ${elapsedMinutes === 1 ? "minute" : "minutes"} ago`;
-}
-
-function setLastRunStatus(prefix: string, state: "ok" | "error"): void {
-  lastRunStatusPrefix = prefix;
-  lastRunStatusState = state;
-  refreshLastRunStatus();
-}
-
-function refreshLastRunStatus(): void {
-  if (!lastRunStatusPrefix) {
-    lastRunStatusText = "";
-    return;
-  }
-
-  lastRunLabel = lastRunAgeLabel();
-  lastRunStatusText = lastRunStatusPrefix.startsWith("Ran ")
-    ? "Up to date"
-    : `${lastRunStatusPrefix} · last run ${lastRunLabel}`;
-  runStatus.textContent = lastRunStatusText;
-  runStatus.dataset.state = lastRunStatusState;
-}
-
-function runStatusPrefixFromText(text: string): string {
-  return text.split(" · last run ")[0] ?? text;
-}
-
-function runStatusStateFromPrefix(prefix: string): string {
-  if (!prefix) {
-    return "";
-  }
-
-  return prefix.startsWith("Ran ") ? "ok" : "error";
 }
 
 function createRunTab(runnable: Runnable, source: string, sourceHash: string): RunTab {
@@ -5130,11 +4992,7 @@ async function pollRunTab(runTabId: string): Promise<void> {
 
   if (!result.ok) {
     currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
-    markLastRunCompleted();
-    lastRunDefinitionHash = currentTab.sourceHash;
-    setLastRunStatus("Error", "error");
     appendTerminalChunks(currentTab, [{ stream: "stderr", text: `\n${result.error}\n` }]);
-    updateRunStaleness();
     renderRunTabs();
     return;
   }
@@ -5161,8 +5019,6 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
 
   tab.sessionId = null;
   tab.terminalText = "";
-  runStatus.textContent = `Recovering ${tab.runnable} · last run ${lastRunLabel}`;
-  runStatus.dataset.state = "";
   renderRunTab(tab);
 
   const result = await startInteractiveRunViaDevApi(tab.source, tab.runnable).catch((error: unknown) => ({
@@ -5176,11 +5032,7 @@ async function recoverMissingRunSession(runTabId: string): Promise<void> {
 
   if (!result.ok) {
     currentTab.status = { state: "exited", code: null, signal: null, error: result.error };
-    markLastRunCompleted();
-    lastRunDefinitionHash = currentTab.sourceHash;
-    setLastRunStatus("Error", "error");
     appendTerminalChunks(currentTab, [{ stream: "stderr", text: result.error }]);
-    updateRunStaleness();
     return;
   }
 
@@ -5213,11 +5065,8 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   tab.implementation = implementation;
   rememberActiveCompilationImplementation(implementation, tab.source);
   renderSnippetPanel();
-  markLastRunCompleted();
-  lastRunDefinitionHash = tab.sourceHash;
 
   if (status.state === "exited" && status.code === 0) {
-    setLastRunStatus(`Ran ${tab.runnable}`, "ok");
     sessionCapture.track(
       "run_completed",
       { runnable: tab.runnable, output: tab.terminalText, implementation },
@@ -5225,7 +5074,7 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
     );
   } else {
     const stopped = status.state === "exited" && status.signal === "SIGTERM";
-    setLastRunStatus(stopped ? "Stopped" : "Error", "error");
+    void stopped;
     if (status.state === "exited" && status.error) {
       appendTerminalChunks(tab, [{ stream: "stderr", text: `\n${status.error}\n` }]);
     }
@@ -5237,7 +5086,6 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   }
 
   renderRunTabs();
-  updateRunStaleness();
 }
 
 function closeRunTab(runTabId: string): void {
@@ -5884,16 +5732,6 @@ export function createLoadableSession(): LoadableSession {
     },
     run: {
       activeToolTabId,
-      lastRunLabel,
-      lastRunStatusText,
-      lastRunCompletedAtMs,
-      lastRunStatusPrefix,
-      lastRunStatusState,
-      lastRunDefinitionHash,
-      runStatus: {
-        text: runStatus.textContent ?? "",
-        state: runStatus.dataset.state ?? "",
-      },
       tabs: runTabs.map((tab) => ({
         id: tab.id,
         runnable: tab.runnable,
@@ -5947,18 +5785,6 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     }
     renderImplementationView();
     compileVersion = Math.max(compileVersion + 1, session.compilation.compileVersion);
-    lastRunCompletedAtMs = typeof session.run.lastRunCompletedAtMs === "number"
-      ? session.run.lastRunCompletedAtMs
-      : null;
-    lastRunLabel = lastRunCompletedAtMs === null
-      ? (session.run.lastRunLabel === "never" ? "never" : "previously")
-      : lastRunAgeLabel();
-    lastRunStatusPrefix = session.run.lastRunStatusPrefix ?? runStatusPrefixFromText(session.run.lastRunStatusText);
-    lastRunStatusState = session.run.lastRunStatusState ?? runStatusStateFromPrefix(lastRunStatusPrefix);
-    lastRunStatusText = lastRunStatusPrefix ? `${lastRunStatusPrefix} · last run ${lastRunLabel}` : "";
-    lastRunDefinitionHash = session.run.lastRunDefinitionHash;
-    runStatus.textContent = lastRunStatusText || session.run.runStatus.text;
-    runStatus.dataset.state = lastRunStatusState;
 
     runTabs = session.run.tabs.map((tab) => {
       const implementation = tab.implementation;
@@ -6001,7 +5827,6 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     updateActiveProjectMenuItem();
     updateTypeCheckMarkers([]);
     updateReadinessDecorations(readinessForSource(editor.getValue(), latestImplementationSource));
-    updateRunStaleness(editor.getValue());
     refreshIncompleteSnippets(editor.getValue());
     if (active) {
       const request = compilationRequestForSheet(active.id);
@@ -6052,8 +5877,6 @@ async function loadSharedSessionFromUrl(): Promise<void> {
     sessionCapture.track("shared_session_loaded", { shareId }, true);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    runStatus.textContent = `Could not load shared session: ${message}`;
-    runStatus.dataset.state = "error";
     sessionCapture.track("shared_session_load_failed", { shareId, error: message }, true);
   }
 }
@@ -6339,12 +6162,6 @@ function appSnapshot(): JsonObject {
       selectedSampleLabel: activeSampleItem()?.textContent ?? null,
       sampleMenuOpen: sampleMenu.open,
       activeTab: activeToolTabId,
-      lastRunLabel,
-      runStatus: {
-        text: runStatus.textContent ?? "",
-        state: runStatus.dataset.state ?? "",
-      },
-      runStale: lastRunDefinitionHash !== null && definitionHash(editor.getValue()) !== lastRunDefinitionHash,
       output: runTabById(activeToolTabId)?.terminalText ?? "",
       runTabs: runTabs.map((tab) => ({
         id: tab.id,

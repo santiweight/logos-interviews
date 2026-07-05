@@ -1077,8 +1077,7 @@ h2 {
   min-height: 0;
 }
 
-.panel-meta,
-.status {
+.panel-meta {
   flex: 0 0 auto;
   max-width: 55%;
   overflow: hidden;
@@ -1094,36 +1093,9 @@ h2 {
   white-space: nowrap;
 }
 
-.status[data-state="ok"] {
-  border-color: #a7c2a8;
-  color: #2f6844;
-  background: #eef7ec;
-}
-
-.status[data-state="error"] {
-  border-color: #e2a5a0;
-  color: #8f3029;
-  background: #fff2ef;
-}
-
-.status[data-state="stale"] {
-  border-color: #d6b16f;
-  color: #805617;
-  background: #fff7df;
-}
-
-.status:empty {
-  display: none;
-}
-
 .editor {
   flex: 1;
   min-height: 0;
-}
-
-.output-tabs-bar .status {
-  align-self: center;
-  margin: 0 6px 0 0;
 }
 
 .feedback-controls {
