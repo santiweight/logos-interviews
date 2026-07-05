@@ -22,7 +22,6 @@
     "node-pty": "^1.1.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "rrweb": "^2.1.0",
     "tsx": "^4.22.5"
   },
   "devDependencies": {

@@ -15,7 +15,6 @@ import { createLogosApi } from "./src/logosApi";
 import { AgentCompilationFramework } from "./src/agentCompilation";
 import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
 import { handleCompileStream } from "./src/compileStream";
-import { handleSessionEvents } from "./src/sessionCapture";
 import { createInteractiveRunApi } from "./src/interactiveRunApi";
 
 const devHost = "127.0.0.1";
@@ -56,7 +55,6 @@ export default defineConfig(async ({ command }) => {
       rollupOptions: {
         input: {
           main: "index.html",
-          replay: "replay.html",
         },
       },
     },
@@ -303,9 +301,6 @@ function anthropicCompletionPlugin() {
         }
       });
 
-      server.middlewares.use("/api/session-events", async (req, res) => {
-        await handleSessionEvents(req, res);
-      });
     },
   };
 }

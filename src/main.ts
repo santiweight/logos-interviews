@@ -58,7 +58,6 @@ import {
   type SnippetHash,
   UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
 } from "./codeSheet";
-import { createSessionCapture, type JsonObject } from "./sessionCaptureClient";
 import { snippetPopupTargetForClick } from "./snippetHitTest";
 import {
   defaultProjectIds,
@@ -238,11 +237,14 @@ type InteractiveRunPollResponse = {
   status: RunStatus;
 };
 
+type JsonObject = Record<string, unknown>;
+
 const sourceTabDbName = "logos-interviews-user";
 const sourceTabDbVersion = 1;
 const sourceTabStoreName = "state";
 const sourceTabStateKey = "source-tabs-v2";
 const workspaceIdStorageKey = "logos-interviews-workspace-id";
+const browserSessionIdStorageKey = "logos-interviews-browser-session-id";
 const appSettingsStorageKey = "logos-interviews-settings-v1";
 const sidebarCollapsedStorageKey = "logos-interviews-sidebar-collapsed";
 const experimentalCompilationStrategiesStorageKey = "logos.experimentalCompilationStrategies";
@@ -818,8 +820,6 @@ class CompilationService {
 
   private async runCompile(request: CompilationRequest, controller: AbortController): Promise<CompilationState> {
     let state = this.getCompilationState(request.sheetId);
-    sessionCapture.track("compile_stream_started", { sheetId: request.sheetId, source: request.source }, false);
-
     try {
       for await (const event of compileViaDevApi(request.source, controller.signal, request.strategy)) {
         if (!this.jobStillCurrent(request, controller)) {
@@ -833,10 +833,7 @@ class CompilationService {
       if (state.status !== "compiled") {
         state = { ...state, status: "compiled" };
         this.setState(state);
-      }
-
-      sessionCapture.track("compile_stream_completed", { sheetId: request.sheetId }, true);
-      return state;
+      }      return state;
     } catch (error) {
       if (controller.signal.aborted || !this.jobStillCurrent(request, controller)) {
         return this.getCompilationState(request.sheetId);
@@ -847,13 +844,7 @@ class CompilationService {
         status: "failed" as const,
         error: error instanceof Error ? error.message : String(error),
       };
-      console.error(error);
-      sessionCapture.track(
-        "compile_stream_failed",
-        { sheetId: request.sheetId, error: failed.error },
-        true,
-      );
-      this.setState(failed);
+      console.error(error);      this.setState(failed);
       return failed;
     } finally {
       const job = this.jobs.get(request.sheetId);
@@ -1115,8 +1106,7 @@ attachBlockIndentGuideOverlay(snippetPreviewEditor);
 attachBlockIndentGuideOverlay(implementationViewEditor);
 installEditorTypingAssist(editor);
 
-const sessionCapture = createSessionCapture({ getSnapshot: appSnapshot });
-let editorCaptureTimer: ReturnType<typeof setTimeout> | null = null;
+const browserSessionId = getOrCreateBrowserSessionId();
 let isLoadingSession = false;
 
 editor.onDidChangeModelContent(() => {
@@ -1131,7 +1121,6 @@ editor.onDidChangeModelContent(() => {
   }
 
   scheduleCompilation(250);
-  scheduleEditorCapture();
 });
 
 editor.onMouseMove((event) => {
@@ -1221,13 +1210,6 @@ editor.onMouseDown((event) => {
   if (!runnable) {
     return;
   }
-
-  sessionCapture.track(
-    "gutter_run_click",
-    { lineNumber, runnable: runnable.name, ready: runnable.ready },
-    true,
-  );
-
   if (!runnable.ready) {
     return;
   }
@@ -1237,13 +1219,8 @@ editor.onMouseDown((event) => {
 
 resetWorkspaceButton.addEventListener("click", () => {
   workspaceMenu.open = false;
-  if (!window.confirm("Reset workspace? This removes your open files and restores the default templates.")) {
-    sessionCapture.track("reset_workspace_cancelled", undefined, true);
-    return;
-  }
-
-  sessionCapture.track("reset_workspace_requested", undefined, true);
-  void resetWorkspace();
+  if (!window.confirm("Reset workspace? This removes your open files and restores the default templates.")) {    return;
+  }  void resetWorkspace();
 });
 compilationStrategySelect.addEventListener("change", () => {
   setCompilationStrategy(compilationMode(compilationStrategySelect.value));
@@ -1253,9 +1230,7 @@ copySessionIdButton.addEventListener("click", () => {
   void copyCurrentSessionId();
 });
 clearCodeCacheButton.addEventListener("click", () => {
-  workspaceMenu.open = false;
-  sessionCapture.track("code_cache_clear_requested", undefined, true);
-  void clearCodeCache();
+  workspaceMenu.open = false;  void clearCodeCache();
 });
 app.addEventListener("click", (event) => {
   const target = event.target instanceof Element ? event.target : null;
@@ -1278,16 +1253,12 @@ toolTabsList.addEventListener("click", (event) => {
 
   const runTabButton = target.closest<HTMLButtonElement>("[data-run-tab-id]");
   if (runTabButton) {
-    setActiveTab(runTabButton.dataset.runTabId ?? null);
-    sessionCapture.track("tab_changed", { tab: "run", runTabId: runTabButton.dataset.runTabId }, true);
-    return;
+    setActiveTab(runTabButton.dataset.runTabId ?? null);    return;
   }
 
   const toolTabButton = target.closest<HTMLButtonElement>("[data-tool-tab-id]");
   if (toolTabButton) {
-    setActiveTab(toolTabButton.dataset.toolTabId ?? implementationToolTabId);
-    sessionCapture.track("tab_changed", { tab: "implementation" }, true);
-  }
+    setActiveTab(toolTabButton.dataset.toolTabId ?? implementationToolTabId);  }
 });
 appNav.addEventListener("click", (event) => {
   const target = event.target;
@@ -1305,13 +1276,9 @@ appNav.addEventListener("click", (event) => {
     return;
   }
 
-  setActivePage(pageId, { updateHash: true });
-  sessionCapture.track("page_changed", { pageId }, true);
-});
+  setActivePage(pageId, { updateHash: true });});
 sidebarCollapseButton.addEventListener("click", () => {
-  setSidebarCollapsed(!sidebarCollapsed, { persist: true });
-  sessionCapture.track("sidebar_toggled", { collapsed: sidebarCollapsed }, true);
-});
+  setSidebarCollapsed(!sidebarCollapsed, { persist: true });});
 codeRunResizeHandle.addEventListener("pointerdown", (event) => {
   beginCodeRunResize(event);
 });
@@ -1497,9 +1464,7 @@ function openProject(sampleId: string): void {
   }
 
   sampleMenu.open = false;
-  openProjectTab(sample);
-  sessionCapture.track("project_opened", { sampleId: sample.id, sampleLabel: sample.label }, true);
-}
+  openProjectTab(sample);}
 
 function closeOpenMenus(): void {
   sampleMenu.open = false;
@@ -1853,14 +1818,10 @@ shellResizeObserver.observe(toolTabsList);
 async function runCurrentProgram(requestedRunnable?: Runnable): Promise<void> {
   const source = editor.getValue();
   const runnable = requestedRunnable ?? firstRunnable(source);
-  if (!runnable) {
-    sessionCapture.track("run_blocked", { reason: "no_runnable" }, true);
-    return;
+  if (!runnable) {    return;
   }
 
-  const runTab = createRunTab(runnable, source, definitionHash(source));
-  sessionCapture.track("run_requested", { runnable, source }, true);
-  setActiveTab(runTab.id);
+  const runTab = createRunTab(runnable, source, definitionHash(source));  setActiveTab(runTab.id);
   renderRunTabs();
 
   const result = await startInteractiveRunViaDevApi(source, runnable).catch((error: unknown) => ({
@@ -1925,19 +1886,7 @@ async function resetWorkspace(): Promise<void> {
     activeSourceTabId = defaultState.activeTabId;
     applyActiveSourceTab();
     renderSourceTabs();
-    scheduleSaveSourceTabs();
-
-    sessionCapture.track("reset_workspace_completed", {
-      openProjects: sourceTabs.map((tab) => tab.projectId),
-      activeProjectId: activeSourceTab()?.projectId ?? null,
-    }, true);
-  } catch (error) {
-    sessionCapture.track(
-      "reset_workspace_failed",
-      { error: error instanceof Error ? error.message : String(error) },
-      true,
-    );
-  } finally {
+    scheduleSaveSourceTabs();  } catch (error) {  } finally {
     resetWorkspaceButton.disabled = false;
   }
 }
@@ -1961,14 +1910,8 @@ async function clearCodeCache(): Promise<void> {
     invalidateAllCompilations();
     renderImplementationView();
     scheduleSaveSourceTabs();
-    scheduleCompilation(0);
-    sessionCapture.track("code_cache_clear_completed", {
-      cleared: typeof payload.cleared === "number" ? payload.cleared : null,
-    }, true);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    sessionCapture.track("code_cache_clear_failed", { error: message }, true);
-  } finally {
+    scheduleCompilation(0);  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);  } finally {
     clearCodeCacheButton.disabled = false;
   }
 }
@@ -1977,11 +1920,7 @@ async function copyCurrentSessionId(): Promise<void> {
   copySessionIdButton.disabled = true;
 
   try {
-    await copyTextToClipboard(sessionCapture.sessionId);
-    sessionCapture.track("session_id_copied", { sessionId: sessionCapture.sessionId }, true);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    sessionCapture.track("session_id_copy_failed", { error: message }, true);
+    await copyTextToClipboard(browserSessionId);
   } finally {
     copySessionIdButton.disabled = false;
   }
@@ -2000,26 +1939,7 @@ function setCompilationStrategy(strategy: CompilationMode): void {
   saveAppSettings(appSettings);
   compilationStrategySelect.value = strategy;
   invalidateAllCompilations();
-  sessionCapture.track("setting_changed", {
-    setting: "compilationStrategy",
-    strategy,
-  }, true);
   scheduleCompilation(0);
-}
-
-function scheduleEditorCapture(): void {
-  if (editorCaptureTimer) {
-    clearTimeout(editorCaptureTimer);
-  }
-
-  editorCaptureTimer = setTimeout(() => {
-    editorCaptureTimer = null;
-    sessionCapture.track(
-      "editor_snapshot",
-      { modelVersionId: editor.getModel()?.getVersionId() ?? null },
-      true,
-    );
-  }, 750);
 }
 
 function scheduleCompilation(delayMs: number): void {
@@ -2084,9 +2004,7 @@ function openScratchFile(): void {
   applyActiveSourceTab();
   renderSourceTabs();
   scheduleSaveSourceTabs();
-  updateActiveProjectMenuItem();
-  sessionCapture.track("scratch_file_opened", { tabId: tab.id, title: tab.title }, true);
-}
+  updateActiveProjectMenuItem();}
 
 function activateSourceTab(tabId: string): void {
   if (tabId === activeSourceTabId || !sourceTabs.some((tab) => tab.id === tabId)) {
@@ -2256,13 +2174,7 @@ function moveSourceTab(draggedTabId: string, insertIndex: number): void {
 
   sourceTabs = nextTabs;
   renderSourceTabs();
-  scheduleSaveSourceTabs();
-  sessionCapture.track("source_tab_moved", {
-    tabId: draggedTabId,
-    fromIndex: draggedIndex,
-    toIndex: boundedInsertIndex,
-  }, true);
-}
+  scheduleSaveSourceTabs();}
 
 function clearSourceTabDragState(): void {
   draggedSourceTabId = null;
@@ -3069,13 +2981,7 @@ function selectIncompleteSnippet(hash: SnippetHash, source: "editor_click" | "au
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
-  sessionCapture.track("incomplete_snippet_selected", {
-    hash,
-    source,
-    label: incompleteSnippetByHash.get(hash)?.label ?? null,
-  }, true);
-}
+  renderSnippetPanel();}
 
 function selectDefinitionImplementation(target: ImplementationTarget): void {
   selectedDefinitionTarget = target;
@@ -3084,13 +2990,7 @@ function selectDefinitionImplementation(target: ImplementationTarget): void {
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
-  sessionCapture.track("definition_implementation_selected", {
-    kind: target.kind,
-    name: target.name,
-    line: target.line,
-  }, true);
-}
+  renderSnippetPanel();}
 
 function selectWholeFileImplementation(lineNumber: number): void {
   selectedDefinitionTarget = null;
@@ -3099,11 +2999,7 @@ function selectWholeFileImplementation(lineNumber: number): void {
   updateSelectedDefinitionDecorations();
   updateIncompleteSnippetDecorations();
   updateImplementationSnippetDecorations();
-  renderSnippetPanel();
-  sessionCapture.track("whole_file_implementation_selected", {
-    line: lineNumber,
-  }, true);
-}
+  renderSnippetPanel();}
 
 function refreshedDefinitionTarget(source: string): ImplementationTarget | null {
   if (selectedDefinitionTarget === null) {
@@ -4885,9 +4781,6 @@ async function sendRawTerminalInput(runTabId: string, input: string): Promise<vo
   if (!tab?.sessionId || tab.status?.state !== "running") {
     return;
   }
-
-  sessionCapture.track("run_raw_input_submitted", { input, runTabId, runnable: tab.runnable }, true);
-
   try {
     await sendInteractiveRunInputViaDevApi(tab.sessionId, input);
   } catch (error) {
@@ -5020,24 +4913,12 @@ function finishInteractiveRun(tab: RunTab, status: RunStatus, implementation: st
   rememberActiveCompilationImplementation(implementation, tab.source);
   renderSnippetPanel();
 
-  if (status.state === "exited" && status.code === 0) {
-    sessionCapture.track(
-      "run_completed",
-      { runnable: tab.runnable, output: tab.terminalText, implementation },
-      true,
-    );
-  } else {
+  if (status.state === "exited" && status.code === 0) {  } else {
     const stopped = status.state === "exited" && status.signal === "SIGTERM";
     void stopped;
     if (status.state === "exited" && status.error) {
       appendTerminalChunks(tab, [{ stream: "stderr", text: `\n${status.error}\n` }]);
-    }
-    sessionCapture.track(
-      "run_failed",
-      { runnable: tab.runnable, output: tab.terminalText, implementation, status },
-      true,
-    );
-  }
+    }  }
 
   renderRunTabs();
 }
@@ -5133,13 +5014,7 @@ async function startInteractiveRunViaDevApi(
     sheet,
     runnable,
     compilationStrategy: appSettings.compilationStrategy,
-  };
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/run/start",
-    body,
-  });
-  const response = await fetch("/api/run/start", {
+  };  const response = await fetch("/api/run/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -5157,14 +5032,6 @@ async function startInteractiveRunViaDevApi(
     implementation?: string;
     appCode?: string;
   };
-
-  sessionCapture.track("api_response", {
-    method: "POST",
-    path: "/api/run/start",
-    status: response.status,
-    body: payload,
-  });
-
   if (!response.ok || payload.ok !== true || typeof payload.runnable !== "string" || !isRunStatus(payload.status) || typeof payload.implementation !== "string") {
     throw new Error(payload.error ?? "Run request failed");
   }
@@ -5200,50 +5067,24 @@ async function startInteractiveRunViaDevApi(
   };
 }
 
-async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string): Promise<void> {
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/run/input",
-    body: { sessionId, input },
-  });
-  const response = await fetch("/api/run/input", {
+async function sendInteractiveRunInputViaDevApi(sessionId: string, input: string): Promise<void> {  const response = await fetch("/api/run/input", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId, input }),
   });
   const payload = (await response.json()) as { ok?: boolean; error?: string };
-  sessionCapture.track("api_response", {
-    method: "POST",
-    path: "/api/run/input",
-    status: response.status,
-    body: payload,
-  });
-
   if (!response.ok || payload.ok !== true) {
     throw new Error(payload.error ?? "Input was not accepted");
   }
 }
 
 async function sendInteractiveRunResizeViaDevApi(sessionId: string, cols: number, rows: number): Promise<void> {
-  const body = { sessionId, cols, rows };
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/run/resize",
-    body,
-  });
-  const response = await fetch("/api/run/resize", {
+  const body = { sessionId, cols, rows };  const response = await fetch("/api/run/resize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   const payload = (await response.json()) as { ok?: boolean; error?: string };
-  sessionCapture.track("api_response", {
-    method: "POST",
-    path: "/api/run/resize",
-    status: response.status,
-    body: payload,
-  });
-
   if (!response.ok) {
     throw new Error(payload.error ?? "Resize request failed");
   }
@@ -5293,13 +5134,7 @@ async function pollInteractiveRunViaDevApi(
 
 async function stopInteractiveRunViaDevApi(
   sessionId: string,
-): Promise<{ ok: true; chunks: RunChunk[]; status: RunStatus }> {
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/run/stop",
-    body: { sessionId },
-  });
-  const response = await fetch("/api/run/stop", {
+): Promise<{ ok: true; chunks: RunChunk[]; status: RunStatus }> {  const response = await fetch("/api/run/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sessionId }),
@@ -5310,13 +5145,6 @@ async function stopInteractiveRunViaDevApi(
     status?: RunStatus;
     error?: string;
   };
-  sessionCapture.track("api_response", {
-    method: "POST",
-    path: "/api/run/stop",
-    status: response.status,
-    body: payload,
-  });
-
   if (!response.ok || payload.ok !== true || !Array.isArray(payload.chunks)) {
     throw new Error(payload.error ?? "Stop request failed");
   }
@@ -5399,25 +5227,12 @@ async function* compileViaDevApi(
   const body = {
     sheet,
     compilationStrategy,
-  };
-  sessionCapture.track("api_request", {
-    method: "POST",
-    path: "/api/compile",
-    body,
-  });
-  const response = await fetch("/api/compile", {
+  };  const response = await fetch("/api/compile", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });
-
-  sessionCapture.track("api_response_started", {
-    method: "POST",
-    path: "/api/compile",
-    status: response.status,
-  });
-
   if (!response.ok || !response.body) {
     throw new Error("Compile request failed");
   }
@@ -5475,7 +5290,7 @@ export function createLoadableSession(): LoadableSession {
   return {
     schemaVersion: 1,
     capturedAt: new Date().toISOString(),
-    sessionId: sessionCapture.sessionId,
+    sessionId: browserSessionId,
     workspaceId: getOrCreateWorkspaceId(),
     sourceTabs: sourceTabs.map((tab) => ({ ...tab })),
     activeSourceTabId,
@@ -5527,10 +5342,6 @@ export async function loadSession(session: LoadableSession): Promise<void> {
       compileTimer = null;
     }
     compilationPending = false;
-    if (editorCaptureTimer) {
-      clearTimeout(editorCaptureTimer);
-      editorCaptureTimer = null;
-    }
 
     closeAllRunTabs();
     const restoredState = normalizeSourceTabState({
@@ -5618,14 +5429,7 @@ export async function loadSession(session: LoadableSession): Promise<void> {
     }
     editor.setScrollTop(session.editor.scrollTop);
     editor.setScrollLeft(session.editor.scrollLeft);
-    scheduleSaveSourceTabs();
-
-    sessionCapture.track("load_session", {
-      restoredSessionId: session.sessionId,
-      workspaceId: session.workspaceId,
-      capturedAt: session.capturedAt,
-    }, true);
-  } finally {
+    scheduleSaveSourceTabs();  } finally {
     isLoadingSession = false;
   }
 }
@@ -5758,6 +5562,23 @@ function getOrCreateWorkspaceId(): string {
     return next;
   } catch {
     return `workspace-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+}
+
+function getOrCreateBrowserSessionId(): string {
+  try {
+    const existing = window.sessionStorage.getItem(browserSessionIdStorageKey);
+    if (existing) {
+      return existing;
+    }
+
+    const next = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    window.sessionStorage.setItem(browserSessionIdStorageKey, next);
+    return next;
+  } catch {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 }
 
