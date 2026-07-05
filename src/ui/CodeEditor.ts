@@ -7,7 +7,7 @@ import {
   runnables,
   type DefinitionReadiness,
   type Runnable,
-} from "../codeSheet";
+} from "../domain/codeSheet";
 import { logosTypeScriptLanguageId } from "./monacoLogosLanguage";
 import { installMonacoShortcutGuard } from "./monacoShortcutGuard";
 import { sleekMonacoScrollbar } from "./scrollbars";

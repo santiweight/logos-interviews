@@ -2,20 +2,20 @@ import { defineConfig } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { resolve } from "node:path";
-import { createGlobalCodeCache } from "./src/codeCache";
-import type { CodeCache } from "./src/codeSheet";
+import { createGlobalCodeCache } from "./src/storage/codeCache";
+import type { CodeCache } from "./src/domain/codeSheet";
 import {
   completeWithAnthropic,
   streamCompleteWithAnthropic,
-} from "./src/anthropicComplete";
-import { requireAnthropicApiKey } from "./src/anthropicKeyService";
-import { runClaudeSingleFileAgent } from "./src/claudeSingleFileAgent";
-import { LogosService } from "./src/logosService";
-import { createLogosApi } from "./src/logosApi";
-import { AgentCompilationFramework } from "./src/agentCompilation";
-import { runSheetAgent, type AgentChatMessage } from "./src/sheetAgent";
-import { handleCompileStream } from "./src/compileStream";
-import { createInteractiveRunApi } from "./src/interactiveRunApi";
+} from "./src/ai/anthropicComplete";
+import { requireAnthropicApiKey } from "./src/ai/anthropicKeyService";
+import { runClaudeSingleFileAgent } from "./src/ai/claudeSingleFileAgent";
+import { LogosService } from "./src/server/logosService";
+import { createLogosApi } from "./src/server/logosApi";
+import { AgentCompilationFramework } from "./src/ai/agentCompilation";
+import { runSheetAgent, type AgentChatMessage } from "./src/ai/sheetAgent";
+import { handleCompileStream } from "./src/server/compileStream";
+import { createInteractiveRunApi } from "./src/server/interactiveRunApi";
 
 const devHost = "127.0.0.1";
 
