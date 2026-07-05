@@ -1,15 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser, type Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
-import { AgentCompilationFramework } from "./agentCompilation";
-import {
-  completeWithAnthropic,
-  streamCompleteWithAnthropic,
-} from "./anthropicComplete";
-import { runClaudeSingleFileAgent } from "./claudeSingleFileAgent";
-import type { CodeCache } from "./codeSheet";
-import { handleCompileStream } from "./compileStream";
-import { createInteractiveRunApi } from "./interactiveRunApi";
 
 type TestLoadableSession = {
   sourceTabs: Array<{
@@ -64,74 +55,9 @@ describeE2E("intro to logos e2e", () => {
   let baseUrl = "";
 
   beforeAll(async () => {
-    const cache: CodeCache = new Map();
-    const agentCompilation = new AgentCompilationFramework({
-      cache,
-      complete: streamCompleteWithAnthropic,
-      fileAgent: runClaudeSingleFileAgent,
-    });
-    const runApi = createInteractiveRunApi({
-      cache,
-      complete: completeWithAnthropic,
-      compileSheet: (sheet) => agentCompilation.compile(sheet),
-    });
-
     server = await createServer({
       configFile: "vite.config.ts",
       logLevel: "error",
-      plugins: [
-        {
-          name: "logos-intro-e2e-api",
-          configureServer(vite) {
-            vite.middlewares.use(async (req, res, next) => {
-              if (!req.url) {
-                next();
-                return;
-              }
-
-              const pathname = new URL(req.url, "http://localhost").pathname;
-
-              if (pathname === "/api/compile") {
-                await handleCompileStream(
-                  req,
-                  res,
-                  cache,
-                  streamCompleteWithAnthropic,
-                  agentCompilation,
-                );
-                return;
-              }
-
-              if (pathname === "/api/run/start") {
-                await runApi.handleStart(req, res);
-                return;
-              }
-
-              if (pathname === "/api/run/poll") {
-                await runApi.handlePoll(req, res);
-                return;
-              }
-
-              if (pathname === "/api/run/input") {
-                await runApi.handleInput(req, res);
-                return;
-              }
-
-              if (pathname === "/api/run/resize") {
-                await runApi.handleResize(req, res);
-                return;
-              }
-
-              if (pathname === "/api/run/stop") {
-                await runApi.handleStop(req, res);
-                return;
-              }
-
-              next();
-            });
-          },
-        },
-      ],
     });
     await server.listen();
     baseUrl = server.resolvedUrls?.local[0] ?? "";
@@ -151,6 +77,10 @@ describeE2E("intro to logos e2e", () => {
     if (!browser) {
       throw new Error("Browser did not start");
     }
+
+    // Clear the code cache to force a real compilation
+    const cacheResponse = await fetch(`${baseUrl}api/cache`, { method: "DELETE" });
+    expect(cacheResponse.ok).toBe(true);
 
     const context = await browser.newContext();
     try {
@@ -172,14 +102,14 @@ describeE2E("intro to logos e2e", () => {
         .poll(async () => await runWidget.getAttribute("aria-disabled"))
         .toBe("true");
 
-      // Trigger compilation
+      // Trigger compilation — should show generating status
       await triggerCompilation(page);
       await expect
         .poll(
           async () => {
             return implementationViewText(page);
           },
-          { timeout: 10_000 },
+          { timeout: 30_000 },
         )
         .toContain("Code is being generated");
 
@@ -197,18 +127,6 @@ describeE2E("intro to logos e2e", () => {
       const implText = await implementationViewText(page);
       expect(implText).not.toContain("No implementation yet.");
       expect(implText.length).toBeGreaterThan(20);
-
-      // Debug: check widget state
-      const debugInfo = await page.evaluate(() => {
-        const widget = document.querySelector(".runnable-run-widget");
-        return {
-          title: widget?.getAttribute("title"),
-          ariaDisabled: widget?.getAttribute("aria-disabled"),
-          classes: widget?.getAttribute("class"),
-          text: widget?.textContent,
-        };
-      });
-      console.log("Run widget state after compilation:", JSON.stringify(debugInfo, null, 2));
 
       // Run Main should become enabled
       await expect
