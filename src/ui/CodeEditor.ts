@@ -11,6 +11,7 @@ import {
 import { logosTypeScriptLanguageId } from "./monacoLogosLanguage";
 import { installMonacoShortcutGuard } from "./monacoShortcutGuard";
 import { sleekMonacoScrollbar } from "./scrollbars";
+import type { EditorRange } from "./implementationFocus";
 import type { EditorSnapshot } from "./types";
 
 const e = React.createElement;
@@ -26,9 +27,11 @@ type CodeEditorProps = {
   source: string;
   implementation: string;
   compiling: boolean;
+  selectedRange: EditorRange | null;
   onChange: (source: string) => void;
   onRun: (runnable: Runnable) => void;
   onPointerDown?: () => void;
+  onImplementationSelect?: (lineNumber: number, column: number, lineMaxColumn?: number) => void;
 };
 
 type RunnableState = {
@@ -44,6 +47,7 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
     const hostRef = React.useRef<HTMLDivElement | null>(null);
     const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
     const viewZoneIdsRef = React.useRef<string[]>([]);
+    const selectedDecorationsRef = React.useRef<string[]>([]);
     const suppressChangeRef = React.useRef(false);
     const onChangeRef = React.useRef(props.onChange);
     const propsRef = React.useRef(props);
@@ -119,12 +123,26 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
         if (suppressChangeRef.current) return;
         onChangeRef.current(editor.getValue());
       });
+      const mouseDisposable = editor.onMouseDown((event) => {
+        if (event.target.type === monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN) {
+          return;
+        }
+
+        const position = event.target.position;
+        if (!position) {
+          return;
+        }
+
+        const lineMaxColumn = editor.getModel()?.getLineMaxColumn(position.lineNumber);
+        propsRef.current.onImplementationSelect?.(position.lineNumber, position.column, lineMaxColumn);
+      });
       return () => {
         editor.changeViewZones((accessor) => {
           for (const id of viewZoneIdsRef.current) accessor.removeZone(id);
           viewZoneIdsRef.current = [];
         });
         changeDisposable.dispose();
+        mouseDisposable.dispose();
         editor.dispose();
         editorRef.current = null;
       };
@@ -154,6 +172,25 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
       });
     }, [props.source, props.implementation, props.compiling, props.onRun]);
 
+    React.useEffect(() => {
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      selectedDecorationsRef.current = editor.deltaDecorations(
+        selectedDecorationsRef.current,
+        props.selectedRange === null
+          ? []
+          : [{
+              range: monacoRange(props.selectedRange),
+              options: {
+                isWholeLine: false,
+                stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+                inlineClassName: "snippet-source-inline-selected",
+              },
+            }],
+      );
+    }, [props.selectedRange]);
+
     return e("div", {
       id: "editor",
       ref: hostRef,
@@ -163,6 +200,10 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
     });
   },
 );
+
+function monacoRange(range: EditorRange): monaco.Range {
+  return new monaco.Range(range.startLine, range.startColumn, range.endLine, range.endColumn);
+}
 
 function runnableStates(source: string, implementation: string, compiling: boolean): RunnableState[] {
   const readiness = readinessForSource(source, implementation);

@@ -2,6 +2,12 @@ import * as React from "react";
 import { buildCompilationIR, parse, renderImplementation, type Runnable } from "../codeSheet";
 import { defaultProjectIds, samples } from "../samples";
 import { CodeEditor, type CodeEditorHandle } from "./CodeEditor";
+import {
+  createImplementationFocusModel,
+  selectedImplementationRange,
+  selectedSourceRange,
+  selectImplementationAtPosition,
+} from "./implementationFocus";
 import { OutputPane } from "./OutputPane";
 import { SheetTabBar } from "./SheetTabBar";
 import { Sidebar, type PageEntry } from "./Sidebar";
@@ -89,6 +95,18 @@ export function App() {
   const activeSource = activeSourceTab?.source ?? "";
   const activeCompileSessionId = activeSourceTab?.compileSessionId ?? null;
   const activeCompiling = activeSourceTabId !== null && compilingSheetIds.has(activeSourceTabId);
+  const focusModel = React.useMemo(
+    () => createImplementationFocusModel(activeSource, selection),
+    [activeSource, selection],
+  );
+  const sourceFocusRange = React.useMemo(
+    () => selectedSourceRange(activeSource, focusModel),
+    [activeSource, focusModel],
+  );
+  const implementationFocusRange = React.useMemo(
+    () => selectedImplementationRange(activeSource, implementation, focusModel),
+    [activeSource, implementation, focusModel],
+  );
 
   runTabsRef.current = runTabs;
   activeToolTabRef.current = activeToolTabId;
@@ -116,6 +134,12 @@ export function App() {
     if (!hydratedRef.current) return;
     scheduleSaveSourceTabs({ tabs: sourceTabs, activeTabId: activeSourceTabId }, saveTimerRef);
   }, [sourceTabs, activeSourceTabId]);
+
+  React.useEffect(() => {
+    if (!loadableSelectionsEqual(selection, focusModel.selection)) {
+      setSelection(focusModel.selection);
+    }
+  }, [selection, focusModel.selection]);
 
   React.useEffect(() => {
     if (!activeSourceTabId || !activeCompileSessionId) return;
@@ -210,6 +234,11 @@ export function App() {
     );
     scheduleCompilation(activeSourceTabId, source);
   }, [activeSourceTabId]);
+
+  const selectImplementationPosition = React.useCallback((lineNumber: number, column: number, lineMaxColumn?: number) => {
+    setSelection(selectImplementationAtPosition(activeSource, focusModel.snippets, lineNumber, column, lineMaxColumn));
+    setActiveToolTabId(implementationTabId);
+  }, [activeSource, focusModel.snippets]);
 
   const addScratch = React.useCallback(() => {
     const tab: SourceTab = {
@@ -571,7 +600,7 @@ export function App() {
       compilation: {
         compileVersion,
         latestImplementationSource: implementation,
-        selection,
+        selection: focusModel.selection,
       },
       run: {
         activeToolTabId,
@@ -780,8 +809,10 @@ export function App() {
               source: activeSource,
               implementation,
               compiling: activeCompiling,
+              selectedRange: sourceFocusRange,
               onChange: updateActiveSource,
               onRun: startRun,
+              onImplementationSelect: selectImplementationPosition,
               onPointerDown: () => {
                 closeDetails("#sample-menu");
                 closeDetails("#workspace-menu");
@@ -798,6 +829,7 @@ export function App() {
           }),
           e(OutputPane, {
             implementation,
+            implementationFocusRange,
             compileSessionId: activeCompileSessionId,
             compiling: activeCompiling,
             runTabs,
@@ -967,6 +999,18 @@ function isSourceTabState(value: unknown): value is SourceTabState {
   if (typeof value !== "object" || value === null) return false;
   const state = value as SourceTabState;
   return Array.isArray(state.tabs) && (typeof state.activeTabId === "string" || state.activeTabId === null);
+}
+
+function loadableSelectionsEqual(left: LoadableSessionSelection, right: LoadableSessionSelection): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === "snippet" && right.kind === "snippet") return left.hash === right.hash;
+  if (left.kind === "definition" && right.kind === "definition") {
+    return left.line === right.line &&
+      left.name === right.name &&
+      left.targetKind === right.targetKind &&
+      left.className === right.className;
+  }
+  return true;
 }
 
 function scheduleSaveSourceTabs(state: SourceTabState, timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) {
