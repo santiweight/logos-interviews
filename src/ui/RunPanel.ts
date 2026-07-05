@@ -27,6 +27,7 @@ import {
   Theme,
   Tooltip,
 } from "@radix-ui/themes";
+import { iframeScrollbarCss } from "./scrollbars";
 import type { RunTab } from "./types";
 
 const e = React.createElement;
@@ -216,6 +217,7 @@ body {
 body > * {
   min-height: 100%;
 }
+${styleTagContent(iframeScrollbarCss)}
 ${styleTagContent(radixThemesCss)}
 </style></head><body></body></html>`);
     doc.close();

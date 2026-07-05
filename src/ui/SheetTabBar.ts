@@ -201,7 +201,7 @@ export function SheetTabBar(props: SheetTabBarProps) {
       e(
         "summary",
         { className: "source-add-tab", "aria-label": "Add file", title: "Add file" },
-        "+",
+        e("span", { className: "source-add-tab-icon", "aria-hidden": "true" }),
       ),
       e(
         "div",

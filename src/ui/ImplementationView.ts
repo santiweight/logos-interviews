@@ -1,6 +1,7 @@
 import * as React from "react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 import { logosTypeScriptLanguageId } from "./monacoLogosLanguage";
+import { sleekMonacoScrollbar } from "./scrollbars";
 
 const e = React.createElement;
 
@@ -29,8 +30,10 @@ export function ImplementationView({ implementation, compiling, active }: Implem
       fontSize: 13,
       lineHeight: 20,
       minimap: { enabled: false },
+      scrollBeyondLastLine: false,
       glyphMargin: true,
       lineNumbers: "off",
+      scrollbar: sleekMonacoScrollbar,
       folding: false,
       matchBrackets: "never",
       occurrencesHighlight: "off",
