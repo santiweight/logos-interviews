@@ -581,6 +581,91 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("does not flash the running banner after Agent View loads a completed backend session", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      let sessionPolls = 0;
+
+      await page.route("**/api/v2/sheet**", async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, source: "", currentSessionId: "completed-agent-session" }),
+        });
+      });
+      await page.route("**/api/v2/session**", async (route) => {
+        sessionPolls += 1;
+        const url = new URL(route.request().url());
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const events = [
+          { kind: "agent-text", text: "Reading current file" },
+          { kind: "done", code: "function main(): void {\n  console.log('done');\n}" },
+        ];
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            events: events.slice(after),
+            done: true,
+            total: events.length,
+            implementation: "function main(): void {\n  console.log('done');\n}",
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadTwoSourceTabs(page, {
+        activeSourceTabId: "completed-agent-sheet",
+        tabs: [{
+          id: "completed-agent-sheet",
+          projectId: "completed-agent-sheet",
+          title: "Completed Agent Session",
+          source: "function main(): void {\n  l`print done`\n}",
+          compileSessionId: "completed-agent-session",
+        }],
+      });
+
+      await page.locator("[data-tool-tab-id='agent-view']").click();
+      await expect.poll(async () => page.locator("#agent-view-panel").textContent()).toContain("Compilation complete");
+      await expect.poll(async () => page.locator("#agent-view-panel [data-agent-status='running']").count()).toBe(0);
+
+      const pollsAfterLoad = sessionPolls;
+      const sawRunningBanner = await page.evaluate(() => {
+        return new Promise<boolean>((resolve) => {
+          const panel = document.querySelector("#agent-view-panel");
+          if (!panel) {
+            resolve(false);
+            return;
+          }
+
+          let sawRunning = panel.querySelector("[data-agent-status='running']") !== null;
+          const observer = new MutationObserver(() => {
+            if (panel.querySelector("[data-agent-status='running']")) {
+              sawRunning = true;
+            }
+          });
+          observer.observe(panel, { childList: true, subtree: true });
+          window.setTimeout(() => {
+            observer.disconnect();
+            resolve(sawRunning);
+          }, 400);
+        });
+      });
+
+      expect(sawRunningBanner).toBe(false);
+      expect(sessionPolls).toBe(pollsAfterLoad);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("clears Agent View when switching to a sheet without a backend compile session", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
@@ -1006,7 +1091,8 @@ describe("run program browser flow", () => {
       await expect.poll(async () => editorSource(page)).toBe("// function main(): void {\n  console.log('hi');\n}\n");
 
       await page.keyboard.press(`${primaryModifier}+A`);
-      await page.keyboard.type("selected");
+      await page.waitForTimeout(100);
+      await page.keyboard.insertText("selected");
       await expect.poll(async () => editorSource(page)).toBe("selected");
 
       const commandL = await dispatchEditorKeydown(page, {
