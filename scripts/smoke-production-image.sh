@@ -21,20 +21,3 @@ done
 
 curl -fsS "${base_url}/healthz" >/dev/null
 ./scripts/smoke-deployment.sh "$base_url"
-
-capture_response="$(
-  curl -fsS \
-    -X POST "${base_url}/api/session-events" \
-    -H "Content-Type: application/json" \
-    --data '{"sessionId":"smoke-session","events":[{"type":"session_start"}]}'
-)"
-
-case "$capture_response" in
-  *'"ok":true'*'"captured":1'*) ;;
-  *)
-    echo "Unexpected session capture response: ${capture_response}" >&2
-    exit 1
-    ;;
-esac
-
-docker exec "$container_id" test -s /app/logs/session-events.jsonl

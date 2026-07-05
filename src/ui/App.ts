@@ -659,7 +659,7 @@ export function App() {
     try {
       await navigator.clipboard?.writeText(id);
     } catch {
-      // Clipboard permission is optional; the session id still exists for replay/debugging.
+      // Clipboard permission is optional; the session id still exists for debugging.
     }
   }
 

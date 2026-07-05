@@ -38,7 +38,7 @@ storage is configured.
 ## Object Storage
 
 Production durability uses one S3-compatible bucket for shared sessions, code
-cache entries, session capture, and feedback capture:
+cache entries, and feedback capture:
 
 ```sh
 BUCKET_NAME=...
@@ -52,38 +52,11 @@ Objects are written under fixed prefixes:
 
 - `shared-sessions/`
 - `code-cache/`
-- `session-capture/session-events/`
-- `session-capture/feedback/`
+- `feedback/`
 
 When `BUCKET_NAME` is unset, the server uses local files. That fallback is for
 development only and is not durable across replacement machines or image
 rebuilds.
-
-## Session Capture
-
-The browser posts first-party session events to `/api/session-events` while the
-app is open. Events include clicks, form changes, editor snapshots, browser
-errors, page visibility changes, API request/response metadata, run results, and
-page changes. Important events include an app snapshot with the current editor
-contents, output, implementation view, selected sample, active page, active tab,
-run status, viewport, focus state, and URL. Capture records are written as
-newline-delimited JSON, one object per request, to avoid unsafe append writes to
-object storage.
-
-The client also records an `rrweb` DOM replay stream as `dom_replay` events.
-Those events are stored beside the semantic events under the same `sessionId`.
-When `SESSION_CAPTURE_READ_ENABLED=true`, `GET /api/session-events/<sessionId>`
-returns the normalized trace records plus `replayEvents`, an array that can be
-loaded into an rrweb `Replayer`. The bundled viewer is available at
-`/replay.html?sessionId=<sessionId>` when capture reads are enabled.
-
-Replay is close to what the user saw and did inside this web app, but it is not
-omniscient. It captures browser-visible DOM changes, inputs, clicks, scrolls,
-keyboard shortcuts, app snapshots, and first-party API metadata. Browsers do not
-expose arbitrary OS state, other tabs, browser extensions, network packets,
-cross-origin iframe internals, or uninstrumented backend side effects. For the
-best reproduction, use the rrweb replay stream for visual playback and the
-semantic trace/app snapshots/API responses for exact state inspection.
 
 ## Shared Sessions
 

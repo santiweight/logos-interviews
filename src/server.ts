@@ -10,7 +10,6 @@ import { handleCompileStream } from "./compileStream";
 import { createInteractiveRunApi } from "./interactiveRunApi";
 import type { CodeCache } from "./codeSheet";
 import { AgentCompilationFramework } from "./agentCompilation";
-import { handleSessionEvents } from "./sessionCapture";
 import { runSheetAgent, type AgentChatMessage } from "./sheetAgent";
 
 requireAnthropicApiKey();
@@ -81,11 +80,6 @@ const server = createServer(async (req, res) => {
 
     if (url.pathname === "/api/agent/chat") {
       await handleAgentChat(req, res);
-      return;
-    }
-
-    if (url.pathname === "/api/session-events" || url.pathname.startsWith("/api/session-events/")) {
-      await handleSessionEvents(req, res);
       return;
     }
 
