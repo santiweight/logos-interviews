@@ -1511,6 +1511,10 @@ h2 {
   padding: 2px 0;
 }
 
+.monaco-editor .view-zones {
+  z-index: 1;
+}
+
 .runnable-run-widget {
   display: flex;
   align-items: center;

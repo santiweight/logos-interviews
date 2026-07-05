@@ -144,7 +144,6 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
             afterLineNumber: Math.max(0, state.line - 1),
             heightInPx: 22,
             domNode: createRunWidget(state, props.onRun),
-            suppressMouseDown: true,
           }),
         );
       });

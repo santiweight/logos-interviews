@@ -4422,7 +4422,6 @@ function updateRunnableRunWidgets(runnablesState: Array<RunnableState & { line: 
         afterLineNumber: Math.max(0, runnable.line - 1),
         heightInPx: 22,
         domNode: createRunnableRunWidget(runnable),
-        suppressMouseDown: true,
       }),
     );
   });
