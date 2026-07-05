@@ -8,6 +8,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { createPortal } from "react-dom";
+import { AgentView } from "./ui/AgentView";
 import {
   Badge,
   Box,
@@ -743,63 +744,6 @@ let runTabs: RunTab[] = [];
 const implementationToolTabId = "implementation-view";
 const agentViewToolTabId = "agent-view";
 let activeToolTabId: ToolTabId = implementationToolTabId;
-type AgentMessage =
-  | { kind: "text"; text: string }
-  | { kind: "tool"; name: string; input: unknown };
-
-const agentStore = createAgentStore();
-
-function createAgentStore() {
-  const messagesBySheet = new Map<string, AgentMessage[]>();
-  const listeners = new Set<() => void>();
-  let version = 0;
-
-  function notify() {
-    version++;
-    for (const listener of listeners) listener();
-  }
-
-  return {
-    getMessages(sheetId: string | null): AgentMessage[] {
-      if (!sheetId) return [];
-      return messagesBySheet.get(sheetId) ?? [];
-    },
-    push(sheetId: string, message: AgentMessage): void {
-      let messages = messagesBySheet.get(sheetId);
-      if (!messages) {
-        messages = [];
-        messagesBySheet.set(sheetId, messages);
-      }
-      messages.push(message);
-      notify();
-    },
-    appendText(sheetId: string, text: string): void {
-      let messages = messagesBySheet.get(sheetId);
-      if (!messages) {
-        messages = [];
-        messagesBySheet.set(sheetId, messages);
-      }
-      const last = messages.at(-1);
-      if (last?.kind === "text") {
-        last.text += text;
-      } else {
-        messages.push({ kind: "text", text });
-      }
-      notify();
-    },
-    clear(sheetId: string): void {
-      messagesBySheet.delete(sheetId);
-      notify();
-    },
-    subscribe(listener: () => void): () => void {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    getVersion(): number {
-      return version;
-    },
-  };
-}
 let activeCompilationUnsubscribe: (() => void) | null = null;
 let draggedSourceTabId: string | null = null;
 let terminalFitFrame: number | null = null;
@@ -2760,6 +2704,7 @@ function closeSourceTab(tabId: string): void {
 function applyActiveSourceTab(): void {
   closeAllRunTabs();
   const active = activeSourceTab();
+  window.dispatchEvent(new Event("logos-active-sheet-changed"));
   applyingSourceTab = true;
   try {
     editor.setValue(active?.source ?? "");
@@ -3049,7 +2994,6 @@ function reduceCompilationEvent(
       ...next,
       session: streamingCompileSession(next.session, event.hash),
     };
-    if (activeSourceTabId) agentStore.clear(activeSourceTabId);
   }
 
   if (
@@ -3111,14 +3055,6 @@ function reduceCompilationEvent(
       session: completeCompileSession(next.session, completedImplementation),
       error: null,
     };
-  }
-
-  if (event.kind === "agent-text" && typeof event.text === "string" && activeSourceTabId) {
-    agentStore.appendText(activeSourceTabId, event.text);
-  }
-
-  if (event.kind === "agent-tool" && typeof event.name === "string" && activeSourceTabId) {
-    agentStore.push(activeSourceTabId, { kind: "tool", name: event.name, input: event.input });
   }
 
   return next;
@@ -5743,87 +5679,18 @@ ${styleTagContent(radixThemesCss)}
   );
 }
 
-function useAgentStore(sheetId: string | null): AgentMessage[] {
-  const [, setVersion] = React.useState(0);
+function AgentViewWrapper() {
+  const [sheetId, setSheetId] = React.useState(activeSourceTabId);
   React.useEffect(() => {
-    return agentStore.subscribe(() => setVersion((v) => v + 1));
+    const handler = () => setSheetId(activeSourceTabId);
+    window.addEventListener("logos-active-sheet-changed", handler);
+    return () => window.removeEventListener("logos-active-sheet-changed", handler);
   }, []);
-  return agentStore.getMessages(sheetId);
-}
-
-function useActiveSheetId(): string | null {
-  const [id, setId] = React.useState(activeSourceTabId);
-  React.useEffect(() => {
-    const interval = setInterval(() => setId(activeSourceTabId), 100);
-    return () => clearInterval(interval);
-  }, []);
-  return id;
-}
-
-function useCompilationPending(): boolean {
-  const [pending, setPending] = React.useState(compilationPending);
-  React.useEffect(() => {
-    const interval = setInterval(() => setPending(compilationPending), 100);
-    return () => clearInterval(interval);
-  }, []);
-  return pending;
-}
-
-function AgentView(): React.ReactElement {
-  const sheetId = useActiveSheetId();
-  const messages = useAgentStore(sheetId);
-  const pending = useCompilationPending();
-  const panelRef = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (panelRef.current) {
-      panelRef.current.scrollTop = panelRef.current.scrollHeight;
-    }
-  }, [messages.length]);
-
-  if (pending && messages.length === 0) {
-    return React.createElement("div", { ref: panelRef },
-      React.createElement("div", { className: "agent-status-banner" },
-        React.createElement("span", { className: "agent-spinner" }),
-        " Agent is generating code for your file"
-      )
-    );
-  }
-
-  if (messages.length === 0) {
-    return React.createElement("div", { ref: panelRef }, null);
-  }
-
-  return React.createElement("div", { ref: panelRef },
-    messages.map((msg, i) => {
-      if (msg.kind === "text") {
-        return React.createElement("div", { key: i, className: "agent-message agent-message-text" }, msg.text);
-      }
-      const input = msg.input as Record<string, unknown>;
-      const command = (input.command as string) ?? msg.name;
-      let body: string;
-      if (command === "str_replace") {
-        body = `- ${input.old_str ?? ""}\n+ ${input.new_str ?? ""}`;
-      } else if (command === "create") {
-        const text = (input.file_text as string) ?? "";
-        body = `Created file (${text.split("\n").length} lines)`;
-      } else if (command === "insert") {
-        body = `After line ${input.insert_line}\n${input.new_str ?? ""}`;
-      } else if (command === "view") {
-        body = input.view_range ? `Lines ${(input.view_range as number[]).join("–")}` : "Viewing file";
-      } else {
-        body = JSON.stringify(input, null, 2);
-      }
-      return React.createElement("div", { key: i, className: "agent-message agent-message-tool" },
-        React.createElement("div", { className: "agent-tool-header" }, command),
-        React.createElement("pre", { className: "agent-tool-body" }, body)
-      );
-    })
-  );
+  return React.createElement(AgentView, { sheetId });
 }
 
 const agentViewRoot = createRoot(agentViewPanel);
-agentViewRoot.render(React.createElement(AgentView));
+agentViewRoot.render(React.createElement(AgentViewWrapper));
 
 function styleTagContent(css: string): string {
   return css.replace(/<\/style/gi, "<\\/style");
@@ -6796,8 +6663,6 @@ async function* compileViaPolling(
 
   const { sessionId } = await startResponse.json();
   if (!sessionId) return;
-
-  agentStore.clear(sheetId);
 
   let after = 0;
   while (!signal.aborted) {

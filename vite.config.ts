@@ -202,6 +202,7 @@ function anthropicCompletionPlugin() {
           codeCache.clear();
           await codeCache.clearRemote?.();
           agentCompilation.clear();
+          logosService.clear();
           sendJson(res, 200, { ok: true, cleared });
         } catch (error) {
           const message =
