@@ -736,6 +736,118 @@ describe("run program browser flow", () => {
     }
   });
 
+  it("reset replaces backend workspace sheets before reload", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      let backendSheets: TestSourceTab[] = [
+        {
+          id: "legacy-first-sheet",
+          projectId: "legacy-first-sheet",
+          title: "Legacy First Sheet",
+          source: "function main(): void {\n  l`print stale one`\n}",
+          compileSessionId: null,
+        },
+        {
+          id: "legacy-second-sheet",
+          projectId: "legacy-second-sheet",
+          title: "Legacy Second Sheet",
+          source: "function main(): void {\n  l`print stale two`\n}",
+          compileSessionId: null,
+        },
+      ];
+      let replaceRequests = 0;
+      const sessions = new Map<string, { events: unknown[]; done: boolean }>();
+      let compileSessionCounter = 0;
+
+      await page.route("**/api/v2/project/default", async (route) => {
+        if (route.request().method() === "PUT") {
+          replaceRequests += 1;
+          const body = route.request().postDataJSON() as {
+            sheets?: TestSourceTab[];
+            activeSheetId?: string | null;
+          };
+          backendSheets = body.sheets ?? [];
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({
+              ok: true,
+              sheets: backendSheets,
+              activeSheetId: body.activeSheetId ?? backendSheets[0]?.id ?? null,
+            }),
+          });
+          return;
+        }
+
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            sheets: backendSheets,
+            activeSheetId: backendSheets[0]?.id ?? null,
+          }),
+        });
+      });
+      await page.route("**/api/v2/compile", async (route) => {
+        const sessionId = `reset-session-${++compileSessionCounter}`;
+        sessions.set(sessionId, { events: [{ kind: "done", code: "" }], done: true });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+      await page.route("**/api/v2/session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = sessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, events, done: session.done, total: session.events.length, implementation: "" }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await expect.poll(async () => page.locator(`[data-source-tab-id="legacy-first-sheet"]`).textContent())
+        .toBe("Legacy First Sheet");
+
+      await page.locator("#workspace-menu summary").click();
+      await page.getByRole("menuitem", { name: "Reset workspace" }).click();
+
+      await expect.poll(() => replaceRequests).toBe(1);
+      await expect.poll(async () => page.locator("#run-status").textContent()).toBe("Workspace reset");
+      await expect.poll(async () => page.locator("[data-source-tab-id]").count()).toBe(3);
+      await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy First Sheet");
+      await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy Second Sheet");
+
+      await page.reload();
+      await waitForSessionHelpers(page);
+
+      await expect.poll(async () => page.locator("[data-source-tab-id]").count()).toBe(3);
+      await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy First Sheet");
+      await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy Second Sheet");
+      await expect.poll(async () => page.locator("body").textContent()).toContain("Intro to Logos");
+      await expect.poll(async () => page.locator("body").textContent()).toContain("Beyond Basics");
+      await expect.poll(async () => page.locator("body").textContent()).toContain("Todo CLI");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("uses a restored TypeScript implementation to keep Run Main enabled", async () => {
     if (!browser) {
       throw new Error("Browser did not start");
