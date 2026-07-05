@@ -7,6 +7,7 @@ const errorPollMs = 1000;
 
 type AgentViewProps = {
   compileSessionId: string | null;
+  updatingExistingCode: boolean;
   active: boolean;
 };
 
@@ -28,7 +29,7 @@ function emptySessionState(sessionId: string | null = null): SessionViewState {
   };
 }
 
-export function AgentView({ compileSessionId, active }: AgentViewProps) {
+export function AgentView({ compileSessionId, updatingExistingCode, active }: AgentViewProps) {
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const [state, setState] = React.useState<SessionViewState>(() => emptySessionState(compileSessionId));
   const stateRef = React.useRef(state);
@@ -176,11 +177,17 @@ export function AgentView({ compileSessionId, active }: AgentViewProps) {
           },
           e("span", { className: "agent-spinner", "aria-hidden": "true" }),
           e("span", null, visibleEvents.length === 0
-            ? "Agent is generating code for your file"
+            ? runningStatusText(updatingExistingCode)
             : "Waiting for Claude to finish"),
         )
       : null,
   );
+}
+
+function runningStatusText(updatingExistingCode: boolean): string {
+  return updatingExistingCode
+    ? "Agent is updating code for your file"
+    : "Agent is generating code for your file";
 }
 
 function eventLabel(kind: string): string {

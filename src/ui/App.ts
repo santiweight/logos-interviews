@@ -74,6 +74,7 @@ export function App() {
   const [compilationStrategy, setCompilationStrategy] = React.useState<CompilationMode>(loadCompilationStrategy);
   const [implementation, setImplementation] = React.useState("");
   const [compilingSheetIds, setCompilingSheetIds] = React.useState<Set<string>>(() => new Set());
+  const [updatingCodeSessionIds, setUpdatingCodeSessionIds] = React.useState<Set<string>>(() => new Set());
   const [compileVersion, setCompileVersion] = React.useState(0);
   const [runTabs, setRunTabs] = React.useState<RunTab[]>([]);
   const [activeToolTabId, setActiveToolTabId] = React.useState<string | null>(implementationTabId);
@@ -85,6 +86,7 @@ export function App() {
   const compileControllerRef = React.useRef(new Map<string, AbortController>());
   const compileSessionRef = React.useRef(new Map<string, CompileSessionState>());
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sourceTabsRef = React.useRef(sourceTabs);
   const hydratedRef = React.useRef(false);
   const explicitSessionLoadedRef = React.useRef(false);
   const workspaceIdRef = React.useRef(getOrCreateWorkspaceId());
@@ -95,6 +97,9 @@ export function App() {
   const activeSource = activeSourceTab?.source ?? "";
   const activeCompileSessionId = activeSourceTab?.compileSessionId ?? null;
   const activeCompiling = activeSourceTabId !== null && compilingSheetIds.has(activeSourceTabId);
+  const activeUpdatingExistingCode =
+    activeCompileSessionId !== null &&
+    (updatingCodeSessionIds.has(activeCompileSessionId) || activeSourceTab?.implSheetId != null);
   const focusModel = React.useMemo(
     () => createImplementationFocusModel(activeSource, selection),
     [activeSource, selection],
@@ -108,6 +113,7 @@ export function App() {
     [activeSource, implementation, focusModel],
   );
 
+  sourceTabsRef.current = sourceTabs;
   runTabsRef.current = runTabs;
   activeToolTabRef.current = activeToolTabId;
   activeSourceTabIdRef.current = activeSourceTabId;
@@ -379,14 +385,21 @@ export function App() {
         throw new Error(startPayload.error ?? "Compilation failed to start");
       }
 
+      const updatingExistingCode =
+        sourceTabsRef.current.find((tab) => tab.id === sheetId)?.implSheetId != null;
+      const sessionId = startPayload.sessionId;
+      if (updatingExistingCode) {
+        setUpdatingCodeSessionIds((ids) => new Set(ids).add(sessionId));
+      }
+
       setSourceTabs((tabs) =>
         tabs.map((tab) =>
           tab.id === sheetId
-            ? { ...tab, compileSessionId: startPayload.sessionId ?? null, implSheetId: null }
+            ? { ...tab, compileSessionId: sessionId, implSheetId: null }
             : tab
         ),
       );
-      await pollCompileSession(sheetId, startPayload.sessionId, source, controller);
+      await pollCompileSession(sheetId, sessionId, source, controller);
     } catch (error) {
       if (!controller.signal.aborted && activeSourceTabIdRef.current === sheetId) {
         console.error(error);
@@ -436,6 +449,12 @@ export function App() {
         }
 
         if (payload.done) {
+          setUpdatingCodeSessionIds((ids) => {
+            if (!ids.has(sessionId)) return ids;
+            const next = new Set(ids);
+            next.delete(sessionId);
+            return next;
+          });
           const finalImplementation = payload.implementation;
           if (typeof finalImplementation === "string" && finalImplementation.length > 0) {
             if (activeSheet) setImplementation(finalImplementation);
@@ -831,6 +850,7 @@ export function App() {
             implementation,
             implementationFocusRange,
             compileSessionId: activeCompileSessionId,
+            updatingExistingCode: activeUpdatingExistingCode,
             compiling: activeCompiling,
             runTabs,
             activeTabId: activeToolTabId,
