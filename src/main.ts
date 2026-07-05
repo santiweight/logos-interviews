@@ -649,7 +649,7 @@ let latestReadinessDefinitions: DefinitionReadiness[] = [];
 let latestTypeCheckDiagnostics: TypeCheckDiagnostic[] = [];
 let readinessDecorations: string[] = [];
 let runnableDecorations: string[] = [];
-let runnableRunWidgets = new Map<string, monaco.editor.IContentWidget>();
+let runnableRunZoneIds: string[] = [];
 let incompleteSnippetDecorations: string[] = [];
 let selectedDefinitionDecorations: string[] = [];
 let implementationSnippetDecorations: string[] = [];
@@ -4549,22 +4549,28 @@ function updateRunnableDecorations(runnablesState: Array<RunnableState & { line:
 }
 
 function updateRunnableRunWidgets(runnablesState: Array<RunnableState & { line: number }>): void {
-  for (const widget of runnableRunWidgets.values()) {
-    editor.removeContentWidget(widget);
-  }
-  runnableRunWidgets = new Map();
+  editor.changeViewZones((accessor) => {
+    for (const id of runnableRunZoneIds) {
+      accessor.removeZone(id);
+    }
 
-  for (const runnable of runnablesState) {
-    const widget = createRunnableRunWidget(runnable, 1);
-    runnableRunWidgets.set(widget.getId(), widget);
-    editor.addContentWidget(widget);
-  }
+    runnableRunZoneIds = runnablesState.map((runnable) =>
+      accessor.addZone({
+        afterLineNumber: Math.max(0, runnable.line - 1),
+        heightInPx: 22,
+        domNode: createRunnableRunWidget(runnable),
+        suppressMouseDown: true,
+      }),
+    );
+  });
 }
 
 function createRunnableRunWidget(
   runnable: RunnableState & { line: number },
-  column: number,
-): monaco.editor.IContentWidget {
+): HTMLElement {
+  const zone = document.createElement("div");
+  zone.className = "runnable-run-zone";
+
   const node = document.createElement("button");
   node.className = runnable.ready
     ? "runnable-run-widget"
@@ -4589,19 +4595,8 @@ function createRunnableRunWidget(
     runCurrentProgram(runnable.name);
   });
 
-  return {
-    allowEditorOverflow: true,
-    suppressMouseDown: true,
-    getId: () => `runnable-run-widget-${runnable.line}-${runnable.name}`,
-    getDomNode: () => node,
-    getPosition: () => ({
-      position: { lineNumber: runnable.line, column },
-      preference: [
-        monaco.editor.ContentWidgetPositionPreference.ABOVE,
-        monaco.editor.ContentWidgetPositionPreference.BELOW,
-      ],
-    }),
-  };
+  zone.append(node);
+  return zone;
 }
 
 function runnableDisplayName(name: string): string {

@@ -42,7 +42,7 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
   function CodeEditor(props, ref) {
     const hostRef = React.useRef<HTMLDivElement | null>(null);
     const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-    const widgetsRef = React.useRef<monaco.editor.IContentWidget[]>([]);
+    const viewZoneIdsRef = React.useRef<string[]>([]);
     const suppressChangeRef = React.useRef(false);
     const onChangeRef = React.useRef(props.onChange);
     const propsRef = React.useRef(props);
@@ -115,8 +115,10 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
         onChangeRef.current(editor.getValue());
       });
       return () => {
-        for (const widget of widgetsRef.current) editor.removeContentWidget(widget);
-        widgetsRef.current = [];
+        editor.changeViewZones((accessor) => {
+          for (const id of viewZoneIdsRef.current) accessor.removeZone(id);
+          viewZoneIdsRef.current = [];
+        });
         changeDisposable.dispose();
         editor.dispose();
         editorRef.current = null;
@@ -134,10 +136,18 @@ export const CodeEditor = React.forwardRef<CodeEditorHandle, CodeEditorProps>(
     React.useEffect(() => {
       const editor = editorRef.current;
       if (!editor) return;
-      for (const widget of widgetsRef.current) editor.removeContentWidget(widget);
       const states = runnableStates(props.source, props.implementation, props.compiling);
-      widgetsRef.current = states.map((state) => createRunWidget(editor, state, props.onRun));
-      for (const widget of widgetsRef.current) editor.addContentWidget(widget);
+      editor.changeViewZones((accessor) => {
+        for (const id of viewZoneIdsRef.current) accessor.removeZone(id);
+        viewZoneIdsRef.current = states.map((state) =>
+          accessor.addZone({
+            afterLineNumber: Math.max(0, state.line - 1),
+            heightInPx: 22,
+            domNode: createRunWidget(state, props.onRun),
+            suppressMouseDown: true,
+          }),
+        );
+      });
     }, [props.source, props.implementation, props.compiling, props.onRun]);
 
     return e("div", {
@@ -181,11 +191,10 @@ function readinessForSource(source: string, implementation: string): DefinitionR
   }
 }
 
-function createRunWidget(
-  editor: monaco.editor.IStandaloneCodeEditor,
-  runnable: RunnableState,
-  onRun: (runnable: Runnable) => void,
-): monaco.editor.IContentWidget {
+function createRunWidget(runnable: RunnableState, onRun: (runnable: Runnable) => void): HTMLElement {
+  const zone = document.createElement("div");
+  zone.className = "runnable-run-zone";
+
   const node = document.createElement("button");
   node.className = runnable.ready
     ? "runnable-run-widget"
@@ -200,22 +209,8 @@ function createRunWidget(
     if (runnable.ready) onRun(runnable.name);
   });
 
-  return {
-    allowEditorOverflow: true,
-    suppressMouseDown: true,
-    getId: () => `runnable-run-widget-${runnable.line}-${runnable.name}`,
-    getDomNode: () => node,
-    getPosition: () => ({
-      position: {
-        lineNumber: runnable.line,
-        column: Math.max(1, editor.getModel()?.getLineMaxColumn(runnable.line) ?? 1),
-      },
-      preference: [
-        monaco.editor.ContentWidgetPositionPreference.ABOVE,
-        monaco.editor.ContentWidgetPositionPreference.BELOW,
-      ],
-    }),
-  };
+  zone.append(node);
+  return zone;
 }
 
 function displayName(name: string): string {
