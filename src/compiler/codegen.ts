@@ -74,7 +74,9 @@ export async function* compileFresh(
   options: CompilerOptions,
 ): AsyncIterable<CompilerEvent> {
   yield { kind: "scaffold", code: sheet };
-  yield* runAgent(sheet, buildPrompt(sheet, sheet, undefined, undefined), options);
+  const code = await completeFresh(sheet, options);
+  yield { kind: "implementation", code };
+  yield { kind: "done", code };
 }
 
 export async function* compileUpdate(
@@ -96,6 +98,23 @@ const FILE_PATH = "/impl.ts";
 const TOOLS: ToolUnion[] = [
   { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
 ];
+
+async function completeFresh(
+  sheet: LogosSheet,
+  options: CompilerOptions,
+): Promise<LogosImplSheet> {
+  const client = anthropicClient();
+  const message = await client.messages.create({
+    model: options.model,
+    max_tokens: 16000,
+    messages: [{ role: "user", content: buildFreshPrompt(sheet) }],
+  });
+
+  const text = message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("");
+  return normalizeGeneratedSource(text);
+}
 
 async function* runAgent(
   currentFile: string,
@@ -267,6 +286,18 @@ ${currentCode}
 \`\`\``;
 }
 
+function buildFreshPrompt(sheet: LogosSheet): string {
+  const compilerContext = buildWholeSheetCompletionPrompt(parse(sheet), sheet);
+
+  return `${compilerContext}
+
+Fresh-compile constraints:
+- Return one complete TypeScript implementation in a single response.
+- Keep the implementation as compact as the requested behavior allows.
+- For ReactApp functions, implement the requested UI and interactions directly; do not add extra workflows, persistence, decorative sections, or controls that the worksheet did not request.
+- Prefer small local helpers and native browser controls when they satisfy the worksheet.`;
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -286,6 +317,23 @@ function diffLines(previous: string, next: string): string {
 
 function normalizeNewlines(s: string): string {
   return s.replaceAll("\r\n", "\n");
+}
+
+function normalizeGeneratedSource(source: string): LogosImplSheet {
+  const normalized = normalizeNewlines(source).trim();
+  const fenced = normalized.match(/^```(?:typescript|ts)?\s*\n([\s\S]*?)\n```$/)?.[1] ?? normalized;
+  return stripTopLevelMainCall(fenced)
+    .split("\n")
+    .filter((line) => !/^```/.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+function stripTopLevelMainCall(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !/^\s*(?:(?:void|await)\s+)?main\(\);?\s*$/.test(line))
+    .join("\n");
 }
 
 function lineCount(source: string): number {
