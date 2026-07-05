@@ -17,6 +17,7 @@ RUN mkdir -p "$PNPM_HOME" \
 
 COPY --chown=node:node . .
 
+ARG LOGOS_ANTHROPIC_API_KEY
 RUN pnpm build
 RUN mkdir -p logs .logos-runs && chown -R node:node logs .logos-runs
 

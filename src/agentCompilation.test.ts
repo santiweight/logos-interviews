@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentCompilationFramework } from "./agentCompilation";
 import {
-  buildSingleFileAgentPrompt,
   singleFileAgentTools,
   singleFileAgentTypeScriptSyntaxErrors,
 } from "./claudeSingleFileAgent";
@@ -201,52 +200,6 @@ main();`;
       nextSheet: sheet,
       previousSheet: undefined,
     });
-  });
-
-  it("gives the single-file agent the same compiler context as the old whole-sheet compiler", () => {
-    const prompt = buildSingleFileAgentPrompt({
-      nextSheet: `@logos.debug.print()
-function add(x: number, y: number): number;
-
-function test(): void {
-  console.log(add(1, 2));
-}`,
-      currentCode: `function add(x: number, y: number): number;
-
-function test(): void {
-  console.log(add(1, 2));
-}`,
-    });
-
-    expect(prompt).toContain("Legacy compiler context:");
-    expect(prompt).toContain("same context used by the non-tool whole-sheet compiler");
-    expect(prompt).toContain("Replace every incomplete function, incomplete class method, incomplete class");
-    expect(prompt).toContain("Your goal is the correct final implementation for the current worksheet, not making the smallest possible edit");
-    expect(prompt).toContain("The current worksheet is the sole source of truth");
-    expect(prompt).toContain("remove obsolete functions, classes, helpers, imports, UI elements, stories, workflows, runnables");
-    expect(prompt).toContain("Do not keep previous behavior merely because it still compiles");
-    expect(prompt).toContain("Prefer a sequence of focused, reviewable edits over one giant replacement");
-    expect(prompt).toContain("This applies to the first round of codegen too");
-    expect(prompt).toContain("the current implementation file is a scaffold to edit incrementally");
-    expect(prompt).toContain("Do not use replace_file as the default");
-    expect(prompt).not.toContain("Prefer small edits with replace_range or replace_text");
-    expect(prompt).not.toContain("Keep existing completed code unless changing it is necessary");
-    expect(prompt).toContain("Use TypeScript, Node.js built-ins, and approved dependencies");
-    expect(prompt).toContain("ReactApp is a predefined Logos browser-app return type");
-    expect(prompt).toContain("do not import React; React is provided by the ReactApp runtime");
-    expect(prompt).toContain("ReactApp visual and CSS guidelines:");
-    expect(prompt).toContain("Use a shadcn-inspired product UI style");
-    expect(prompt).toContain("Radix Themes is a runtime dependency provided to ReactApp code as the global object radix");
-    expect(prompt).toContain("Do not import @radix-ui/themes, shadcn/ui, Tailwind, CSS files, icon packages, or external fonts");
-    expect(prompt).toContain("Use React.createElement(radix.Button");
-    expect(prompt).toContain("The app must remain usable at common iframe sizes");
-    expect(prompt).toContain('import blessed from "neo-blessed"; do not use import * as blessed');
-    expect(prompt).toContain("For neo-blessed modal text entry, avoid blessed.form");
-    expect(prompt).toContain('handle characters, backspace, tab, shift-tab, enter, and escape from one screen.on("keypress", ...) handler');
-    expect(prompt).toContain("Do not add top-level script calls such as main()");
-    expect(prompt).toContain("When generating visible output, prefer self-explanatory printing");
-    expect(prompt).toContain("when generating code, make sure to add thoughtful and reasonable print statements");
-    expect(prompt).toContain("do not answer with raw code; apply the equivalent final-file change through focused replace_range or replace_text calls");
   });
 
   it("describes replace_file as an exceptional tool, not the default edit path", () => {

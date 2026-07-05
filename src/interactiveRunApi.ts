@@ -1,21 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import ts from "typescript";
-import type {
-  CodeCache,
-  CompleteFunction,
-  Runnable,
-} from "./codeSheet";
+import type { Runnable } from "./codeSheet";
 import {
   buildTypeScriptProgram,
   InteractiveTypeScriptRun,
-  startInteractiveCodeSheet,
-  type CompilationMode,
   type InteractiveRunStatus,
 } from "./codeSheetRunner";
-import { isCompilationMode } from "./compilationStrategies/types";
 
 type InteractiveRunRecord = {
+  sheetId: string;
+  implSheetId: string;
   session: InteractiveTypeScriptRun;
   runnable: Runnable;
   implementation: string;
@@ -23,21 +18,25 @@ type InteractiveRunRecord = {
 };
 
 type ReactAppRecord = {
+  sheetId: string;
+  implSheetId: string;
   runnable: Runnable;
   implementation: string;
   appCode: string;
   updatedAt: number;
 };
 
-type InteractiveRunApiOptions = {
-  cache: CodeCache;
-  complete?: CompleteFunction;
-  compileSheet?: (sheet: string) => Promise<string>;
+type RunStartRequest = {
+  sheet?: unknown;
+  sheetId?: unknown;
+  runnable?: unknown;
+  implementation?: unknown;
+  implSheetId?: unknown;
 };
 
 const sessionTtlMs = 10 * 60 * 1000;
 
-export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
+export function createInteractiveRunApi() {
   const sessions = new Map<string, InteractiveRunRecord>();
   const reactApps = new Map<string, ReactAppRecord>();
 
@@ -77,20 +76,37 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
     }
 
     cleanupSessions();
-    const { sheet, runnable, compilationStrategy } = await readJson(req);
-    if (typeof sheet !== "string" || typeof runnable !== "string") {
+    const {
+      sheet,
+      sheetId,
+      runnable,
+      implementation: requestedImplementation,
+      implSheetId,
+    } = await readJson(req) as RunStartRequest;
+    if (
+      typeof sheet !== "string" ||
+      typeof sheetId !== "string" ||
+      sheetId.length === 0 ||
+      typeof runnable !== "string" ||
+      typeof implSheetId !== "string" ||
+      implSheetId.length === 0 ||
+      typeof requestedImplementation !== "string" ||
+      requestedImplementation.trim().length === 0
+    ) {
       sendJson(res, 400, {
         ok: false,
-        error: "Missing sheet or runnable",
+        error: "Missing sheet, sheetId, runnable, implementation, or implSheetId",
       });
       return;
     }
 
-    const implementation = options.compileSheet ? await options.compileSheet(sheet) : null;
-    if (implementation !== null && isReactAppRunnable(sheet, runnable)) {
+    const implementation = requestedImplementation;
+    if (isReactAppRunnable(sheet, runnable)) {
       const runId = randomUUID();
       const appCode = transpileReactAppImplementation(implementation);
       reactApps.set(runId, {
+        sheetId,
+        implSheetId,
         runnable,
         implementation,
         appCode,
@@ -100,6 +116,8 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
         ok: true,
         kind: "react",
         runId,
+        sheetId,
+        implSheetId,
         runnable,
         implementation,
         appCode,
@@ -108,15 +126,11 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       return;
     }
 
-    const result = implementation !== null
-      ? await startFromCompiledSheet(sheet, runnable, implementation)
-      : await startInteractiveCodeSheet(sheet, runnable, {
-        cache: options.cache,
-        complete: options.complete,
-        compilationStrategy: compilationMode(compilationStrategy),
-      });
+    const result = await startFromCompiledSheet(sheet, runnable, implementation);
     const sessionId = randomUUID();
     sessions.set(sessionId, {
+      sheetId,
+      implSheetId,
       session: result.session,
       runnable,
       implementation: result.completed.source,
@@ -127,6 +141,8 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       ok: true,
       kind: "terminal",
       sessionId,
+      sheetId,
+      implSheetId,
       runnable,
       implementation: result.completed.source,
       chunks: result.session.drainOutput(),
@@ -209,6 +225,8 @@ export function createInteractiveRunApi(options: InteractiveRunApiOptions) {
       chunks,
       status,
       implementation: record.implementation,
+      sheetId: record.sheetId,
+      implSheetId: record.implSheetId,
       runnable: record.runnable,
     });
   }
@@ -259,14 +277,6 @@ async function startFromCompiledSheet(
     session: await InteractiveTypeScriptRun.start(source),
     completed: { source: implementation },
   };
-}
-
-function compilationMode(strategy: unknown): CompilationMode {
-  if (isCompilationMode(strategy)) {
-    return strategy;
-  }
-
-  return "sequential";
 }
 
 export type InteractiveRunWireStatus = InteractiveRunStatus;

@@ -11,7 +11,7 @@ const simpleNaturalSnippetProgram = `function main() {
   l\`print hello world\`
 }`;
 
-const describeIfAnthropicE2E = process.env.RUN_ANTHROPIC_E2E === "true" && process.env.ANTHROPIC_API_KEY
+const describeIfAnthropicE2E = process.env.RUN_ANTHROPIC_E2E === "true" && process.env.LOGOS_ANTHROPIC_API_KEY
   ? describe
   : describe.skip;
 
@@ -51,7 +51,10 @@ describeIfAnthropicE2E("live TypeScript compile and run e2e", () => {
     }));
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheetId: "live-simple-natural-snippet",
+      implSheetId: "live-simple-natural-snippet-impl",
       sheet: simpleNaturalSnippetProgram,
+      implementation: compiled.implementation,
       runnable: "main",
     });
     const completed = await pollUntilExited(baseUrl, started.sessionId, started.chunks);
@@ -108,10 +111,7 @@ async function listen(
   cache: CodeCache,
   agentCompilation: AgentCompilationFramework,
 ): Promise<string> {
-  const runApi = createInteractiveRunApi({
-    cache,
-    compileSheet: (sheet) => agentCompilation.compile(sheet),
-  });
+  const runApi = createInteractiveRunApi();
   const server = createServer(async (req, res) => {
     if (req.url === "/api/compile") {
       await handleCompileStream(req, res, cache, streamCompleteWithAnthropic, agentCompilation);

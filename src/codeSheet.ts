@@ -64,7 +64,9 @@ export type CompilationEvent =
   | { kind: "llm-token"; hash: SnippetHash; token: string }
   | { kind: "llm-complete"; hash: SnippetHash; implementation: string }
   | { kind: "implementation"; source: CodeSheet; completedSnippets: number; totalSnippets: number }
-  | { kind: "compiled"; completed: CompletedCodeSheet };
+  | { kind: "compiled"; completed: CompletedCodeSheet }
+  | { kind: "agent-text"; text: string }
+  | { kind: "agent-tool"; name: string; input: unknown };
 
 export type CompileOptions = {
   signal?: AbortSignal;

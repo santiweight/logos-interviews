@@ -178,7 +178,10 @@ describe("simple TypeScript program e2e", () => {
     });
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheetId: "simple-natural-snippet",
+      implSheetId: "simple-natural-snippet-impl",
       sheet: simpleNaturalSnippetProgram,
+      implementation: simpleNaturalSnippetImplementation,
       runnable: "main",
     });
     const completed = await pollUntilExited(baseUrl, started.sessionId, started.chunks);
@@ -209,7 +212,10 @@ describe("simple TypeScript program e2e", () => {
     });
 
     const started = await postJson<RunStartResponse>(baseUrl, "/api/run/start", {
+      sheetId: "todo-cli",
+      implSheetId: "todo-cli-impl",
       sheet: todoCliProgram,
+      implementation: todoCliImplementation,
       runnable: "main",
     });
     let output = stdoutText(started.chunks);
@@ -272,10 +278,7 @@ async function listen(
   cache: CodeCache,
   agentCompilation: AgentCompilationFramework,
 ): Promise<string> {
-  const runApi = createInteractiveRunApi({
-    cache,
-    compileSheet: (sheet) => agentCompilation.compile(sheet),
-  });
+  const runApi = createInteractiveRunApi();
   const server = createServer(async (req, res) => {
     if (req.url === "/api/compile") {
       await handleCompileStream(req, res, cache, () => {

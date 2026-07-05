@@ -1419,6 +1419,90 @@ h2 {
   display: none !important;
 }
 
+.agent-view-output {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  font-family: var(--body-font, system-ui, -apple-system, sans-serif);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+.agent-view-output.active {
+  display: flex;
+}
+
+.agent-status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #f97316 10%, var(--paper));
+  border: 1px solid color-mix(in srgb, #f97316 25%, transparent);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+@keyframes agent-spin {
+  to { transform: rotate(360deg); }
+}
+
+.agent-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in srgb, #f97316 30%, transparent);
+  border-top-color: #f97316;
+  border-radius: 50%;
+  animation: agent-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.agent-message {
+  border-radius: 8px;
+  padding: 10px 14px;
+  max-width: 100%;
+}
+
+.agent-message-text {
+  background: var(--paper);
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-message-tool {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 8%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--accent, #3b82f6) 20%, transparent);
+}
+
+.agent-tool-header {
+  font-weight: 600;
+  font-size: 0.8rem;
+  color: var(--accent, #3b82f6);
+  margin-bottom: 6px;
+  font-family: var(--terminal-font);
+}
+
+.agent-tool-body {
+  margin: 0;
+  padding: 8px;
+  background: color-mix(in srgb, var(--ink) 4%, var(--paper));
+  border-radius: 4px;
+  font-family: var(--terminal-font);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .tab-panel {
   display: none;
 }
@@ -1426,6 +1510,10 @@ h2 {
 .tab-panel.active {
   display: block;
   flex: 1;
+}
+
+.agent-view-output.tab-panel.active {
+  display: flex;
 }
 
 .snippet-panel {

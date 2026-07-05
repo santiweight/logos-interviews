@@ -131,6 +131,10 @@ function toWireEvent(event: CompilationEvent): Record<string, unknown> {
         totalSnippets,
       };
     }
+    case "agent-text":
+      return { kind: "agent-text", text: event.text };
+    case "agent-tool":
+      return { kind: "agent-tool", name: event.name, input: event.input };
   }
 }
 

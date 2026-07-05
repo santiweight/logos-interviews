@@ -61,9 +61,9 @@ jobs:
       - name: Run Anthropic E2E
         if: steps.gate.outputs.should_run == 'true'
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LOGOS_ANTHROPIC_API_KEY: ${{ secrets.LOGOS_ANTHROPIC_API_KEY }}
           ANTHROPIC_E2E_MODEL: ${{ vars.ANTHROPIC_E2E_MODEL || 'claude-sonnet-4-6' }}
           RUN_ANTHROPIC_E2E: "true"
         run: |
-          test -n "$ANTHROPIC_API_KEY" || { echo "Missing ANTHROPIC_API_KEY repository secret"; exit 1; }
+          test -n "$LOGOS_ANTHROPIC_API_KEY" || { echo "Missing LOGOS_ANTHROPIC_API_KEY repository secret"; exit 1; }
           pnpm exec vitest run --config vitest.e2e.config.ts src/codeSheet.e2e.ts src/defaultWorkspaceSmoke.e2e.ts
