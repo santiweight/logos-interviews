@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM node:22-bookworm-slim
 
 RUN apt-get update \
@@ -17,8 +18,8 @@ RUN mkdir -p "$PNPM_HOME" \
 
 COPY --chown=node:node . .
 
-ARG LOGOS_ANTHROPIC_API_KEY
-RUN pnpm build
+RUN --mount=type=secret,id=LOGOS_ANTHROPIC_API_KEY \
+    LOGOS_ANTHROPIC_API_KEY="$(cat /run/secrets/LOGOS_ANTHROPIC_API_KEY)" pnpm build
 RUN mkdir -p logs .logos-runs && chown -R node:node logs .logos-runs
 
 ENV NODE_ENV=production

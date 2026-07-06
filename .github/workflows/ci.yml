@@ -78,7 +78,7 @@ jobs:
           context: .
           load: true
           tags: logos-interviews-smoke
-          build-args: |
+          secrets: |
             LOGOS_ANTHROPIC_API_KEY=${{ secrets.LOGOS_ANTHROPIC_API_KEY }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
