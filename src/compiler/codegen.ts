@@ -7,6 +7,7 @@ import type {
 } from "@anthropic-ai/sdk/resources/messages/messages";
 import { anthropicClient } from "../ai/anthropicKeyService";
 import { buildWholeSheetCompletionPrompt, parse } from "../domain/codeSheet";
+import { reactAppDesignContext } from "../domain/reactAppDesignContext";
 
 export type LogosSheet = string;
 export type LogosSheetId = string;
@@ -74,7 +75,9 @@ export async function* compileFresh(
   options: CompilerOptions,
 ): AsyncIterable<CompilerEvent> {
   yield { kind: "scaffold", code: sheet };
-  yield* runAgent(sheet, buildPrompt(sheet, sheet, undefined, undefined), options);
+  const code = await completeFresh(sheet, options);
+  yield { kind: "implementation", code };
+  yield { kind: "done", code };
 }
 
 export async function* compileUpdate(
@@ -96,6 +99,23 @@ const FILE_PATH = "/impl.ts";
 const TOOLS: ToolUnion[] = [
   { type: "text_editor_20250728", name: "str_replace_based_edit_tool" },
 ];
+
+async function completeFresh(
+  sheet: LogosSheet,
+  options: CompilerOptions,
+): Promise<LogosImplSheet> {
+  const client = anthropicClient();
+  const message = await client.messages.create({
+    model: options.model,
+    max_tokens: 16000,
+    messages: [{ role: "user", content: buildFreshPrompt(sheet) }],
+  });
+
+  const text = message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("");
+  return normalizeGeneratedSource(text);
+}
 
 async function* runAgent(
   currentFile: string,
@@ -267,6 +287,46 @@ ${currentCode}
 \`\`\``;
 }
 
+function buildFreshPrompt(sheet: LogosSheet): string {
+  const parsed = parse(sheet);
+  const fragments = parsed.incompleteSnippets.map((snippet, index) => {
+    return [
+      `Fragment ${index + 1} (${snippet.kind}, line ${snippet.line}):`,
+      "```typescript",
+      snippet.snippet,
+      "```",
+    ].join("\n");
+  }).join("\n\n");
+
+  return `You are compiling a Logos worksheet into one complete executable TypeScript implementation.
+
+Return only TypeScript source. Do not include Markdown fences, JSON, prose, explanations, or top-level calls such as main(), await main(), or void main().
+
+Worksheet:
+\`\`\`typescript
+${parsed.source}
+\`\`\`
+
+Incomplete fragments:
+${fragments.length === 0 ? "None." : fragments}
+
+Rules:
+- Preserve declared top-level types, classes, functions, and runnable names.
+- Replace every incomplete class method, incomplete class, function declaration, and natural-language Logos fragment with working TypeScript.
+- The worksheet is the sole source of truth. Do not add unrelated workflows, persistence, views, examples, imports, or helper APIs.
+- Use TypeScript, Node.js built-ins, and dependencies already available to the runtime.
+- ReactApp is a predefined browser-app return type. For functions returning ReactApp, return a component or React element from the runnable; use React.createElement and React hooks through the provided React global.
+- The Radix Themes runtime is provided as the global object radix. Do not import React, radix, @radix-ui/themes, shadcn/ui, Tailwind, CSS files, icon packages, or external fonts.
+- Do not use JSX, raw HTML strings, or browser APIs outside React event handlers/hooks.
+- If a class has no declared constructor, support no-argument construction.
+- Do not call a constructor with arguments unless the worksheet declares that constructor signature.
+- Treat bullet lists, state lists, seed data, and interaction descriptions as required behavior. If the worksheet names UI states, implement every named state and make transitions reach each state.
+- When a worksheet describes clickable status states such as empty, in progress, and done, implement a real three-state cycle. Do not collapse it to a boolean done toggle; track extra UI state when the declared data model needs it.
+- Keep code compact, direct, and readable. Prefer small local helpers and native browser controls when they satisfy the worksheet.
+
+${reactAppDesignContext}`;
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -286,6 +346,23 @@ function diffLines(previous: string, next: string): string {
 
 function normalizeNewlines(s: string): string {
   return s.replaceAll("\r\n", "\n");
+}
+
+function normalizeGeneratedSource(source: string): LogosImplSheet {
+  const normalized = normalizeNewlines(source).trim();
+  const fenced = normalized.match(/^```(?:typescript|ts)?\s*\n([\s\S]*?)\n```$/)?.[1] ?? normalized;
+  return stripTopLevelMainCall(fenced)
+    .split("\n")
+    .filter((line) => !/^```/.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
+function stripTopLevelMainCall(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !/^\s*(?:(?:void|await)\s+)?main\(\);?\s*$/.test(line))
+    .join("\n");
 }
 
 function lineCount(source: string): number {
