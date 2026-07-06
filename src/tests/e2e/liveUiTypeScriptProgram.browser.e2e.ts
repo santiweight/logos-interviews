@@ -73,7 +73,7 @@ describeIfAnthropicE2E("live UI TypeScript compile and run e2e", () => {
         .toBe("main is waiting for its implementation.");
 
       const compileStarted = page.waitForResponse((response) => {
-        return response.request().method() === "POST" && response.url().endsWith("/api/v2/compile");
+        return response.request().method() === "POST" && response.url().endsWith("/api/sheet/compile");
       }, { timeout: 30_000 });
       await appendTrailingEditorText(page, "\n// compile trigger");
       await compileStarted;
@@ -214,7 +214,7 @@ async function loadTwoProgramSession(page: Page): Promise<void> {
     if (!session || !logosWindow.loadLogosSession) {
       throw new Error("Logos session helpers are unavailable");
     }
-    const firstSheetResponse = await fetch("/api/v2/sheet/new", {
+    const firstSheetResponse = await fetch("/api/sheet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -224,7 +224,7 @@ async function loadTwoProgramSession(page: Page): Promise<void> {
         source: firstSource,
       }),
     });
-    const secondSheetResponse = await fetch("/api/v2/sheet/new", {
+    const secondSheetResponse = await fetch("/api/sheet", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -289,7 +289,7 @@ async function compileActiveSheetAndRun(
   options: { trigger: string; expectedOutput: RegExp },
 ): Promise<void> {
   const compileStarted = page.waitForResponse((response) => {
-    return response.request().method() === "POST" && response.url().endsWith("/api/v2/compile");
+    return response.request().method() === "POST" && response.url().endsWith("/api/sheet/compile");
   }, { timeout: 30_000 });
   await appendTrailingEditorText(page, options.trigger);
   await compileStarted;

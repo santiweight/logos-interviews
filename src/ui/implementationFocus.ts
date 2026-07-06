@@ -11,7 +11,6 @@ import {
   type SnippetHash,
   UNKNOWN_IMPLEMENTATION_MATCH_TEXT,
 } from "../domain/codeSheet";
-import { snippetPopupTargetForClick } from "./snippetHitTest";
 import type { LoadableSessionSelection } from "./types";
 
 export type EditorRange = {
@@ -240,6 +239,38 @@ function safeImplementationTargetAtLine(source: string, lineNumber: number): Imp
   } catch {
     return null;
   }
+}
+
+function snippetPopupTargetForClick<Target extends EditorRange>(
+  targets: Target[],
+  lineNumber: number,
+  column: number,
+  lineMaxColumn?: number,
+): Target | null {
+  return targets.find((target) => (
+    snippetTargetContainsPosition(target, lineNumber, column, lineMaxColumn)
+  )) ?? null;
+}
+
+function snippetTargetContainsPosition(
+  target: EditorRange,
+  lineNumber: number,
+  column: number,
+  lineMaxColumn?: number,
+): boolean {
+  if (lineMaxColumn !== undefined && column >= lineMaxColumn) {
+    return false;
+  }
+
+  if (lineNumber < target.startLine || lineNumber > target.endLine) {
+    return false;
+  }
+
+  if (lineNumber === target.startLine && column < target.startColumn) {
+    return false;
+  }
+
+  return lineNumber !== target.endLine || column < target.endColumn;
 }
 
 function incompleteSnippetLabel(snippet: IncompleteSnippet): string {

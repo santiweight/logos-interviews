@@ -121,6 +121,7 @@ export function App() {
   React.useEffect(() => {
     sessionStorageId();
     void bootWorkspace();
+    void loadSharedSessionFromUrl();
 
     async function bootWorkspace() {
       const state = await loadDefaultProjectFromBackend();
@@ -374,7 +375,7 @@ export function App() {
   ): Promise<void> {
     compileSessionRef.current.get(sheetId)?.controller.abort();
     try {
-      const start = await fetch("/api/v2/compile", {
+      const start = await fetch("/api/sheet/compile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sheetId, source }),
@@ -422,7 +423,7 @@ export function App() {
     try {
       while (!controller.signal.aborted) {
       const response = await fetch(
-        `/api/v2/session?id=${encodeURIComponent(sessionId)}&after=${after}`,
+        `/api/compile-session?id=${encodeURIComponent(sessionId)}&after=${after}`,
         { signal: controller.signal },
       );
         if (!response.ok) {
@@ -582,7 +583,7 @@ export function App() {
     options: { poll?: boolean } = {},
   ): Promise<void> {
     try {
-      const payload = await postJson("/api/v2/sheet/new", {
+      const payload = await postJson("/api/sheet", {
         id: tab.id,
         projectId: tab.projectId,
         title: tab.title,
@@ -711,6 +712,47 @@ export function App() {
     }
   }
 
+  async function shareSessionLink(): Promise<void> {
+    try {
+      const response = await fetch("/api/shared-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loadableSession: createLoadableSession() }),
+      });
+      const payload = await response.json() as { ok?: boolean; shareId?: string; error?: string };
+      if (!response.ok || payload.ok !== true || typeof payload.shareId !== "string") {
+        throw new Error(payload.error ?? "Could not create share link");
+      }
+
+      const shareUrl = new URL(window.location.href);
+      shareUrl.searchParams.set("session", payload.shareId);
+      await navigator.clipboard?.writeText(shareUrl.toString());
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
+  async function loadSharedSessionFromUrl(): Promise<void> {
+    const shareId = new URL(window.location.href).searchParams.get("session");
+    if (!shareId) return;
+
+    try {
+      const response = await fetch(`/api/shared-sessions/${encodeURIComponent(shareId)}`);
+      const payload = await response.json() as {
+        ok?: boolean;
+        loadableSession?: LoadableSession;
+        error?: string;
+      };
+      if (!response.ok || payload.ok !== true || !payload.loadableSession) {
+        throw new Error(payload.error ?? "Could not load shared session");
+      }
+
+      await loadSession(payload.loadableSession);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
   async function resetWorkspace(): Promise<void> {
     stopAllSheetCompilations();
     const next = defaultSourceTabState();
@@ -813,6 +855,17 @@ export function App() {
           e(
             "section",
             { id: "code-pane", className: "code-pane", "aria-label": "Code editor panel" },
+            e(
+              "button",
+              {
+                className: "share-session-button",
+                type: "button",
+                "aria-label": "Share session link",
+                title: "Share session link",
+                onClick: () => void shareSessionLink(),
+              },
+              "Share",
+            ),
             e(SheetTabBar, {
               sheets: sourceTabs,
               activeSheetId: activeSourceTabId,
@@ -927,7 +980,7 @@ type BackendSheet = SourceTab & {
 
 async function loadDefaultProjectFromBackend(): Promise<SourceTabState> {
   try {
-    const response = await fetch("/api/v2/project/default");
+    const response = await fetch("/api/project/default");
     const payload = await response.json() as {
       ok?: boolean;
       sheets?: BackendSheet[];
@@ -946,7 +999,7 @@ async function loadDefaultProjectFromBackend(): Promise<SourceTabState> {
 }
 
 async function replaceBackendProject(state: SourceTabState): Promise<SourceTabState> {
-  const response = await fetch("/api/v2/project/default", {
+  const response = await fetch("/api/project/default", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -970,7 +1023,7 @@ async function replaceBackendProject(state: SourceTabState): Promise<SourceTabSt
 
 async function deleteBackendSheet(sheetId: string): Promise<void> {
   try {
-    const response = await fetch(`/api/v2/sheet?id=${encodeURIComponent(sheetId)}`, { method: "DELETE" });
+    const response = await fetch(`/api/sheet?id=${encodeURIComponent(sheetId)}`, { method: "DELETE" });
     if (!response.ok) throw new Error("Could not delete backend sheet");
   } catch {
     // Keep tab closing responsive; reset can still replace backend state if a delete fails.
