@@ -314,7 +314,7 @@ export function App() {
 
   const startRun = React.useCallback((runnable: Runnable) => {
     if (!activeSourceTab) return;
-    const implSheetId = activeSourceTab.implSheetId;
+    const implSheetId = activeSourceTab.implSheetId ?? activeSourceTab.compileSessionId;
     if (!implSheetId) {
       return;
     }

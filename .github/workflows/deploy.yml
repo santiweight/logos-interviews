@@ -56,9 +56,24 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
       - name: Smoke dev deployment
         env:
           FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
           # Automated Anthropic evals are disabled for now to avoid API spend.
           # SMOKE_ANTHROPIC_E2E: "true"
         run: ./scripts/smoke-deployment.sh "https://${FLY_APP_NAME}.fly.dev"
+      - name: Smoke dev browser e2e
+        env:
+          FLY_APP_NAME: ${{ vars.FLY_APP_NAME }}
+          RUN_ANTHROPIC_E2E: "true"
+          LOGOS_E2E_BASE_URL: https://${{ vars.FLY_APP_NAME }}.fly.dev
+        run: pnpm exec vitest run --config vitest.e2e.config.ts src/tests/e2e/liveUiTypeScriptProgram.browser.e2e.ts

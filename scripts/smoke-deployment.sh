@@ -131,6 +131,15 @@ process.stdout.write(value === undefined || value === null ? "" : String(value))
 NODE
 }
 
+check_default_project_response() {
+  DEFAULT_PROJECT_RESPONSE="$1" node <<'NODE'
+const response = JSON.parse(process.env.DEFAULT_PROJECT_RESPONSE);
+if (response.ok !== true || !Array.isArray(response.sheets) || response.sheets.length === 0) {
+  throw new Error(`default project response was not valid: ${JSON.stringify(response)}`);
+}
+NODE
+}
+
 chunk_text() {
   RESPONSE="$1" node <<'NODE'
 const response = JSON.parse(process.env.RESPONSE);
@@ -221,6 +230,10 @@ if [[ "$health_response" != '{"ok":true}' ]]; then
   echo "Unexpected health response from ${base_url}/healthz: ${health_response}" >&2
   exit 1
 fi
+
+echo "Checking default project API"
+default_project_response="$(curl -fsS "${base_url}/api/project/default")"
+check_default_project_response "$default_project_response"
 
 payload="$(json_payload_for "$sheet" "smoke_compile_run")"
 
