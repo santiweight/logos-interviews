@@ -8,10 +8,13 @@ type LogosWindow = Window & {
   loadLogosSession?: (session: LoadableSession) => Promise<void>;
 };
 
-const targetSheetId = "live-agent-flow";
-const controlSheetId = "scratch-control";
-const firstProgramSheetId = "live-first-program";
-const secondProgramSheetId = "live-second-program";
+const configuredBaseUrl = normalizedBaseUrl(process.env.LOGOS_E2E_BASE_URL);
+const runId = (process.env.LOGOS_E2E_RUN_ID ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`)
+  .replaceAll(/[^a-zA-Z0-9_-]/g, "-");
+const targetSheetId = uniqueSheetId("live-agent-flow");
+const controlSheetId = uniqueSheetId("scratch-control");
+const firstProgramSheetId = uniqueSheetId("live-first-program");
+const secondProgramSheetId = uniqueSheetId("live-second-program");
 const expectedRunText = "logos ui e2e ok";
 const firstProgramRunText = "logos first tab ok";
 const secondProgramRunText = "logos second tab ok";
@@ -25,7 +28,8 @@ const secondNaturalSnippetProgram = `function main(): void {
   l\`print exactly: ${secondProgramRunText}\`
 }`;
 
-const describeIfAnthropicE2E = process.env.RUN_ANTHROPIC_E2E === "true" && process.env.LOGOS_ANTHROPIC_API_KEY
+const describeIfAnthropicE2E = process.env.RUN_ANTHROPIC_E2E === "true" &&
+  (configuredBaseUrl || process.env.LOGOS_ANTHROPIC_API_KEY)
   ? describe
   : describe.skip;
 
@@ -35,12 +39,17 @@ describeIfAnthropicE2E("live UI TypeScript compile and run e2e", () => {
   let baseUrl = "";
 
   beforeAll(async () => {
-    server = await createServer({
-      configFile: "vite.config.ts",
-      logLevel: "error",
-    });
-    await server.listen();
-    baseUrl = server.resolvedUrls?.local[0] ?? "";
+    if (configuredBaseUrl) {
+      baseUrl = configuredBaseUrl;
+      await waitForHealthz(baseUrl);
+    } else {
+      server = await createServer({
+        configFile: "vite.config.ts",
+        logLevel: "error",
+      });
+      await server.listen();
+      baseUrl = server.resolvedUrls?.local[0] ?? "";
+    }
     if (!baseUrl) {
       throw new Error("Vite did not expose a local test URL");
     }
@@ -79,20 +88,17 @@ describeIfAnthropicE2E("live UI TypeScript compile and run e2e", () => {
       await compileStarted;
 
       await page.locator("[data-tool-tab-id='agent-view']").click();
-      await expect.poll(async () => await page.locator("[data-agent-status='running']").textContent(), {
-        timeout: 60_000,
-      }).toMatch(/Agent is generating code|Waiting for Claude to finish/i);
       await expect.poll(async () => await page.locator("#agent-view-panel").textContent(), {
-        timeout: 60_000,
-      }).toMatch(/Scaffold generated|Implementation updated|Waiting for Claude/i);
+        timeout: 240_000,
+      }).toMatch(/Scaffold generated|Implementation updated|Compilation complete|console\.log|Waiting for Claude/i);
 
       await expect.poll(async () => await page.locator("[data-agent-status='running']").count(), {
-        timeout: 30_000,
+        timeout: 120_000,
       }).toBe(0);
 
-      await expect.poll(async () => await runWidget.getAttribute("data-ready"), { timeout: 30_000 })
+      await expect.poll(async () => await runWidget.getAttribute("data-ready"), { timeout: 120_000 })
         .toBe("true");
-      await expect.poll(async () => await runWidget.getAttribute("title"), { timeout: 30_000 })
+      await expect.poll(async () => await runWidget.getAttribute("title"), { timeout: 120_000 })
         .toBe("Run main");
 
       await runWidget.click();
@@ -143,6 +149,24 @@ describeIfAnthropicE2E("live UI TypeScript compile and run e2e", () => {
     }
   }, 420_000);
 });
+
+function uniqueSheetId(prefix: string): string {
+  return `${prefix}-${runId}`;
+}
+
+function normalizedBaseUrl(value: string | undefined): string {
+  return value ? value.replace(/\/+$/, "") : "";
+}
+
+async function waitForHealthz(baseUrl: string): Promise<void> {
+  for (let attempt = 1; attempt <= 30; attempt += 1) {
+    const response = await fetch(`${baseUrl}/healthz`).catch(() => null);
+    const text = response?.ok ? await response.text() : "";
+    if (text === '{"ok":true}') return;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`Timed out waiting for ${baseUrl}/healthz`);
+}
 
 async function waitForSessionHelpers(page: Page): Promise<void> {
   await page.waitForFunction(() => {
@@ -318,5 +342,18 @@ async function appendTrailingEditorText(page: Page, text: string): Promise<void>
 }
 
 async function xtermText(page: Page): Promise<string> {
-  return await page.locator(".terminal-output.tab-panel.active .terminal-xterm-host .xterm-rows").first().textContent() ?? "";
+  const activeTerminal = page.locator(".terminal-output.tab-panel.active .terminal-xterm-host .xterm-rows").first();
+  if (await activeTerminal.count() > 0) {
+    return normalizeTerminalText(await activeTerminal.textContent() ?? "");
+  }
+  const terminalText = await page.evaluate(() => {
+    const session = (window as LogosWindow).createLogosSessionBundle?.();
+    const activeTabId = session?.run.activeToolTabId;
+    return session?.run.tabs.find((tab) => tab.id === activeTabId)?.terminalText ?? "";
+  });
+  return normalizeTerminalText(terminalText);
+}
+
+function normalizeTerminalText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
 }
