@@ -65,7 +65,7 @@ export function AgentView({ compileSessionId, updatingExistingCode, active }: Ag
           });
         }
 
-        const response = await fetch(`/api/v2/session?id=${encodeURIComponent(compileSessionId)}&after=${after}`);
+        const response = await fetch(`/api/compile-session?id=${encodeURIComponent(compileSessionId)}&after=${after}`);
         if (!response.ok) throw new Error("Compile session request failed");
         const session = await response.json() as {
           events?: AgentEvent[];

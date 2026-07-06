@@ -64,12 +64,12 @@ describe("run program browser flow", () => {
       plugins: [{
         name: "logos-browser-e2e-default-project",
         configureServer(vite) {
-          vite.middlewares.use("/api/v2/project/default", (_req, res) => {
+          vite.middlewares.use("/api/project/default", (_req, res) => {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ ok: true, sheets: [], activeSheetId: null }));
           });
-          vite.middlewares.use("/api/v2/sheet/new", (_req, res) => {
+          vite.middlewares.use("/api/sheet", (_req, res) => {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
             res.end(JSON.stringify({ ok: true, sheet: { currentSessionId: null } }));
@@ -169,7 +169,7 @@ describe("run program browser flow", () => {
       const compileSessions = new Map<string, { events: unknown[]; done: boolean }>();
       let sessionCounter = 0;
 
-      await page.route("**/api/v2/compile", async (route) => {
+      await page.route("**/api/sheet/compile", async (route) => {
         expect(route.request().method()).toBe("POST");
         const body = route.request().postDataJSON() as { sheetId?: string; source?: string };
         if (body.source?.trim() === source) {
@@ -191,7 +191,7 @@ describe("run program browser flow", () => {
         });
       });
 
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         const url = new URL(route.request().url());
         const sessionId = url.searchParams.get("id") ?? "";
         const after = parseInt(url.searchParams.get("after") ?? "0", 10);
@@ -358,7 +358,7 @@ describe("run program browser flow", () => {
       const staleReadinessSessions = new Map<string, { events: unknown[]; done: boolean }>();
       let staleSessionCounter = 0;
 
-      await page.route("**/api/v2/compile", async (route) => {
+      await page.route("**/api/sheet/compile", async (route) => {
         const sessionId = `stale-session-${++staleSessionCounter}`;
         staleReadinessSessions.set(sessionId, {
           events: [
@@ -374,7 +374,7 @@ describe("run program browser flow", () => {
         });
       });
 
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         const url = new URL(route.request().url());
         const sessionId = url.searchParams.get("id") ?? "";
         const after = parseInt(url.searchParams.get("after") ?? "0", 10);
@@ -454,7 +454,7 @@ describe("run program browser flow", () => {
       let pendingSessionCounter = 0;
       let latestPendingSessionId: string | null = null;
 
-      await page.route("**/api/v2/compile", async (route) => {
+      await page.route("**/api/sheet/compile", async (route) => {
         compileRequests += 1;
         const sessionId = `pending-session-${++pendingSessionCounter}`;
         latestPendingSessionId = sessionId;
@@ -476,7 +476,7 @@ describe("run program browser flow", () => {
         }
       });
 
-      await page.route("**/api/v2/sheet**", async (route) => {
+      await page.route((url) => url.pathname === "/api/sheet", async (route) => {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -484,7 +484,7 @@ describe("run program browser flow", () => {
         });
       });
 
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         const url = new URL(route.request().url());
         const sessionId = url.searchParams.get("id") ?? "";
         const after = parseInt(url.searchParams.get("after") ?? "0", 10);
@@ -536,14 +536,14 @@ describe("run program browser flow", () => {
       const page = await context.newPage();
       let sessionPolls = 0;
 
-      await page.route("**/api/v2/sheet**", async (route) => {
+      await page.route((url) => url.pathname === "/api/sheet", async (route) => {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({ ok: true, source: "", currentSessionId: "agent-view-server-session" }),
         });
       });
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         sessionPolls += 1;
         await route.fulfill({
           status: 200,
@@ -593,14 +593,14 @@ describe("run program browser flow", () => {
       const page = await context.newPage();
       let sessionPolls = 0;
 
-      await page.route("**/api/v2/sheet**", async (route) => {
+      await page.route("**/api/sheet**", async (route) => {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
           body: JSON.stringify({ ok: true, source: "", currentSessionId: "completed-agent-session" }),
         });
       });
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         sessionPolls += 1;
         const url = new URL(route.request().url());
         const after = parseInt(url.searchParams.get("after") ?? "0", 10);
@@ -679,7 +679,7 @@ describe("run program browser flow", () => {
       const sheetWithSessionId = "agent-session-sheet";
       const blankSheetId = "agent-blank-sheet";
 
-      await page.route("**/api/v2/sheet**", async (route) => {
+      await page.route((url) => url.pathname === "/api/sheet", async (route) => {
         const url = new URL(route.request().url());
         const sheetId = url.searchParams.get("id");
         await route.fulfill({
@@ -692,7 +692,7 @@ describe("run program browser flow", () => {
           }),
         });
       });
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -752,7 +752,7 @@ describe("run program browser flow", () => {
       let compileRequests = 0;
       let watchRequests = 0;
 
-      await page.route("**/api/v2/project/default", async (route) => {
+      await page.route("**/api/project/default", async (route) => {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -779,7 +779,7 @@ describe("run program browser flow", () => {
         });
       });
 
-      await page.route("**/api/v2/compile", async (route) => {
+      await page.route("**/api/sheet/compile", async (route) => {
         compileRequests += 1;
         await route.fulfill({
           status: 200,
@@ -788,7 +788,7 @@ describe("run program browser flow", () => {
         });
       });
 
-      await page.route("**/api/v2/watch", async (route) => {
+      await page.route("**/api/sheet/watch", async (route) => {
         watchRequests += 1;
         await route.fulfill({
           status: 200,
@@ -847,7 +847,7 @@ describe("run program browser flow", () => {
       const sessions = new Map<string, { events: unknown[]; done: boolean }>();
       let compileSessionCounter = 0;
 
-      await page.route("**/api/v2/project/default", async (route) => {
+      await page.route("**/api/project/default", async (route) => {
         if (route.request().method() === "PUT") {
           replaceRequests += 1;
           const body = route.request().postDataJSON() as {
@@ -877,7 +877,7 @@ describe("run program browser flow", () => {
           }),
         });
       });
-      await page.route("**/api/v2/compile", async (route) => {
+      await page.route("**/api/sheet/compile", async (route) => {
         const sessionId = `reset-session-${++compileSessionCounter}`;
         sessions.set(sessionId, { events: [{ kind: "done", code: "" }], done: true });
         await route.fulfill({
@@ -886,7 +886,7 @@ describe("run program browser flow", () => {
           body: JSON.stringify({ ok: true, sessionId }),
         });
       });
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         const url = new URL(route.request().url());
         const sessionId = url.searchParams.get("id") ?? "";
         const after = parseInt(url.searchParams.get("after") ?? "0", 10);
@@ -1006,7 +1006,7 @@ describe("run program browser flow", () => {
       const cacheSessions = new Map<string, { events: unknown[]; done: boolean }>();
       let cacheSessionCounter = 0;
 
-      await page.route("**/api/v2/compile", async (route) => {
+      await page.route("**/api/sheet/compile", async (route) => {
         compileRequestsAfterClear += 1;
         const sessionId = `cache-session-${++cacheSessionCounter}`;
         cacheSessions.set(sessionId, { events: [{ kind: "done", code: "" }], done: true });
@@ -1017,7 +1017,7 @@ describe("run program browser flow", () => {
         });
       });
 
-      await page.route("**/api/v2/session**", async (route) => {
+      await page.route("**/api/compile-session**", async (route) => {
         const url = new URL(route.request().url());
         const sessionId = url.searchParams.get("id") ?? "";
         const after = parseInt(url.searchParams.get("after") ?? "0", 10);
