@@ -20,4 +20,4 @@ for _ in $(seq 1 30); do
 done
 
 curl -fsS "${base_url}/healthz" >/dev/null
-./scripts/smoke-deployment.sh "$base_url"
+pnpm smoke:deployment -- --base-url "$base_url"

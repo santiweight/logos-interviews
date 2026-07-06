@@ -11,6 +11,7 @@ import { createLogosApi } from "./server/logosApi";
 import { LogosService, type NewSheetInput } from "./server/logosService";
 import { handleSharedSessions } from "./sharedSessions";
 import { createGlobalCodeCache } from "./storage/codeCache";
+import { counterReactAppSource } from "./samples/counterReactApp";
 
 export type ApiRoute = {
   path: string;
@@ -36,12 +37,10 @@ export const defaultBackendSheets: NewSheetInput[] = [
 }`,
   },
   {
-    id: "todo-cli",
-    projectId: "todo-cli",
-    title: "Todo CLI",
-    source: `function main(): void {
-  l\`print exactly: todo cli ready\`
-}`,
+    id: "react-counter",
+    projectId: "react-counter",
+    title: "React Counter",
+    source: counterReactAppSource,
   },
 ];
 

@@ -1,0 +1,96 @@
+name: Cleanup PR review app
+
+on:
+  pull_request:
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      destroy_all_review_apps:
+        description: 'Type "destroy" to destroy every review app matching FLY_REVIEW_APP_PREFIX.'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  destroy-review:
+    name: Destroy PR review app
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: deploy-review-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_REVIEW_APP_PREFIX: ${{ vars.FLY_REVIEW_APP_PREFIX }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Compute review app name
+        run: |
+          set -euo pipefail
+          review_app="$(pnpm exec tsx scripts/fly-review-app-name.ts)"
+          echo "REVIEW_APP_NAME=$review_app" >> "$GITHUB_ENV"
+          echo "Review app: $review_app"
+      - name: Destroy review app
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN" || { echo "Missing FLY_API_TOKEN repository secret"; exit 1; }
+          if flyctl status --app "$REVIEW_APP_NAME" >/dev/null 2>&1; then
+            flyctl apps destroy "$REVIEW_APP_NAME" --yes
+          else
+            echo "Review app does not exist: $REVIEW_APP_NAME"
+          fi
+
+  destroy-all-review:
+    name: Destroy all PR review apps
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.destroy_all_review_apps == 'destroy' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_REVIEW_APP_PREFIX: ${{ vars.FLY_REVIEW_APP_PREFIX }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Destroy review apps by prefix
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN" || { echo "Missing FLY_API_TOKEN repository or environment secret"; exit 1; }
+          prefix="${FLY_REVIEW_APP_PREFIX:-${REPOSITORY_NAME}-pr}"
+          prefix="$(printf '%s' "$prefix" | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-')"
+          test -n "$prefix" || { echo "Could not compute review app prefix"; exit 1; }
+
+          apps="$(flyctl apps list --json)"
+          review_apps="$(APPS_JSON="$apps" REVIEW_PREFIX="$prefix" pnpm exec tsx scripts/fly-review-apps-by-prefix.ts)"
+
+          if [[ -z "$review_apps" ]]; then
+            echo "No review apps found for prefix: $prefix"
+            exit 0
+          fi
+
+          while IFS= read -r app; do
+            [[ -n "$app" ]] || continue
+            echo "Destroying review app: $app"
+            flyctl apps destroy "$app" --yes
+          done <<< "$review_apps"

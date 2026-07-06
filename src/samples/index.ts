@@ -1,5 +1,6 @@
 import type { CodeSheet, Runnable } from "../domain/codeSheet";
 import todoCliSample from "../../todo-cli.logos.ts?raw";
+import { counterReactAppSource } from "./counterReactApp";
 
 export type SampleProgram = {
   id: string;
@@ -793,9 +794,9 @@ function magic_square_example(): void {
     label: "Product workflows",
     samples: [
       {
-        id: "todo-cli",
-        label: "Todo CLI",
-        code: todoCliSample,
+        id: "react-counter",
+        label: "React Counter",
+        code: counterReactAppSource,
       },
     ],
   },
@@ -806,13 +807,13 @@ export const samples: SampleProgram[] = sampleGroups.flatMap((group) => group.sa
 export const defaultProjectIds = [
   "starter-arithmetic",
   "beyond-basics",
-  "todo-cli",
+  "react-counter",
 ];
 
 export const sampleTemplateGroups: SampleTemplateGroup[] = [
   {
     label: "Getting started",
-    sampleIds: ["starter-arithmetic", "beyond-basics", "todo-cli"],
+    sampleIds: ["starter-arithmetic", "beyond-basics", "react-counter"],
   },
 ];
 

@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type ViteDevServer } from "vite";
 import { chromium, type Browser, type Page } from "playwright";
+import { createInteractiveRunApi } from "../../server/interactiveRunApi";
+import {
+  counterReactAppSource,
+  deterministicCounterReactAppSource,
+} from "../../samples/counterReactApp";
 
 type TestSourceTab = {
   id: string;
@@ -58,12 +63,16 @@ describe("run program browser flow", () => {
   let baseUrl = "";
 
   beforeAll(async () => {
+    const interactiveRunApi = createInteractiveRunApi();
     server = await createServer({
       configFile: "vite.config.ts",
       logLevel: "error",
       plugins: [{
         name: "logos-browser-e2e-default-project",
         configureServer(vite) {
+          vite.middlewares.use("/api/run/start", async (req, res) => {
+            await interactiveRunApi.handleStart(req, res);
+          });
           vite.middlewares.use("/api/project/default", (_req, res) => {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json");
@@ -330,6 +339,117 @@ describe("run program browser flow", () => {
         hostHasHeight: true,
       });
       await expect.poll(async () => page.locator(".terminal-xterm-host").first().isHidden()).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("runs deterministic React Counter code through the real iframe run path", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSourceWithImplementation(
+        page,
+        deterministicCounterReactAppSource,
+        deterministicCounterReactAppSource,
+        "Deterministic React Counter",
+      );
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Counter_app" }).first();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+      await runWidget.click();
+
+      const frame = page.frameLocator(".react-app-run-frame").first();
+      const button = frame.getByTestId("counter-button");
+      await expect.poll(async () => button.textContent()).toBe("0");
+      await button.click();
+      await expect.poll(async () => button.textContent()).toBe("1");
+      await expect.poll(async () => reactFrameMetrics(page)).toMatchObject({
+        frameMatchesHost: true,
+        hostHasHeight: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("compiles and runs the React Counter Logos sample in an iframe", async () => {
+    if (!browser) {
+      throw new Error("Browser did not start");
+    }
+
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      const compileSessions = new Map<string, { events: unknown[]; done: boolean }>();
+
+      await page.route("**/api/sheet/compile", async (route) => {
+        const body = route.request().postDataJSON() as { source?: string };
+        expect(body.source?.trim()).toBe(counterReactAppSource);
+        const sessionId = "counter-sample-session";
+        compileSessions.set(sessionId, {
+          events: [
+            { kind: "implementation", code: deterministicCounterReactAppSource },
+            { kind: "done", code: deterministicCounterReactAppSource },
+          ],
+          done: true,
+        });
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ok: true, sessionId }),
+        });
+      });
+
+      await page.route("**/api/compile-session**", async (route) => {
+        const url = new URL(route.request().url());
+        const sessionId = url.searchParams.get("id") ?? "";
+        const after = parseInt(url.searchParams.get("after") ?? "0", 10);
+        const session = compileSessions.get(sessionId);
+        if (!session) {
+          await route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ ok: false }) });
+          return;
+        }
+        const events = session.events.slice(after);
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            events,
+            done: session.done,
+            total: session.events.length,
+            implementation: deterministicCounterReactAppSource,
+          }),
+        });
+      });
+
+      await page.goto(baseUrl);
+      await waitForSessionHelpers(page);
+      await loadSource(page, counterReactAppSource, "React Counter");
+      await appendTrailingEditorSpace(page);
+
+      await expect.poll(async () => {
+        return (await page.locator("#implementation-view-panel .view-line").first().textContent())
+          ?.replaceAll("\u00a0", " ");
+      }).toContain("function counter_app");
+
+      const runWidget = page.locator(".runnable-run-widget").filter({ hasText: "Run Counter_app" }).first();
+      await expect.poll(async () => await runWidget.getAttribute("aria-disabled")).toBe("false");
+      await runWidget.click();
+
+      const frame = page.frameLocator(".react-app-run-frame").first();
+      const zeroButton = frame.locator("button").filter({ hasText: /^0$/ });
+      await expect.poll(async () => zeroButton.textContent()).toBe("0");
+      await zeroButton.click();
+      await expect.poll(async () => frame.locator("button").filter({ hasText: /^1$/ }).textContent()).toBe("1");
     } finally {
       await context.close();
     }
@@ -924,7 +1044,7 @@ describe("run program browser flow", () => {
       await expect.poll(async () => page.locator("body").textContent()).not.toContain("Legacy Second Sheet");
       await expect.poll(async () => page.locator("body").textContent()).toContain("Intro to Logos");
       await expect.poll(async () => page.locator("body").textContent()).toContain("Beyond Basics");
-      await expect.poll(async () => page.locator("body").textContent()).toContain("Todo CLI");
+      await expect.poll(async () => page.locator("body").textContent()).toContain("React Counter");
     } finally {
       await context.close();
     }
