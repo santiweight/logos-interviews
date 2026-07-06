@@ -71,7 +71,16 @@ jobs:
       LOGOS_ANTHROPIC_API_KEY: ${{ secrets.LOGOS_ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
       - uses: docker/setup-buildx-action@v3
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
       - name: Build production image
         uses: docker/build-push-action@v6
         with:
@@ -84,3 +93,95 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Production image smoke test
         run: ./scripts/smoke-production-image.sh logos-interviews-smoke
+
+  deploy-review:
+    name: Deploy PR review app
+    needs:
+      - build
+      - unit-tests
+      - e2e-tests
+      - production-smoke
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: deploy-review-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      FLY_ORG: ${{ vars.FLY_ORG }}
+      FLY_REVIEW_APP_PREFIX: ${{ vars.FLY_REVIEW_APP_PREFIX }}
+      LOGOS_ANTHROPIC_API_KEY: ${{ secrets.LOGOS_ANTHROPIC_API_KEY }}
+      BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ secrets.AWS_ENDPOINT_URL_S3 }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install browser dependencies
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Compute review app name
+        run: |
+          set -euo pipefail
+          review_app="$(pnpm exec tsx scripts/fly-review-app-name.ts)"
+          echo "REVIEW_APP_NAME=$review_app" >> "$GITHUB_ENV"
+          echo "Review app: $review_app"
+      - name: Validate review deployment configuration
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN" || { echo "Missing FLY_API_TOKEN repository secret"; exit 1; }
+          test -n "$LOGOS_ANTHROPIC_API_KEY" || { echo "Missing LOGOS_ANTHROPIC_API_KEY repository secret"; exit 1; }
+          if [[ -n "${BUCKET_NAME:-}" ]]; then
+            test -n "$AWS_ACCESS_KEY_ID" || { echo "Missing AWS_ACCESS_KEY_ID repository secret for review object storage"; exit 1; }
+            test -n "$AWS_SECRET_ACCESS_KEY" || { echo "Missing AWS_SECRET_ACCESS_KEY repository secret for review object storage"; exit 1; }
+            test -n "$AWS_ENDPOINT_URL_S3" || { echo "Missing AWS_ENDPOINT_URL_S3 repository secret for review object storage"; exit 1; }
+          else
+            echo "No BUCKET_NAME configured; review app will use local ephemeral storage."
+          fi
+      - name: Create review app if needed
+        run: |
+          set -euo pipefail
+          if flyctl status --app "$REVIEW_APP_NAME" >/dev/null 2>&1; then
+            echo "Review app already exists: $REVIEW_APP_NAME"
+            exit 0
+          fi
+
+          args=("$REVIEW_APP_NAME")
+          if [[ -n "${FLY_ORG:-}" ]]; then
+            args+=(--org "$FLY_ORG")
+          fi
+          flyctl apps create "${args[@]}"
+      - name: Stage review app secrets
+        run: |
+          set -euo pipefail
+          secret_args=("LOGOS_ANTHROPIC_API_KEY=$LOGOS_ANTHROPIC_API_KEY")
+          if [[ -n "${BUCKET_NAME:-}" ]]; then
+            secret_args+=(
+              "BUCKET_NAME=$BUCKET_NAME"
+              "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+              "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+              "AWS_ENDPOINT_URL_S3=$AWS_ENDPOINT_URL_S3"
+            )
+            if [[ -n "${AWS_REGION:-}" ]]; then
+              secret_args+=("AWS_REGION=$AWS_REGION")
+            fi
+          fi
+          flyctl secrets set --stage --app "$REVIEW_APP_NAME" "${secret_args[@]}"
+      - name: Deploy review app to Fly.io
+        run: |
+          set -euo pipefail
+          flyctl deploy --remote-only --ha=false --app "$REVIEW_APP_NAME" \
+            --build-secret "LOGOS_ANTHROPIC_API_KEY=$LOGOS_ANTHROPIC_API_KEY"
+      - name: Smoke review deployment
+        run: pnpm smoke:deployment -- --base-url "https://${REVIEW_APP_NAME}.fly.dev"

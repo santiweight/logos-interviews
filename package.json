@@ -10,7 +10,8 @@
     "start": "node dist-server/server.mjs",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "smoke:deployment": "tsx scripts/smoke-deployment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",

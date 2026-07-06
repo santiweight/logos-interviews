@@ -29,11 +29,11 @@ describe("product samples", () => {
     expect(samples.map((sample) => sample.id)).toEqual([
       "starter-arithmetic",
       "beyond-basics",
-      "todo-cli",
+      "react-counter",
     ]);
     expect(sampleTemplateGroups).toEqual([{
       label: "Getting started",
-      sampleIds: ["starter-arithmetic", "beyond-basics", "todo-cli"],
+      sampleIds: ["starter-arithmetic", "beyond-basics", "react-counter"],
     }]);
   });
 
